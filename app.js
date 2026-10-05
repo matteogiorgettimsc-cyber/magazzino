@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.0.2';
+const VERSIONE = '1.1.0';
 
 /* =========================================================
    Utilità
@@ -65,13 +65,13 @@ function beep() {
    Dati (IndexedDB) – tutto in memoria, scrittura immediata
    ========================================================= */
 const DB_NAME = 'spesasfusa-magazzino';
-const STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'meta'];
+const STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'meta'];
 let db;
-const S = { fornitori: new Map(), prodotti: new Map(), lotti: new Map(), ordini: new Map(), meta: {} };
+const S = { fornitori: new Map(), prodotti: new Map(), lotti: new Map(), ordini: new Map(), sprechi: new Map(), meta: {} };
 
 function openDB() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, 1);
+    const r = indexedDB.open(DB_NAME, 2);
     r.onupgradeneeded = () => {
       const d = r.result;
       for (const s of STORES) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: s === 'meta' ? 'key' : 'id' });
@@ -96,7 +96,7 @@ function getAll(store) {
   });
 }
 async function loadAll() {
-  for (const s of ['fornitori', 'prodotti', 'lotti', 'ordini']) S[s] = new Map((await getAll(s)).map(o => [o.id, o]));
+  for (const s of ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi']) S[s] = new Map((await getAll(s)).map(o => [o.id, o]));
   S.meta = {}; (await getAll('meta')).forEach(m => { S.meta[m.key] = m.value; });
 }
 async function save(store, obj) { S[store].set(obj.id, obj); await tx(store, s => s.put(obj)); if (store === 'prodotti') rebuildCodeIndex(); }
@@ -486,6 +486,8 @@ routes.home = () => {
     <a class="big-btn" href="#scadenze">Scadenze<small>Cosa scade e cosa fare</small></a>
     <a class="big-btn" href="#ordini">Da ordinare<small>Giro con il lettore e invio</small></a>
     <a class="big-btn" href="#carico/inventario">Inventario<small>Conta quello che c'è già</small></a></div>`;
+  const spm = sprechiPeriodo('mese');
+  if (spm.length) html += `<a class="card tight" href="#sprechi" style="text-decoration:none"><div class="row"><div class="spacer"><b>Sprechi di questo mese</b><div class="faint small">${fmtNum(spm.reduce((t, r) => t + r.qta, 0))} pezzi · ${fmtEuro(spm.reduce((t, r) => t + (valoreSpreco(r) || 0), 0))}</div></div><span class="chev">›</span></div></a>`;
   html += `<div class="faint" style="text-align:center">Puoi anche scansionare un prodotto in qualsiasi momento per vedere cosa fare.</div>`;
   const warn = giorniBk == null || giorniBk >= 3;
   html += `<div class="notice ${warn ? 'red' : 'green'}"><div class="spacer">${giorniBk == null ? '<b>Nessun backup ancora.</b> Fallo ogni giorno a fine lavoro.' : giorniBk === 0 ? 'Backup fatto oggi.' : `Ultimo backup: <b>${giorniBk === 1 ? 'ieri' : giorniBk + ' giorni fa'}</b>.`}</div>
@@ -649,7 +651,7 @@ function listaScadenzeHTML() {
 }
 routes.scadenze = arg => {
   if (current.fresh && arg && FILTRI.some(f => f[0] === arg)) SZ.filtro = arg;
-  const html = `<div class="chips">${FILTRI.map(([k, l]) => `<button class="chip ${SZ.filtro === k ? 'on' : ''}" type="button" data-act="sz-filtro" data-f="${k}">${l}</button>`).join('')}</div>
+  const html = `${segScad('s')}<div class="chips">${FILTRI.map(([k, l]) => `<button class="chip ${SZ.filtro === k ? 'on' : ''}" type="button" data-act="sz-filtro" data-f="${k}">${l}</button>`).join('')}</div>
     <div class="row"><input type="search" id="szQ" placeholder="Cerca un prodotto" value="${esc(SZ.q)}" autocomplete="off"><button class="btn small" type="button" data-act="sz-condividi">Condividi</button></div>
     <div id="szList" class="stack">${listaScadenzeHTML()}</div>`;
   return {
@@ -662,6 +664,113 @@ function testoScadenze() {
   const ls = lottiAttivi().filter(l => l.scadenza && ['scaduto', 'rosso', 'arancio'].includes(fascia(l))).sort((a, b) => a.scadenza.localeCompare(b.scadenza));
   if (!ls.length) return 'Nessun prodotto in scadenza a breve.';
   return `Scadenze ${fmtDate(todayISO())}:\n` + ls.map(l => { const p = prodotto(l.prodottoId); return `- ${fmtDate(l.scadenza)} ${p ? p.nome : '?'} (${fmtNum(l.quantita)} pz)${l.gestito ? ' – ' + (l.nota || 'gestito') : ''}`; }).join('\n');
+}
+
+/* =========================================================
+   SPRECHI
+   ========================================================= */
+const MOTIVI = ['Scaduto', 'In scadenza', 'Rovinato', 'Altro'];
+async function migraSprechi() {
+  if (S.meta.sprechiMigrati) return;
+  const recs = [];
+  for (const l of S.lotti.values()) for (const sp of (l.sprechi || [])) {
+    const p = prodotto(l.prodottoId);
+    recs.push({ id: uid('s'), prodottoId: l.prodottoId, qta: sp.qta, data: sp.data, motivo: 'Scaduto', lottoId: l.id, scadenza: l.scadenza, prezzoAcquisto: p ? (p.prezzoAcquisto ?? null) : null, creato: Date.now() });
+  }
+  if (recs.length) await saveMany('sprechi', recs);
+  await setMeta('sprechiMigrati', true);
+}
+function sprecoModal({ lot = null, prod = null }) {
+  const p = lot ? prodotto(lot.prodottoId) : prod;
+  if (!p) return;
+  const max = lot ? lot.quantita : 9999;
+  let motivo = lot && lot.scadenza ? (daysUntil(lot.scadenza) < 0 ? 'Scaduto' : 'In scadenza') : 'Rovinato';
+  openModal(`${mhead('Quanti ne buttate?')}
+    <div class="faint">${esc(p.nome)}${lot && lot.scadenza ? ' · scade ' + fmtDate(lot.scadenza) : ''}${lot ? ' · in negozio ' + fmtNum(lot.quantita) : ''}</div>
+    <div class="stepper"><button type="button" data-x="-" aria-label="Meno">−</button><input type="number" inputmode="numeric" id="bQ" value="${lot ? lot.quantita : 1}" min="1" ${lot ? `max="${max}"` : ''}><button type="button" data-x="+" aria-label="Più">+</button></div>
+    <div class="field" style="font-weight:600">Perché
+      <div class="chips" id="bMot">${MOTIVI.map(m => `<button type="button" class="chip ${m === motivo ? 'on' : ''}" data-m="${m}">${m}</button>`).join('')}</div>
+      <input type="text" id="bAltro" placeholder="Scrivi il motivo" hidden></div>
+    <button class="btn primary block" type="button" data-x="ok" style="background:var(--red);border-color:var(--red)">Registra lo spreco</button>`, b => {
+    const i = b.querySelector('#bQ'), altro = b.querySelector('#bAltro');
+    b.querySelector('[data-x="-"]').onclick = () => { i.value = Math.max(1, (+i.value || 1) - 1); };
+    b.querySelector('[data-x="+"]').onclick = () => { i.value = Math.min(max, (+i.value || 0) + 1); };
+    $$('#bMot [data-m]', b).forEach(c => c.onclick = () => {
+      motivo = c.dataset.m; $$('#bMot [data-m]', b).forEach(x => x.classList.toggle('on', x === c));
+      altro.hidden = motivo !== 'Altro'; if (!altro.hidden) altro.focus();
+    });
+    b.querySelector('[data-x=ok]').onclick = async () => {
+      const n = Math.min(max, Math.max(1, parseInt(i.value, 10) || 1));
+      const m = motivo === 'Altro' ? (altro.value.trim() || 'Altro') : motivo;
+      closeModal();
+      await registraSpreco({ p, lot, qta: n, motivo: m });
+    };
+  });
+}
+async function registraSpreco({ p, lot, qta, motivo }) {
+  const rec = { id: uid('s'), prodottoId: p.id, qta, data: todayISO(), motivo, lottoId: lot ? lot.id : null, scadenza: lot ? lot.scadenza : null, prezzoAcquisto: p.prezzoAcquisto ?? null, creato: Date.now() };
+  await save('sprechi', rec);
+  if (lot) {
+    const cur = S.lotti.get(lot.id) || lot;
+    await save('lotti', qta >= cur.quantita ? { ...cur, stato: 'buttato', chiuso: todayISO() } : { ...cur, quantita: cur.quantita - qta });
+  }
+  const v = rec.prezzoAcquisto != null ? ' · ' + fmtEuro(rec.prezzoAcquisto * qta) : '';
+  toast(`Buttati ${fmtNum(qta)}: registrato negli sprechi${v}`, { action: { label: 'Annulla', run: () => annullaSpreco(rec.id) } });
+  render();
+}
+async function annullaSpreco(id) {
+  const r = S.sprechi.get(id); if (!r) return;
+  if (r.lottoId) {
+    const l = S.lotti.get(r.lottoId);
+    if (l) await save('lotti', l.stato === 'buttato' ? { ...l, stato: 'attivo', chiuso: null } : { ...l, quantita: l.quantita + r.qta });
+  }
+  await remove('sprechi', id); toast('Spreco annullato'); render();
+}
+let SPF = 'mese';
+const PERIODI = [['mese', 'Questo mese'], ['scorso', 'Mese scorso'], ['anno', 'Ultimi 12 mesi'], ['tutto', 'Tutto']];
+function periodo(f) {
+  const t = new Date(), y = t.getFullYear(), m = t.getMonth();
+  if (f === 'mese') return [todayISO(new Date(y, m, 1)), todayISO(t)];
+  if (f === 'scorso') return [todayISO(new Date(y, m - 1, 1)), todayISO(new Date(y, m, 0))];
+  if (f === 'anno') return [todayISO(new Date(y - 1, m, t.getDate() + 1)), todayISO(t)];
+  return ['0000-00-00', '9999-12-31'];
+}
+const valoreSpreco = r => r.prezzoAcquisto != null ? r.prezzoAcquisto * r.qta : null;
+function sprechiPeriodo(f) { const [da, a] = periodo(f); return [...S.sprechi.values()].filter(r => r.data >= da && r.data <= a).sort((x, y) => y.data.localeCompare(x.data) || y.creato - x.creato); }
+const segScad = on => `<div class="segmented"><a href="#scadenze" class="${on === 's' ? 'on' : ''}">Scadenze</a><a href="#sprechi" class="${on === 'w' ? 'on' : ''}">Sprechi</a></div>`;
+routes.sprechi = () => {
+  const list = sprechiPeriodo(SPF);
+  const pezzi = list.reduce((t, r) => t + r.qta, 0);
+  const tot = list.reduce((t, r) => t + (valoreSpreco(r) || 0), 0);
+  const senzaPrezzo = list.filter(r => r.prezzoAcquisto == null).length;
+  const per = new Map();
+  for (const r of list) { const e = per.get(r.prodottoId) || { qta: 0, val: 0 }; e.qta += r.qta; e.val += valoreSpreco(r) || 0; per.set(r.prodottoId, e); }
+  const top = [...per.entries()].sort((a, b) => b[1].val - a[1].val || b[1].qta - a[1].qta).slice(0, 5);
+  let html = segScad('w') + `<div class="chips">${PERIODI.map(([k, l]) => `<button class="chip ${SPF === k ? 'on' : ''}" type="button" data-act="sp-periodo" data-f="${k}">${l}</button>`).join('')}</div>
+    <div class="stats" style="grid-template-columns:1fr 1fr"><div class="stat ${pezzi ? 'red' : ''}"><b>${fmtNum(pezzi)}</b><span>Pezzi buttati</span></div>
+      <div class="stat ${tot ? 'red' : ''}"><b style="font-size:1.5rem">${fmtEuro(tot)}</b><span>Valore perso (prezzo d'acquisto)</span></div></div>
+    ${senzaPrezzo ? `<div class="notice"><span>Per ${senzaPrezzo} ${senzaPrezzo === 1 ? 'riga manca' : 'righe manca'} il prezzo d'acquisto: non ${senzaPrezzo === 1 ? 'è contata' : 'sono contate'} nel valore.</span></div>` : ''}
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn primary" type="button" data-act="spreco-nuovo">Registra uno spreco</button><button class="btn" type="button" data-act="sp-condividi" ${list.length ? '' : 'disabled'}>Condividi</button></div>
+    <div class="faint small" style="text-align:center">Puoi anche scansionare il prodotto da buttare.</div>`;
+  if (top.length > 1) html += `<div class="section-title"><h2>Più buttati</h2></div><div class="list">${top.map(([pid, e]) => { const p = prodotto(pid); return `<div class="item"><div class="main"><div class="name">${esc(p ? p.nome : '?')}</div><div class="sub">${esc(p ? nomeForn(p.fornitoreId) : '')}</div></div><div style="text-align:right;font-weight:700">${fmtNum(e.qta)} pz<div class="faint small">${e.val ? fmtEuro(e.val) : ''}</div></div></div>`; }).join('')}</div>`;
+  html += `<div class="section-title"><h2>Elenco</h2><span class="count">${list.length}</span></div>`;
+  html += list.length ? `<div class="list">${list.map(r => {
+    const p = prodotto(r.prodottoId), v = valoreSpreco(r);
+    return `<div class="item"><div class="main"><div class="name">${esc(p ? p.nome : 'Prodotto eliminato')}</div>
+      <div class="sub">${fmtDate(r.data)} · ${fmtNum(r.qta)} pz · ${esc(r.motivo)}${r.scadenza ? ' · scadenza ' + fmtDate(r.scadenza) : ''}${p ? ' · ' + esc(nomeForn(p.fornitoreId)) : ''}</div></div>
+      <div style="text-align:right;font-weight:700;white-space:nowrap">${v != null ? fmtEuro(v) : '–'}</div>
+      <button class="btn small ghost" type="button" data-act="spreco-annulla" data-id="${esc(r.id)}" aria-label="Annulla questo spreco">×</button></div>`;
+  }).join('')}</div>` : `<div class="empty">Nessuno spreco in questo periodo.</div>`;
+  return {
+    title: 'Archivio sprechi', html, tab: 'scadenze',
+    onScan: code => { const p = byCode(code); if (p) sprecoModal({ prod: p }); else collegaCodice(code, p2 => sprecoModal({ prod: p2 })); }
+  };
+};
+function testoSprechi() {
+  const list = sprechiPeriodo(SPF), lab = PERIODI.find(x => x[0] === SPF)[1];
+  const tot = list.reduce((t, r) => t + (valoreSpreco(r) || 0), 0);
+  return `Sprechi – ${lab.toLowerCase()}: ${list.reduce((t, r) => t + r.qta, 0)} pezzi, ${fmtEuro(tot)}\n` +
+    list.map(r => { const p = prodotto(r.prodottoId), v = valoreSpreco(r); return `- ${fmtDate(r.data)} ${p ? p.nome : '?'}: ${fmtNum(r.qta)} pz (${r.motivo})${v != null ? ' ' + fmtEuro(v) : ''}`; }).join('\n');
 }
 
 /* =========================================================
@@ -917,7 +1026,7 @@ routes.impostazioni = () => {
   };
 };
 async function faiBackup() {
-  const data = { app: 'spesasfusa-magazzino', versione: 1, esportato: new Date().toISOString(), fornitori: [...S.fornitori.values()], prodotti: [...S.prodotti.values()], lotti: [...S.lotti.values()], ordini: [...S.ordini.values()], impostazioni: S.meta.settings || {} };
+  const data = { app: 'spesasfusa-magazzino', versione: 1, esportato: new Date().toISOString(), fornitori: [...S.fornitori.values()], prodotti: [...S.prodotti.values()], lotti: [...S.lotti.values()], ordini: [...S.ordini.values()], sprechi: [...S.sprechi.values()], impostazioni: S.meta.settings || {} };
   const nome = `magazzino-backup-${todayISO()}.json`;
   const json = JSON.stringify(data);
   const file = new File([json], nome, { type: 'application/json' });
@@ -949,9 +1058,10 @@ $('#fileInput').addEventListener('change', async e => {
     } else if (fileMode === 'ripristina') {
       if (data.app !== 'spesasfusa-magazzino') throw new Error('Questo file non è un backup dell\'app');
       if (!(await confirmBox(`Il backup è del ${fmtDate((data.esportato || '').slice(0, 10))}. Sostituisco tutti i dati di questo telefono?`, { ok: 'Ripristina', danger: true }))) return;
-      for (const s of ['fornitori', 'prodotti', 'lotti', 'ordini']) { await tx(s, st => st.clear()); await tx(s, st => (data[s] || []).forEach(o => st.put(o))); }
+      for (const s of ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi']) { await tx(s, st => st.clear()); await tx(s, st => (data[s] || []).forEach(o => st.put(o))); }
       await setMeta('settings', data.impostazioni || {});
       await loadAll(); rebuildCodeIndex();
+      if (!data.sprechi) { await setMeta('sprechiMigrati', false); await migraSprechi(); }
       toast('Dati ripristinati');
     }
     render();
@@ -1024,24 +1134,7 @@ A['lot-esaurito'] = async el => {
   await save('lotti', { ...l, stato: 'esaurito', chiuso: todayISO() });
   toast('Segnato come esaurito', { action: { label: 'Annulla', run: async () => { await save('lotti', l); render(); } } }); render();
 };
-A['lot-buttato'] = async el => {
-  const l = S.lotti.get(el.dataset.id); if (!l) return;
-  const p = prodotto(l.prodottoId);
-  let q = l.quantita;
-  openModal(`${mhead('Quanti ne buttate?')}<div class="faint">${esc(p ? p.nome : '')} · scade ${fmtDate(l.scadenza)}</div>
-    <div class="stepper"><button type="button" data-x="-">−</button><input type="number" inputmode="numeric" id="bQ" value="${q}" min="1" max="${l.quantita}"><button type="button" data-x="+">+</button></div>
-    <button class="btn danger block" type="button" data-x="ok">Segna come buttati</button>`, b => {
-    const i = b.querySelector('#bQ');
-    b.querySelector('[data-x="-"]').onclick = () => { i.value = Math.max(1, (+i.value || 1) - 1); };
-    b.querySelector('[data-x="+"]').onclick = () => { i.value = Math.min(l.quantita, (+i.value || 0) + 1); };
-    b.querySelector('[data-x=ok]').onclick = async () => {
-      const n = Math.min(l.quantita, Math.max(1, parseInt(i.value, 10) || 1));
-      const sprechi = [...(l.sprechi || []), { data: todayISO(), qta: n }];
-      const nl = n >= l.quantita ? { ...l, stato: 'buttato', chiuso: todayISO(), sprechi } : { ...l, quantita: l.quantita - n, sprechi };
-      await save('lotti', nl); closeModal(); toast(`Buttati: ${n}`); render();
-    };
-  });
-};
+A['lot-buttato'] = el => { const l = S.lotti.get(el.dataset.id); if (l) sprecoModal({ lot: l }); };
 A['lot-modifica'] = el => {
   const l = S.lotti.get(el.dataset.id); if (!l) return;
   const [y, m, d] = (l.scadenza || '').split('-');
@@ -1060,6 +1153,11 @@ A['lot-modifica'] = el => {
     b.querySelector('#mDel').onclick = async () => { closeModal(); if (await confirmBox('Elimino questa riga? Non conta come spreco.', { ok: 'Elimina', danger: true })) { await remove('lotti', l.id); render(); } };
   });
 };
+/* sprechi */
+A['sp-periodo'] = el => { SPF = el.dataset.f; render(); };
+A['spreco-nuovo'] = () => pickerModal({ title: 'Cosa avete buttato?', onPick: p => sprecoModal({ prod: p }) });
+A['spreco-annulla'] = async el => { if (await confirmBox('Annullo questo spreco? Se veniva da una scadenza, il prodotto torna in elenco.', { ok: 'Annulla lo spreco' })) annullaSpreco(el.dataset.id); };
+A['sp-condividi'] = () => condividiTesto(testoSprechi(), 'Elenco');
 /* ordini */
 A['ord-cerca'] = () => pickerModal({ title: 'Aggiungi all\'ordine', onPick: async p => { await aggiungiOrdine(p.id); render(); } });
 const cambiaRiga = async (el, fn) => {
@@ -1136,12 +1234,17 @@ async function init() {
   try { db = await openDB(); await loadAll(); }
   catch (e) { $('#view').innerHTML = `<div class="notice red">Non riesco ad aprire i dati sul telefono: ${esc(e.message)}</div>`; return; }
   rebuildCodeIndex();
+  try { await migraSprechi(); } catch (e) { }
   route();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => { persistito = p; if (!p) navigator.storage.persist().then(v => { persistito = v; }); });
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     if (navigator.serviceWorker.controller) {
       let ricaricato = false;
-      navigator.serviceWorker.addEventListener('controllerchange', () => { if (ricaricato || CS.pid) return; ricaricato = true; location.reload(); });
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (ricaricato) return;
+        if (CS.pid || modal.open) { toast('È pronta una nuova versione dell\'app', { action: { label: 'Aggiorna', run: () => location.reload() } }); return; }
+        ricaricato = true; location.reload();
+      });
     }
     navigator.serviceWorker.register('sw.js').then(reg => {
       reg.addEventListener('updatefound', () => {
