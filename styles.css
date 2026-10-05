@@ -55,15 +55,16 @@ a{color:inherit}
 /* ---------- barra in basso ---------- */
 .tabbar{
   position:fixed;left:0;right:0;bottom:0;z-index:20;
-  display:grid;grid-template-columns:repeat(5,1fr);
+  display:grid;grid-template-columns:repeat(6,1fr);
   background:var(--surface);border-top:1px solid var(--line);
   padding-bottom:env(safe-area-inset-bottom,0px);
 }
 .tabbar a{
   position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
-  min-height:64px;text-decoration:none;color:var(--ink-faint);font-size:.74rem;font-weight:600;
+  min-height:64px;text-decoration:none;color:var(--ink-faint);font-size:.7rem;font-weight:600;min-width:0;
 }
-.tabbar svg{width:26px;height:26px}
+.tabbar span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tabbar svg{width:25px;height:25px}
 .tabbar a.on{color:var(--accent)}
 .tabbar a.on::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
 .badge{
@@ -273,3 +274,39 @@ dialog::backdrop{background:rgba(20,26,18,.45)}
 
 .lot .top .spacer{min-width:0}
 .lot .name,.item .name{overflow-wrap:anywhere}
+
+/* ---------- banco ---------- */
+.btn.soft{background:var(--accent-soft);border-color:#C7D6C0;color:var(--accent)}
+.banco-modi .on.vendita{background:var(--accent);color:#fff}
+.banco-modi .on.reso{background:#2D5877;color:#fff}
+.banco-modi .on.spreco{background:var(--red-dark);color:#fff}
+.notice.blue{background:#E3EEF7;border-color:#B9CDE0}
+.notice.orange{background:var(--orange-soft);border-color:#EED0B3}
+button.notice{width:100%;font:inherit;color:inherit;text-align:left;cursor:pointer}
+.vcard{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px;box-shadow:0 1px 2px rgba(31,38,30,.06),0 6px 20px rgba(31,38,30,.05)}
+.vcard .lab{display:flex;justify-content:space-between;gap:8px;font-size:.75rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-mid)}
+.vcard .lab time{letter-spacing:0;text-transform:none;font-weight:600;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.vcard .nome{font-size:1.3rem;font-weight:700;line-height:1.25;overflow-wrap:anywhere}
+.vcard .info{font-size:.9rem;color:var(--ink-soft);line-height:1.4}
+.vcard .bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.vcard .tot{font-size:1.85rem;font-weight:750;line-height:1.1;font-variant-numeric:tabular-nums}
+.vcard .tot small{display:block;font-size:.86rem;font-weight:500;color:var(--ink-soft);margin-top:2px}
+.vcard.reso{border-color:#B9CDE0}.vcard.reso .lab{color:#2D5877}
+.vcard.sconosciuto{background:#F6E9D8;border-color:#C99A63;box-shadow:none}
+.vcard.sconosciuto .lab{color:#7A4E1F}.vcard.sconosciuto .info{color:#3B2A17}
+.vcard.sconosciuto .btn{border-color:#A87A45;color:#4A2F12}
+.qta{display:flex;align-items:center;gap:4px;padding:4px;border-radius:14px;background:var(--surface-alt);margin-left:auto}
+.qta button{width:52px;height:52px;border:0;border-radius:10px;background:#fff;font-size:1.6rem;cursor:pointer;color:var(--ink)}
+.qta button[disabled]{opacity:.35;cursor:default}
+.qta b{min-width:40px;text-align:center;font-size:1.4rem;font-variant-numeric:tabular-nums}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.02em}
+.item .prezzo{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.vrow time{width:44px;text-align:right;font-size:.8rem;color:var(--ink-soft);font-variant-numeric:tabular-nums;flex:none}
+.oggi-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;color:var(--ink-soft);font-size:.95rem}
+.oggi-bar b{color:var(--ink);font-variant-numeric:tabular-nums}
+.grid-prod{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.grid-prod button{min-height:84px;padding:10px;border:1px solid var(--line);border-radius:14px;background:#fff;text-align:left;display:flex;flex-direction:column;justify-content:space-between;gap:6px;cursor:pointer;font-weight:600;font-size:.9rem;line-height:1.25;overflow-wrap:anywhere}
+.grid-prod small{font-weight:500;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.diff{font-size:1.7rem;font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap}
+.item .dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--orange)}
+.banco-az .btn{padding:0 8px;white-space:nowrap;gap:6px}
