@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.2.0';
+const VERSIONE = '1.2.1';
 
 /* =========================================================
    Utilità
@@ -179,7 +179,8 @@ function openModal(html, mount, { onScan = null, onClose = null } = {}) {
   $('#modalBody').innerHTML = html;
   modalScan = onScan; modalOnClose = onClose;
   if (!modal.open) modal.showModal();
-  if (mount) mount($('#modalBody'));
+  const corpo = $('#modalBody'); corpo.setAttribute('tabindex', '-1'); corpo.focus({ preventScroll: true });
+  if (mount) mount(corpo);
 }
 /* la pulizia è immediata: l'evento "close" del browser arriva dopo e non deve
    cancellare una finestra aperta subito dopo (es. collega codice → scheda rapida) */
@@ -306,9 +307,11 @@ async function openCamera() {
 function stopCamera() { clearTimeout(camTimer); if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; } }
 
 let ultimoCodice = '';
+document.addEventListener('pointerdown', e => { const t = $('#toast'); if (!t.hidden && !t.contains(e.target)) t.hidden = true; }, true);
 function onScan(code) {
   code = String(code || '').trim();
   if (!code) return;
+  $('#toast').hidden = true;
   ultimoCodice = code;
   beep();
   if (modal.open && modalScan) { modalScan(code); return; }
@@ -528,7 +531,11 @@ function anteprimaScad() {
   if (CS.senza) return { t: 'Senza scadenza', err: false };
   const d = CS.scad;
   if (!d.length) return { t: 'Scrivi la data con i tasti qui sotto', err: false, faint: true };
-  if (d.length === 4) { const r = parseScadenza(d); return r ? { t: `Solo mese e anno: fine ${fmtDateLong(r.iso).split(' ').slice(1).join(' ')} · oppure continua con il giorno`, err: false } : { t: 'Mese non valido', err: true }; }
+  if (d.length === 4) {
+    const r = parseScadenza(d), anno = +d.slice(2), ora = new Date().getFullYear() % 100;
+    if (r && anno >= ora - 1) return { t: `Solo mese e anno: fine ${fmtDateLong(r.iso).split(' ').slice(1).join(' ')} · oppure continua a scrivere`, err: false };
+    return { t: 'Continua: mancano le 2 cifre dell\'anno', err: false, faint: true };
+  }
   if (d.length === 6 || d.length === 8) { const r = parseScadenza(d); return r ? { t: `${fmtDateLong(r.iso)} · ${relDays(daysUntil(r.iso))}`, err: daysUntil(r.iso) < 0 } : { t: 'Data non valida', err: true }; }
   return { t: '', err: false };
 }
@@ -550,7 +557,7 @@ routes.carico = arg => {
         <button type="button" class="kp-field ${CS.field === 'scad' ? 'on' : ''}" data-act="kp-field" data-f="scad" ${CS.senza ? 'disabled' : ''}><small>Scadenza</small><b>${CS.senza ? '—' : fmtScadDigits(CS.scad)}</b></button>
         <div class="kp-qta">
           <button type="button" class="kp-pm" data-act="qta-" aria-label="Meno uno">−</button>
-          <button type="button" class="kp-field ${CS.field === 'qta' ? 'on' : ''}" data-act="kp-field" data-f="qta"><small>${inv ? 'Quanti ce ne sono' : 'Quantità'}</small><b>${esc(CS.qta || '0')}</b></button>
+          <button type="button" class="kp-field ${CS.field === 'qta' ? 'on' : ''}" data-act="kp-field" data-f="qta"><small>Pezzi</small><b>${esc(CS.qta || '0')}</b></button>
           <button type="button" class="kp-pm" data-act="qta+" aria-label="Più uno">+</button>
         </div>
       </div>
@@ -620,7 +627,7 @@ async function annullaLotto(id) {
    SCADENZE
    ========================================================= */
 let SZ = { filtro: 'urgenti', q: '' };
-const FILTRI = [['urgenti', 'Urgenti'], ['scaduti', 'Scaduti'], ['30', 'Prossimi 30 giorni'], ['tutti', 'Tutti'], ['gestiti', 'Gestiti']];
+const FILTRI = [['urgenti', 'Urgenti'], ['scaduti', 'Scaduti'], ['30', 'Entro 30 giorni'], ['tutti', 'Tutti'], ['gestiti', 'Gestiti']];
 const FASCE = [['scaduto', 'Scaduti'], ['rosso', 'Scadono a brevissimo'], ['arancio', 'Scadono presto'], ['giallo', 'Entro il mese'], ['ok', 'Più avanti']];
 function lottiFiltrati() {
   const q = norm(SZ.q);
@@ -639,7 +646,8 @@ function rigaLotto(l) {
   const p = prodotto(l.prodottoId), f = fascia(l), d = daysUntil(l.scadenza);
   return `<div class="lot ${f} ${l.gestito ? 'gestito' : ''}">
     <div class="top"><div class="spacer"><div class="name" style="font-weight:650">${esc(p ? p.nome : '?')}</div>
-      <div class="sub small muted">${esc(p ? nomeForn(p.fornitoreId) : '')} · ${fmtNum(l.quantita)} pz ${tagTipo(p)}${l.gestito ? ` · <b>${esc(l.nota || 'gestito')}</b>` : ''}</div></div>
+      <div class="sub small muted">${esc(p ? nomeForn(p.fornitoreId) : '')} · ${fmtNum(l.quantita)} pz ${tagTipo(p)}</div>
+      ${l.gestito ? `<div class="small" style="font-weight:700;color:var(--accent)">Gestito: ${esc(l.nota || 'sì')}</div>` : ''}</div>
       <div class="when">${fmtDate(l.scadenza)}<small>${relDays(d)}</small></div></div>
     <div class="acts">
       <button class="btn small" type="button" data-act="lot-gestito" data-id="${esc(l.id)}">${l.gestito ? 'Non gestito' : 'Gestito'}</button>
@@ -925,7 +933,7 @@ routes.prodotto = id => {
   const lotti = lottiAttivi().filter(l => l.prodottoId === p.id).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
   const calc = prezzoCalcolato(p);
   const html = `<div class="card">
-      <label class="field">Nome<input type="text" id="pNome" value="${esc(p.nome)}"></label>
+      <label class="field">Nome<textarea id="pNome" rows="2" style="min-height:0">${esc(p.nome)}</textarea></label>
       <label class="field">Fornitore<select id="pForn"><option value="">— nessuno —</option>${forn.map(f => `<option value="${esc(f.id)}" ${p.fornitoreId === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></label>
       <div class="btn-grid" style="grid-template-columns:1fr 1fr">
         <label class="field">Formato<input type="text" id="pFormato" value="${esc(p.formato)}"></label>
@@ -1257,7 +1265,7 @@ A['cat-altri'] = () => { CAT.limite += 100; $('#catList').innerHTML = catListHTM
 A['nuovo-prodotto'] = () => nuovoProdottoModal({ fornitoreId: CAT.forn, onDone: p => { location.hash = '#prodotto/' + encodeURIComponent(p.id); } });
 A['p-salva'] = async el => {
   const p = prodotto(el.dataset.id); if (!p) return;
-  const nome = $('#pNome').value.trim(); if (!nome) { toast('Il nome non può essere vuoto', { err: true }); return; }
+  const nome = $('#pNome').value.replace(/\s+/g, ' ').trim(); if (!nome) { toast('Il nome non può essere vuoto', { err: true }); return; }
   const man = $('#pMan').value.trim();
   await save('prodotti', {
     ...p, nome, fornitoreId: $('#pForn').value, formato: $('#pFormato').value.trim(), categoria: $('#pCat').value.trim(), tipoScadenza: $('#pTipo').value,

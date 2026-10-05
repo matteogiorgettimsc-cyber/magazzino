@@ -182,8 +182,8 @@ button.item:first-child{border-top:0}
 .tag.ok{background:var(--accent-soft);color:var(--accent)}
 .tag.warn{background:var(--orange-soft);color:var(--orange)}
 .tag.red{background:var(--red-soft);color:var(--red-dark)}
-.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch}
-.chip{flex:none;min-height:40px;padding:0 14px;border-radius:20px;border:1px solid var(--line);background:var(--surface);font-weight:600;font-size:.9rem;cursor:pointer;white-space:nowrap}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{flex:none;min-height:38px;padding:0 12px;border-radius:20px;border:1px solid var(--line);background:var(--surface);font-weight:600;font-size:.86rem;cursor:pointer;white-space:nowrap}
 .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
 
 /* ordini */
@@ -223,13 +223,14 @@ dialog::backdrop{background:rgba(20,26,18,.45)}
 
 /* messaggio */
 #toast{
-  position:fixed;left:16px;right:16px;bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:50;
-  max-width:560px;margin:0 auto;background:#1F261E;color:#fff;border-radius:14px;padding:14px 16px;
-  display:flex;align-items:center;gap:12px;box-shadow:0 8px 24px rgba(0,0,0,.25);font-weight:550;
+  position:fixed;left:12px;right:12px;top:calc(62px + env(safe-area-inset-top,0px));z-index:50;
+  max-width:560px;margin:0 auto;background:#1F261E;color:#fff;border-radius:12px;padding:10px 12px;
+  display:flex;align-items:center;gap:10px;box-shadow:0 8px 24px rgba(0,0,0,.25);font-weight:550;font-size:.92rem;
 }
 #toast.err{background:var(--red-dark)}
 #toast button{border:0;background:rgba(255,255,255,.16);color:#fff;border-radius:10px;min-height:40px;padding:0 14px;font-weight:700;cursor:pointer}
-#toast span{flex:1}
+#toast span{flex:1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#modalBody:focus{outline:none}
 
 @media (min-width:640px){
   .stats{grid-template-columns:repeat(4,1fr)}
@@ -240,12 +241,12 @@ dialog::backdrop{background:rgba(20,26,18,.45)}
 
 /* tastierino arrivo merce */
 .kp-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.kp-field{min-height:76px;border:2px solid var(--line);border-radius:14px;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer;padding:6px;min-width:0}
-.kp-field small{font-size:.78rem;color:var(--ink-faint);font-weight:600}
-.kp-field b{font-size:1.55rem;font-variant-numeric:tabular-nums;letter-spacing:.03em;white-space:nowrap}
+.kp-field{min-height:76px;border:2px solid var(--line);border-radius:14px;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer;padding:6px 4px;min-width:0;overflow:hidden}
+.kp-field small{font-size:.76rem;color:var(--ink-faint);font-weight:600;white-space:nowrap}
+.kp-field b{font-size:clamp(1.1rem,5.2vw,1.55rem);font-variant-numeric:tabular-nums;letter-spacing:.02em;white-space:nowrap}
 .kp-field.on{border-color:var(--accent-mid);background:var(--accent-soft)}
 .kp-field[disabled]{opacity:.45}
-.kp-qta{display:grid;grid-template-columns:36px 1fr 36px;gap:5px;align-items:stretch;min-width:0}
+.kp-qta{display:grid;grid-template-columns:32px minmax(0,1fr) 32px;gap:4px;align-items:stretch;min-width:0}
 .kp-pm{border:1px solid var(--line);border-radius:12px;background:var(--surface-alt);font-size:1.4rem;cursor:pointer}
 .keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .keypad button{min-height:60px;border-radius:14px;border:1px solid var(--line);background:var(--surface-alt);font-size:1.6rem;font-weight:600;cursor:pointer;font-variant-numeric:tabular-nums}
@@ -260,3 +261,6 @@ dialog::backdrop{background:rgba(20,26,18,.45)}
 .ord-row .mini-stepper{margin-left:auto}
 .scanbox{padding:16px 14px;gap:10px}
 .scanbox .pulse{width:52px;height:52px}
+
+.lot .top .spacer{min-width:0}
+.lot .name,.item .name{overflow-wrap:anywhere}
