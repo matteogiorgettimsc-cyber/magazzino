@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.1.0';
+const VERSIONE = '1.2.0';
 
 /* =========================================================
    Utilità
@@ -402,13 +402,22 @@ function schedaRapida(p) {
   const u = ultimoOrdine(p.id);
   openModal(`${mhead(p.nome)}
     <div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div>
-    ${lotti.length ? `<div class="list">${lotti.map(l => `<div class="item"><div class="main"><div class="name">${fmtNum(l.quantita)} pz</div><div class="sub">${l.scadenza ? 'scade ' + fmtDate(l.scadenza) + ' · ' + relDays(daysUntil(l.scadenza)) : 'senza scadenza'}</div></div></div>`).join('')}</div>` : '<div class="faint">Nessuna confezione registrata in negozio.</div>'}
+    ${lotti.length ? `<div class="list">${lotti.map(l => rigaConfezione(l)).join('')}</div>` : '<div class="faint">Nessuna confezione registrata in negozio.</div>'}
     ${u ? `<div class="faint">Ultimo ordine: ${fmtNum(u.qta)} il ${fmtDate(u.data)}</div>` : ''}
     <div class="stack">
       <button class="btn primary block" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button>
       <button class="btn block" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button>
       <a class="btn ghost block" href="#prodotto/${encodeURIComponent(p.id)}" data-act="close-modal-link">Apri la scheda</a>
     </div>`);
+}
+
+function rigaConfezione(l, { arrivo = false, togli = false } = {}) {
+  return `<div class="item" style="flex-wrap:wrap"><div class="main" style="flex:1 1 60%"><div class="name">${fmtNum(l.quantita)} pz</div>
+    <div class="sub">${l.scadenza ? 'scade ' + fmtDate(l.scadenza) + ' · ' + relDays(daysUntil(l.scadenza)) : 'senza scadenza'}${arrivo ? ' · arrivato ' + fmtDate(l.arrivo) : ''}${l.gestito ? ' · ' + esc(l.nota || 'gestito') : ''}</div></div>
+    <div class="row" style="gap:6px">
+      <button class="btn small" type="button" data-act="lot-modifica" data-id="${esc(l.id)}">Modifica</button>
+      ${togli ? `<button class="btn small ghost" type="button" data-act="lotto-annulla" data-id="${esc(l.id)}">Togli</button>` : `<button class="btn small" type="button" data-act="lot-esaurito" data-id="${esc(l.id)}">Esaurito</button><button class="btn small danger" type="button" data-act="lot-buttato" data-id="${esc(l.id)}">Buttato</button>`}
+    </div></div>`;
 }
 
 /* =========================================================
@@ -557,8 +566,8 @@ routes.carico = arg => {
   html += `<div class="section-title"><h2>${inv ? 'Contati oggi' : 'Arrivati oggi'}</h2><span class="count">${oggi.length}</span></div>`;
   html += oggi.length ? `<div class="list">${oggi.map(l => {
     const pp = prodotto(l.prodottoId);
-    return `<div class="item"><div class="main"><div class="name">${esc(pp ? pp.nome : '?')}</div><div class="sub">${fmtNum(l.quantita)} pz · ${l.scadenza ? 'scade ' + fmtDate(l.scadenza) : 'senza scadenza'}</div></div>
-      <button class="btn small ghost" type="button" data-act="lotto-annulla" data-id="${esc(l.id)}">Togli</button></div>`;
+    return `<div class="item" style="flex-wrap:wrap"><div class="main" style="flex:1 1 60%"><div class="name">${esc(pp ? pp.nome : '?')}</div><div class="sub">${fmtNum(l.quantita)} pz · ${l.scadenza ? 'scade ' + fmtDate(l.scadenza) : 'senza scadenza'}</div></div>
+      <div class="row" style="gap:6px"><button class="btn small" type="button" data-act="lot-modifica" data-id="${esc(l.id)}">Modifica</button><button class="btn small ghost" type="button" data-act="lotto-annulla" data-id="${esc(l.id)}">Togli</button></div></div>`;
   }).join('')}</div>` : `<div class="empty">Ancora niente oggi.</div>`;
   return { title: inv ? 'Inventario' : 'Arrivo merce', html, tab: 'carico', onScan: caricoScan };
 };
@@ -759,7 +768,7 @@ routes.sprechi = () => {
     return `<div class="item"><div class="main"><div class="name">${esc(p ? p.nome : 'Prodotto eliminato')}</div>
       <div class="sub">${fmtDate(r.data)} · ${fmtNum(r.qta)} pz · ${esc(r.motivo)}${r.scadenza ? ' · scadenza ' + fmtDate(r.scadenza) : ''}${p ? ' · ' + esc(nomeForn(p.fornitoreId)) : ''}</div></div>
       <div style="text-align:right;font-weight:700;white-space:nowrap">${v != null ? fmtEuro(v) : '–'}</div>
-      <button class="btn small ghost" type="button" data-act="spreco-annulla" data-id="${esc(r.id)}" aria-label="Annulla questo spreco">×</button></div>`;
+      <button class="btn small" type="button" data-act="spreco-mod" data-id="${esc(r.id)}">Modifica</button></div>`;
   }).join('')}</div>` : `<div class="empty">Nessuno spreco in questo periodo.</div>`;
   return {
     title: 'Archivio sprechi', html, tab: 'scadenze',
@@ -825,12 +834,13 @@ function ordiniHTML() {
     for (const o of inviati) {
       const tot = o.righe.length, ok = o.righe.filter(r => (r.ricevuto || 0) >= r.qta).length;
       html += `<section class="supplier"><header><div class="main"><h3>${esc(nomeForn(o.fornitoreId))}</h3><div class="faint">inviato il ${fmtDate(o.inviato)} · arrivati ${ok} su ${tot}</div></div></header>
-        ${o.righe.map(r => { const p = prodotto(r.prodottoId), ric = r.ricevuto || 0; const st = ric >= r.qta ? 'ok' : ric > 0 ? 'warn' : ''; return `<div class="item"><div class="main"><div class="name">${esc(p ? p.nome : '?')}</div></div><span class="progress tag ${st}">${fmtNum(ric)} / ${fmtNum(r.qta)}</span></div>`; }).join('')}
-        <footer><button class="btn" type="button" data-act="ord-chiudi" data-o="${esc(o.id)}">Chiudi ordine</button></footer></section>`;
+        ${o.righe.map(r => { const p = prodotto(r.prodottoId), ric = r.ricevuto || 0; const st = ric >= r.qta ? 'ok' : ric > 0 ? 'warn' : ''; return `<div class="item"><div class="main"><div class="name">${esc(p ? p.nome : '?')}</div></div><span class="progress tag ${st}">${fmtNum(ric)} / ${fmtNum(r.qta)}</span><button class="btn small" type="button" data-act="ord-riga-mod" data-o="${esc(o.id)}" data-p="${esc(r.prodottoId)}">Modifica</button></div>`; }).join('')}
+        <footer><button class="btn" type="button" data-act="ord-riapri" data-o="${esc(o.id)}">Riapri</button><button class="btn" type="button" data-act="ord-chiudi" data-o="${esc(o.id)}">Chiudi ordine</button></footer></section>`;
     }
   }
   if (chiusi.length) {
-    html += `<div class="section-title"><h2>Ultimi ordini chiusi</h2></div><div class="list">${chiusi.map(o => `<div class="item"><div class="main"><div class="name">${esc(nomeForn(o.fornitoreId))}</div><div class="sub">inviato ${fmtDate(o.inviato)} · chiuso ${fmtDate(o.chiuso)} · ${o.righe.length} prodotti</div></div></div>`).join('')}</div>`;
+    html += `<div class="section-title"><h2>Ultimi ordini chiusi</h2></div><div class="list">${chiusi.map(o => `<div class="item" style="flex-wrap:wrap"><div class="main" style="flex:1 1 60%"><div class="name">${esc(nomeForn(o.fornitoreId))}</div><div class="sub">inviato ${fmtDate(o.inviato)} · chiuso ${fmtDate(o.chiuso)} · ${o.righe.length} prodotti</div></div>
+      <div class="row" style="gap:6px"><button class="btn small" type="button" data-act="ord-riapri-chiuso" data-o="${esc(o.id)}">Riapri</button><button class="btn small ghost" type="button" data-act="ord-elimina" data-o="${esc(o.id)}" aria-label="Elimina ordine">×</button></div></div>`).join('')}</div>`;
   }
   return html;
 }
@@ -937,7 +947,7 @@ routes.prodotto = id => {
     <button class="btn primary block" type="button" data-act="p-salva" data-id="${esc(p.id)}">Salva modifiche</button>
     <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button></div>
     <div class="section-title"><h2>In negozio</h2><span class="count">${fmtNum(giacenza(p.id))} pz</span></div>
-    ${lotti.length ? `<div class="list">${lotti.map(l => `<div class="item"><div class="main"><div class="name">${fmtNum(l.quantita)} pz</div><div class="sub">${l.scadenza ? 'scade ' + fmtDate(l.scadenza) + ' · ' + relDays(daysUntil(l.scadenza)) : 'senza scadenza'} · arrivato ${fmtDate(l.arrivo)}</div></div></div>`).join('')}</div>` : '<div class="empty">Nessuna confezione registrata.</div>'}
+    ${lotti.length ? `<div class="list">${lotti.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>` : '<div class="empty">Nessuna confezione registrata.</div>'}
     <button class="btn danger block" type="button" data-act="p-elimina" data-id="${esc(p.id)}">Elimina prodotto</button>`;
   return {
     title: 'Scheda prodotto', html, back: '#catalogo', tab: 'catalogo',
@@ -1137,20 +1147,87 @@ A['lot-esaurito'] = async el => {
 A['lot-buttato'] = el => { const l = S.lotti.get(el.dataset.id); if (l) sprecoModal({ lot: l }); };
 A['lot-modifica'] = el => {
   const l = S.lotti.get(el.dataset.id); if (!l) return;
-  const [y, m, d] = (l.scadenza || '').split('-');
-  openModal(`${mhead('Modifica')}
-    <label class="field">Quantità<input type="number" inputmode="numeric" id="mQ" value="${l.quantita}" min="1"></label>
-    <label class="field">Scadenza <span class="hint">6 cifre, es. 280527</span><input type="text" inputmode="numeric" id="mS" value="${l.scadenza ? d + m + y.slice(2) : ''}"></label>
+  const p = prodotto(l.prodottoId);
+  const [y, m, d] = (l.scadenza || '--').split('-');
+  openModal(`${mhead('Modifica')}<div class="faint">${esc(p ? p.nome : '')}${l.arrivo ? ' · arrivato ' + fmtDate(l.arrivo) : ''}</div>
+    <label class="field">Quantità in negozio<input type="number" inputmode="numeric" id="mQ" value="${l.quantita}" min="1"></label>
+    <label class="field">Scadenza <span class="hint">6 cifre, es. 280527 · 4 cifre = solo mese e anno</span><input type="text" inputmode="numeric" id="mS" value="${l.scadenza ? d + m + y.slice(2) : ''}" ${l.scadenza ? '' : 'disabled'}></label>
+    <div class="date-preview" id="mPrev"></div>
+    <label class="check"><input type="checkbox" id="mSenza" ${l.scadenza ? '' : 'checked'}> Senza scadenza</label>
     <button class="btn primary block" type="button" id="mOk">Salva</button>
     <button class="btn danger block" type="button" id="mDel">Elimina questa riga</button>`, b => {
+    const iS = b.querySelector('#mS'), cb = b.querySelector('#mSenza'), pv = b.querySelector('#mPrev');
+    const prev = () => { if (cb.checked) { pv.textContent = ''; return; } const r = parseScadenza(iS.value); pv.textContent = r ? fmtDateLong(r.iso) + ' · ' + relDays(daysUntil(r.iso)) : (iS.value.replace(/\D/g, '').length >= 4 ? 'Data non valida' : ''); pv.classList.toggle('err', !r); };
+    iS.addEventListener('input', prev); cb.addEventListener('change', () => { iS.disabled = cb.checked; prev(); }); prev();
     b.querySelector('#mOk').onclick = async () => {
       const q = parseInt(b.querySelector('#mQ').value, 10);
-      const r = parseScadenza(b.querySelector('#mS').value);
       if (!q || q < 1) { toast('Quantità non valida', { err: true }); return; }
-      if (!r) { toast('Data non valida', { err: true }); return; }
-      await save('lotti', { ...l, quantita: q, scadenza: r.iso }); closeModal(); render();
+      let scad = null;
+      if (!cb.checked) { const r = parseScadenza(iS.value); if (!r) { toast('Data non valida: 6 cifre, es. 280527', { err: true }); return; } scad = r.iso; }
+      if (l.ordineId && q !== l.quantita) {
+        const o = S.ordini.get(l.ordineId);
+        if (o) await save('ordini', { ...o, righe: o.righe.map(r => r.prodottoId === l.prodottoId ? { ...r, ricevuto: Math.max(0, (r.ricevuto || 0) + q - l.quantita) } : r) });
+      }
+      await save('lotti', { ...l, quantita: q, scadenza: scad }); closeModal(); toast('Modificato'); render();
     };
-    b.querySelector('#mDel').onclick = async () => { closeModal(); if (await confirmBox('Elimino questa riga? Non conta come spreco.', { ok: 'Elimina', danger: true })) { await remove('lotti', l.id); render(); } };
+    b.querySelector('#mDel').onclick = async () => { closeModal(); if (await confirmBox('Elimino questa riga? Non conta come spreco.', { ok: 'Elimina', danger: true })) annullaLotto(l.id); };
+  });
+};
+/* ordini già inviati e chiusi */
+A['ord-riga-mod'] = el => {
+  const o = S.ordini.get(el.dataset.o); if (!o) return;
+  const r = o.righe.find(x => x.prodottoId === el.dataset.p); if (!r) return;
+  const p = prodotto(r.prodottoId);
+  openModal(`${mhead('Modifica riga dell\'ordine')}<div class="faint">${esc(p ? p.nome : '')}</div>
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr">
+      <label class="field">Ordinati<input type="number" inputmode="numeric" id="oQ" min="0" value="${r.qta}"></label>
+      <label class="field">Arrivati<input type="number" inputmode="numeric" id="oR" min="0" value="${r.ricevuto || 0}"></label></div>
+    <button class="btn primary block" type="button" id="oOk">Salva</button>
+    <button class="btn danger block" type="button" id="oDel">Togli dall'ordine</button>`, b => {
+    b.querySelector('#oOk').onclick = async () => {
+      const q = Math.max(0, parseInt(b.querySelector('#oQ').value, 10) || 0), ric = Math.max(0, parseInt(b.querySelector('#oR').value, 10) || 0);
+      await save('ordini', { ...o, righe: o.righe.map(x => x.prodottoId === r.prodottoId ? { ...x, qta: q, ricevuto: ric } : x) }); closeModal(); toast('Modificato'); render();
+    };
+    b.querySelector('#oDel').onclick = async () => { await save('ordini', { ...o, righe: o.righe.filter(x => x.prodottoId !== r.prodottoId) }); closeModal(); toast('Tolto dall\'ordine'); render(); };
+  });
+};
+A['ord-riapri'] = async el => {
+  const o = S.ordini.get(el.dataset.o); if (!o) return;
+  const aperto = ordineAperto(o.fornitoreId);
+  if (aperto && aperto.id !== o.id) {
+    const righe = aperto.righe.map(r => ({ ...r }));
+    for (const r of o.righe) { const g = righe.find(x => x.prodottoId === r.prodottoId); if (g) g.qta += r.qta; else righe.push({ prodottoId: r.prodottoId, qta: r.qta, ricevuto: 0 }); }
+    await save('ordini', { ...aperto, righe }); await remove('ordini', o.id);
+  } else await save('ordini', { ...o, stato: 'aperto', inviato: null, chiuso: null });
+  toast('Ordine riaperto: lo trovi in "Da ordinare"'); render();
+};
+A['ord-riapri-chiuso'] = async el => { const o = S.ordini.get(el.dataset.o); if (!o) return; await save('ordini', { ...o, stato: 'inviato', chiuso: null }); toast('Ordine di nuovo "in arrivo"'); render(); };
+A['ord-elimina'] = async el => { const o = S.ordini.get(el.dataset.o); if (!o) return; if (await confirmBox(`Elimino l'ordine a ${nomeForn(o.fornitoreId)}?`, { ok: 'Elimina', danger: true })) { await remove('ordini', o.id); toast('Ordine eliminato'); render(); } };
+/* sprechi: modifica */
+A['spreco-mod'] = el => {
+  const r = S.sprechi.get(el.dataset.id); if (!r) return;
+  const p = prodotto(r.prodottoId);
+  let motivo = r.motivo;
+  const standard = MOTIVI.includes(motivo);
+  const [y, m, d] = r.data.split('-');
+  openModal(`${mhead('Modifica spreco')}<div class="faint">${esc(p ? p.nome : '')}</div>
+    <label class="field">Quantità ${r.lottoId ? '<span class="hint">viene da una scadenza: per cambiarla annulla lo spreco e registralo di nuovo</span>' : ''}<input type="number" inputmode="numeric" id="eQ" min="1" value="${r.qta}" ${r.lottoId ? 'disabled' : ''}></label>
+    <label class="field">Data <span class="hint">6 cifre, es. 051026</span><input type="text" inputmode="numeric" id="eD" value="${d + m + y.slice(2)}"></label>
+    <div class="field" style="font-weight:600">Perché<div class="chips" id="eMot">${MOTIVI.map(x => `<button type="button" class="chip ${(standard ? x === motivo : x === 'Altro') ? 'on' : ''}" data-m="${x}">${x}</button>`).join('')}</div>
+      <input type="text" id="eAltro" value="${standard ? '' : esc(motivo)}" placeholder="Scrivi il motivo" ${standard ? 'hidden' : ''}></div>
+    <button class="btn primary block" type="button" id="eOk">Salva</button>
+    <button class="btn danger block" type="button" id="eDel">Annulla lo spreco</button>`, b => {
+    let scelto = standard ? motivo : 'Altro';
+    const altro = b.querySelector('#eAltro');
+    $$('#eMot [data-m]', b).forEach(c => c.onclick = () => { scelto = c.dataset.m; $$('#eMot [data-m]', b).forEach(x => x.classList.toggle('on', x === c)); altro.hidden = scelto !== 'Altro'; });
+    b.querySelector('#eOk').onclick = async () => {
+      const dt = parseScadenza(b.querySelector('#eD').value);
+      if (!dt) { toast('Data non valida', { err: true }); return; }
+      const q = r.lottoId ? r.qta : Math.max(1, parseInt(b.querySelector('#eQ').value, 10) || 1);
+      await save('sprechi', { ...r, qta: q, data: dt.iso, motivo: scelto === 'Altro' ? (altro.value.trim() || 'Altro') : scelto });
+      closeModal(); toast('Modificato'); render();
+    };
+    b.querySelector('#eDel').onclick = async () => { closeModal(); if (await confirmBox('Annullo questo spreco? Se veniva da una scadenza, il prodotto torna in elenco.', { ok: 'Annulla lo spreco' })) annullaSpreco(r.id); };
   });
 };
 /* sprechi */
