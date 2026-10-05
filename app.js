@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.0.0';
+const VERSIONE = '1.0.1';
 
 /* =========================================================
    Utilità
@@ -175,19 +175,23 @@ const modal = $('#modal');
 let modalScan = null, modalOnClose = null;
 function openModal(html, mount, { onScan = null, onClose = null } = {}) {
   stopCamera();
+  const prev = modalOnClose; modalOnClose = null; if (prev) prev();
   $('#modalBody').innerHTML = html;
   modalScan = onScan; modalOnClose = onClose;
   if (!modal.open) modal.showModal();
   if (mount) mount($('#modalBody'));
 }
-function closeModal() {
-  stopCamera();
-  if (modal.open) modal.close();
-}
-modal.addEventListener('close', () => {
+/* la pulizia è immediata: l'evento "close" del browser arriva dopo e non deve
+   cancellare una finestra aperta subito dopo (es. collega codice → scheda rapida) */
+function pulisciModal() {
   stopCamera(); $('#modalBody').innerHTML = ''; modalScan = null;
   const cb = modalOnClose; modalOnClose = null; if (cb) cb();
-});
+}
+function closeModal() {
+  if (modal.open) modal.close();
+  pulisciModal();
+}
+modal.addEventListener('close', () => { if (modal.open) return; if ($('#modalBody').innerHTML) pulisciModal(); });
 modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
 const mhead = title => `<div class="modal-head"><h2>${esc(title)}</h2><button class="modal-close" type="button" data-act="close-modal" aria-label="Chiudi">×</button></div>`;
 function confirmBox(text, { ok = 'Conferma', danger = false, title = 'Conferma' } = {}) {
@@ -241,15 +245,36 @@ async function openCamera() {
   try { const sup = await BarcodeDetector.getSupportedFormats(); formats = formats.filter(f => sup.includes(f)); } catch (e) { }
   const det = new BarcodeDetector({ formats });
   openModal(`${mhead('Inquadra il codice a barre')}<div class="video-wrap"><video id="camVideo" playsinline muted></video></div>
-    <p class="faint">Tieni il codice dentro il riquadro, con buona luce.</p>`, async b => {
-    try { camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false }); }
-    catch (e) { closeModal(); toast('Non riesco ad aprire la fotocamera: controlla i permessi', { err: true }); return; }
-    const v = b.querySelector('#camVideo'); if (!v) { stopCamera(); return; }
-    v.srcObject = camStream; await v.play().catch(() => { });
+    <div class="row"><p class="faint spacer" style="margin:0">Tieni il codice dentro il riquadro, ben fermo e con buona luce.</p><button class="btn small" type="button" id="camTorch" hidden>Luce</button></div>`, async b => {
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }); }
+    catch (e) { closeModal(); toast('Non riesco ad aprire la fotocamera: controlla i permessi di Chrome', { err: true }); return; }
+    const v = b.querySelector('#camVideo');
+    if (!v || !modal.open) { stream.getTracks().forEach(t => t.stop()); return; }
+    camStream = stream;
+    const track = stream.getVideoTracks()[0];
+    try {
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps.focusMode && caps.focusMode.includes('continuous')) await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+      if (caps.torch) {
+        const tb = b.querySelector('#camTorch'); let on = false; tb.hidden = false;
+        tb.onclick = async () => { on = !on; try { await track.applyConstraints({ advanced: [{ torch: on }] }); tb.textContent = on ? 'Spegni luce' : 'Luce'; } catch (e) { } };
+      }
+    } catch (e) { }
+    v.srcObject = stream; await v.play().catch(() => { });
+    let ultimo = null, volte = 0;
     const tick = async () => {
       if (!camStream) return;
-      try { const r = await det.detect(v); if (r && r.length) { const code = r[0].rawValue; closeModal(); onScan(code); return; } } catch (e) { }
-      camTimer = setTimeout(tick, 160);
+      try {
+        const r = await det.detect(v);
+        if (!camStream) return;
+        if (r && r.length) {
+          const code = r[0].rawValue;
+          if (code === ultimo) volte++; else { ultimo = code; volte = 1; }
+          if (volte >= 2) { closeModal(); onScan(code); return; }   // stesso codice letto due volte: niente letture sbagliate
+        }
+      } catch (e) { }
+      camTimer = setTimeout(tick, 120);
     };
     tick();
   });
@@ -321,7 +346,7 @@ function pickerModal({ title, intro = '', code = null, onPick }) {
 function collegaCodice(code, onPick) {
   pickerModal({
     title: 'Codice nuovo', code, onPick,
-    intro: `<div class="notice">Il codice <b>${esc(code)}</b> non è ancora collegato a un prodotto. Cerca il prodotto qui sotto: la prossima volta lo riconosco da solo.</div>`
+    intro: `<div class="notice"><span>Il codice <b>${esc(code)}</b> non è ancora collegato a un prodotto. Cerca il prodotto qui sotto: la prossima volta lo riconosco da solo.</span></div>`
   });
 }
 function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }) {
@@ -375,6 +400,7 @@ function route() {
   render(true);
 }
 function render(scrollTop = false) {
+  current.fresh = !!scrollTop;
   const r = routes[current.name](current.arg) || {};
   $('#viewTitle').textContent = r.title || 'Magazzino';
   document.title = (r.title ? r.title + ' – ' : '') + 'Magazzino';
@@ -481,7 +507,7 @@ routes.carico = arg => {
     const pr = anteprimaScad();
     html += `<div class="card">
       <div class="row"><div class="spacer"><h2>${esc(p.nome)}</h2><div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>${tagTipo(p)}</div>
-      ${info ? `<div class="notice green">In ordine: <b>${fmtNum(info.qta)}</b> · già arrivati <b>${fmtNum(info.ric)}</b></div>` : ''}
+      ${info ? `<div class="notice green"><span>In ordine: <b>${fmtNum(info.qta)}</b> · già arrivati <b>${fmtNum(info.ric)}</b></span></div>` : ''}
       <div class="kp-fields">
         <button type="button" class="kp-field ${CS.field === 'scad' ? 'on' : ''}" data-act="kp-field" data-f="scad" ${CS.senza ? 'disabled' : ''}><small>Scadenza</small><b>${CS.senza ? '—' : fmtScadDigits(CS.scad)}</b></button>
         <div class="kp-qta">
@@ -595,7 +621,7 @@ function listaScadenzeHTML() {
   return html;
 }
 routes.scadenze = arg => {
-  if (arg && FILTRI.some(f => f[0] === arg)) SZ.filtro = arg;
+  if (current.fresh && arg && FILTRI.some(f => f[0] === arg)) SZ.filtro = arg;
   const html = `<div class="chips">${FILTRI.map(([k, l]) => `<button class="chip ${SZ.filtro === k ? 'on' : ''}" type="button" data-act="sz-filtro" data-f="${k}">${l}</button>`).join('')}</div>
     <div class="row"><input type="search" id="szQ" placeholder="Cerca un prodotto" value="${esc(SZ.q)}" autocomplete="off"><button class="btn small" type="button" data-act="sz-condividi">Condividi</button></div>
     <div id="szList" class="stack">${listaScadenzeHTML()}</div>`;
@@ -689,7 +715,7 @@ function inviaOrdineModal(o) {
   const testo = testoOrdine(o);
   openModal(`${mhead('Invia ordine a ' + nomeForn(o.fornitoreId))}
     <label class="field">Testo dell'ordine <span class="hint">puoi modificarlo prima di inviare</span><textarea id="ordTxt">${esc(testo)}</textarea></label>
-    ${!tel && !f.email && !f.sito ? `<div class="notice">Per questo fornitore non ci sono contatti. <a href="#fornitore/${encodeURIComponent(o.fornitoreId)}">Aggiungili</a>, oppure usa Condividi.</div>` : ''}
+    ${!tel && !f.email && !f.sito ? `<div class="notice"><span>Per questo fornitore non ci sono contatti. <a href="#fornitore/${encodeURIComponent(o.fornitoreId)}">Aggiungili</a>, oppure usa Condividi.</span></div>` : ''}
     <div class="stack">
       ${tel ? `<button class="btn primary block" type="button" data-x="wa">Apri WhatsApp</button>` : ''}
       ${f.email ? `<button class="btn ${tel ? '' : 'primary'} block" type="button" data-x="mail">Apri email</button>` : ''}
@@ -703,7 +729,7 @@ function inviaOrdineModal(o) {
     on('mail', () => { location.href = `mailto:${encodeURIComponent(f.email)}?subject=${encodeURIComponent('Ordine ' + settings().negozio)}&body=${encodeURIComponent(txt())}`; });
     on('sito', () => { let u = f.sito; if (!/^https?:/i.test(u)) u = 'https://' + u; window.open(u, '_blank'); });
     on('copia', async () => { try { await navigator.clipboard.writeText(txt()); toast('Testo copiato'); } catch (e) { b.querySelector('#ordTxt').select(); toast('Seleziona e copia il testo', { err: true }); } });
-    on('share', async () => { if (navigator.share) { try { await navigator.share({ text: txt() }); } catch (e) { } } else toast('Condividi non disponibile: usa Copia testo', { err: true }); });
+    on('share', () => condividiTesto(txt(), 'Testo'));
     on('fatto', async () => {
       await save('ordini', { ...o, stato: 'inviato', inviato: todayISO(), righe: o.righe.filter(r => r.qta > 0), testo: txt() });
       closeModal(); toast('Ordine segnato come inviato'); render();
@@ -727,7 +753,7 @@ function catListHTML() {
 }
 const segCat = on => `<div class="segmented"><a href="#catalogo" class="${on === 'p' ? 'on' : ''}">Prodotti</a><a href="#fornitori" class="${on === 'f' ? 'on' : ''}">Fornitori</a></div>`;
 routes.catalogo = arg => {
-  if (arg) { CAT.forn = arg; CAT.q = ''; CAT.limite = 60; }
+  if (current.fresh && arg) { CAT.forn = arg; CAT.q = ''; CAT.limite = 60; }
   const forn = [...S.fornitori.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
   const html = `${segCat('p')}
     <input type="search" id="catQ" placeholder="Cerca per nome o codice" value="${esc(CAT.q)}" autocomplete="off">
@@ -938,11 +964,15 @@ A['qta+'] = () => { CS.qta = String((parseInt(CS.qta, 10) || 0) + 1); render(); 
 A['lotto-annulla'] = el => annullaLotto(el.dataset.id);
 /* scadenze */
 A['sz-filtro'] = el => { SZ.filtro = el.dataset.f; render(); };
-A['sz-condividi'] = async () => {
-  const t = testoScadenze();
-  if (navigator.share) { try { await navigator.share({ text: t }); } catch (e) { } }
-  else { try { await navigator.clipboard.writeText(t); toast('Elenco copiato'); } catch (e) { toast('Non riesco a copiare', { err: true }); } }
-};
+async function condividiTesto(t, cosa) {
+  if (navigator.share) {
+    try { await navigator.share({ text: t }); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  try { await navigator.clipboard.writeText(t); toast(`${cosa} copiato: incollalo dove vuoi`); }
+  catch (e) { toast('Non riesco né a condividere né a copiare', { err: true }); }
+}
+A['sz-condividi'] = () => condividiTesto(testoScadenze(), 'Elenco');
 A['lot-gestito'] = async el => {
   const l = S.lotti.get(el.dataset.id); if (!l) return;
   if (l.gestito) { await save('lotti', { ...l, gestito: false, nota: '' }); render(); return; }
