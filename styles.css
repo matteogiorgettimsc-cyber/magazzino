@@ -254,8 +254,17 @@ dialog::backdrop{background:rgba(20,26,18,.45)}
 .keypad .ok{background:var(--accent);color:#fff;border-color:var(--accent);font-size:1.15rem}
 .date-preview.faint{color:var(--ink-faint);font-weight:500}
 
-.lot .acts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) 44px;gap:6px}
-.lot .acts .btn{min-width:0;padding:0 2px;font-size:.84rem}
+.lot .acts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.lot .acts .btn{min-width:0;padding:0 4px;font-size:.88rem;gap:6px}
+.lot .acts .btn svg{flex:none}
+.lot .top{cursor:pointer;border-radius:8px;-webkit-tap-highlight-color:rgba(0,0,0,.06)}
+.lot .top:active{background:rgba(0,0,0,.04)}
+.lot.nessuna{border-left-color:var(--line)}
+.tappable{cursor:pointer;-webkit-tap-highlight-color:rgba(0,0,0,.06)}
+.conf-acts{flex:1 1 100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.conf-acts>:first-child:nth-last-child(3){grid-column:1/-1}
+.conf-acts .btn{min-width:0;padding:0 4px;gap:6px}
+.conf-acts .btn svg{flex:none}
 .ord-row{flex-wrap:wrap}
 .ord-row .main{flex:1 1 100%}
 .ord-row .mini-stepper{margin-left:auto}

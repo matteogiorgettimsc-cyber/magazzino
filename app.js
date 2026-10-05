@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.2.2';
+const VERSIONE = '1.2.3';
 
 /* =========================================================
    Utilità
@@ -414,11 +414,12 @@ function schedaRapida(p) {
     </div>`);
 }
 
+const ICO_MATITA = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
 function rigaConfezione(l, { arrivo = false, togli = false } = {}) {
-  return `<div class="item" style="flex-wrap:wrap"><div class="main" style="flex:1 1 60%"><div class="name">${fmtNum(l.quantita)} pz</div>
-    <div class="sub">${l.scadenza ? 'scade ' + fmtDate(l.scadenza) + ' · ' + relDays(daysUntil(l.scadenza)) : 'senza scadenza'}${arrivo ? ' · arrivato ' + fmtDate(l.arrivo) : ''}${l.gestito ? ' · ' + esc(l.nota || 'gestito') : ''}</div></div>
-    <div class="row" style="gap:6px">
-      <button class="btn small" type="button" data-act="lot-modifica" data-id="${esc(l.id)}">Modifica</button>
+  return `<div class="item" style="flex-wrap:wrap"><div class="main tappable" style="flex:1 1 60%" data-act="lot-modifica" data-id="${esc(l.id)}" role="button" tabindex="0"><div class="name">${l.scadenza ? 'Scade ' + fmtDate(l.scadenza) : 'Senza scadenza'} · ${fmtNum(l.quantita)} pz</div>
+    <div class="sub">${l.scadenza ? relDays(daysUntil(l.scadenza)) : 'tocca Modifica per scrivere la data'}${arrivo && l.arrivo ? ' · ' + ((l.origine || 'arrivo') === 'inventario' ? 'contato' : 'arrivato') + ' il ' + fmtDate(l.arrivo) : ''}${l.gestito ? ' · ' + esc(l.nota || 'gestito') : ''}</div></div>
+    <div class="conf-acts">
+      <button class="btn small" type="button" data-act="lot-modifica" data-id="${esc(l.id)}">${ICO_MATITA} Modifica</button>
       ${togli ? `<button class="btn small ghost" type="button" data-act="lotto-annulla" data-id="${esc(l.id)}">Togli</button>` : `<button class="btn small" type="button" data-act="lot-esaurito" data-id="${esc(l.id)}">Esaurito</button><button class="btn small danger" type="button" data-act="lot-buttato" data-id="${esc(l.id)}">Buttato</button>`}
     </div></div>`;
 }
@@ -568,13 +569,19 @@ routes.carico = arg => {
       <div class="row wrap"><label class="check spacer"><input type="checkbox" data-act="senza" ${CS.senza ? 'checked' : ''}> Senza scadenza</label>
         <button class="btn small ghost" type="button" data-act="carico-annulla">Annulla</button></div>
     </div>`;
+    const gia = lottiAttivi().filter(l => l.prodottoId === p.id).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
+    if (gia.length) {
+      html += `<div class="section-title"><h2>Già in negozio</h2><span class="count">${fmtNum(gia.reduce((t, l) => t + l.quantita, 0))} pz</span></div>
+        <div class="faint small">Per correggere una data o i pezzi già caricati tocca <b>Modifica</b>.</div>
+        <div class="list">${gia.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>`;
+    }
   }
   const oggi = [...S.lotti.values()].filter(l => l.arrivo === todayISO() && (l.origine || 'arrivo') === CS.modo).sort((a, b) => b.creato - a.creato);
   html += `<div class="section-title"><h2>${inv ? 'Contati oggi' : 'Arrivati oggi'}</h2><span class="count">${oggi.length}</span></div>`;
   html += oggi.length ? `<div class="list">${oggi.map(l => {
     const pp = prodotto(l.prodottoId);
-    return `<div class="item" style="flex-wrap:wrap"><div class="main" style="flex:1 1 60%"><div class="name">${esc(pp ? pp.nome : '?')}</div><div class="sub">${fmtNum(l.quantita)} pz · ${l.scadenza ? 'scade ' + fmtDate(l.scadenza) : 'senza scadenza'}</div></div>
-      <div class="row" style="gap:6px"><button class="btn small" type="button" data-act="lot-modifica" data-id="${esc(l.id)}">Modifica</button><button class="btn small ghost" type="button" data-act="lotto-annulla" data-id="${esc(l.id)}">Togli</button></div></div>`;
+    return `<div class="item" style="flex-wrap:wrap"><div class="main tappable" style="flex:1 1 60%" data-act="lot-modifica" data-id="${esc(l.id)}" role="button" tabindex="0"><div class="name">${esc(pp ? pp.nome : '?')}</div><div class="sub">${fmtNum(l.quantita)} pz · ${l.scadenza ? 'scade ' + fmtDate(l.scadenza) : 'senza scadenza'}</div></div>
+      <div class="conf-acts"><button class="btn small" type="button" data-act="lot-modifica" data-id="${esc(l.id)}">${ICO_MATITA} Modifica</button><button class="btn small ghost" type="button" data-act="lotto-annulla" data-id="${esc(l.id)}">Togli</button></div></div>`;
   }).join('')}</div>` : `<div class="empty">Ancora niente oggi.</div>`;
   return { title: inv ? 'Inventario' : 'Arrivo merce', html, tab: 'carico', onScan: caricoScan };
 };
@@ -632,34 +639,40 @@ const FASCE = [['scaduto', 'Scaduti'], ['rosso', 'Scadono a brevissimo'], ['aran
 function lottiFiltrati() {
   const q = norm(SZ.q);
   return lottiAttivi().filter(l => {
-    if (!l.scadenza) return false;
+    if (q) { const p = prodotto(l.prodottoId); return !!p && q.split(' ').every(w => norm(p.nome).includes(w)); }
+    if (!l.scadenza) return SZ.filtro === 'tutti';
     const f = fascia(l);
     if (SZ.filtro === 'gestiti') { if (!l.gestito) return false; }
     else if (SZ.filtro === 'urgenti') { if (l.gestito || !['scaduto', 'rosso', 'arancio'].includes(f)) return false; }
     else if (SZ.filtro === 'scaduti') { if (f !== 'scaduto') return false; }
     else if (SZ.filtro === '30') { if (f === 'ok') return false; }
-    if (q) { const p = prodotto(l.prodottoId); if (!p || !q.split(' ').every(w => norm(p.nome).includes(w))) return false; }
     return true;
-  }).sort((a, b) => a.scadenza.localeCompare(b.scadenza));
+  }).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
 }
 function rigaLotto(l) {
-  const p = prodotto(l.prodottoId), f = fascia(l), d = daysUntil(l.scadenza);
+  const p = prodotto(l.prodottoId), f = fascia(l);
+  const when = l.scadenza ? `${fmtDate(l.scadenza)}<small>${relDays(daysUntil(l.scadenza))}</small>` : `—<small>senza scadenza</small>`;
   return `<div class="lot ${f} ${l.gestito ? 'gestito' : ''}">
-    <div class="top"><div class="spacer"><div class="name" style="font-weight:650">${esc(p ? p.nome : '?')}</div>
+    <div class="top" data-act="lot-modifica" data-id="${esc(l.id)}" role="button" tabindex="0" aria-label="Modifica ${esc(p ? p.nome : '')}"><div class="spacer"><div class="name" style="font-weight:650">${esc(p ? p.nome : '?')}</div>
       <div class="sub small muted">${esc(p ? nomeForn(p.fornitoreId) : '')} · ${fmtNum(l.quantita)} pz ${tagTipo(p)}</div>
       ${l.gestito ? `<div class="small" style="font-weight:700;color:var(--accent)">Gestito: ${esc(l.nota || 'sì')}</div>` : ''}</div>
-      <div class="when">${fmtDate(l.scadenza)}<small>${relDays(d)}</small></div></div>
+      <div class="when">${when}</div></div>
     <div class="acts">
+      <button class="btn small" type="button" data-act="lot-modifica" data-id="${esc(l.id)}">${ICO_MATITA} Modifica</button>
       <button class="btn small" type="button" data-act="lot-gestito" data-id="${esc(l.id)}">${l.gestito ? 'Non gestito' : 'Gestito'}</button>
       <button class="btn small" type="button" data-act="lot-esaurito" data-id="${esc(l.id)}">Esaurito</button>
-      <button class="btn small danger" type="button" data-act="lot-buttato" data-id="${esc(l.id)}">Buttato</button>
-      <button class="btn small" type="button" data-act="lot-modifica" data-id="${esc(l.id)}" aria-label="Modifica"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button></div></div>`;
+      <button class="btn small danger" type="button" data-act="lot-buttato" data-id="${esc(l.id)}">Buttato</button></div></div>`;
 }
 function listaScadenzeHTML() {
   const ls = lottiFiltrati();
-  if (!ls.length) return `<div class="empty">${SZ.q ? 'Nessuna scadenza per questa ricerca.' : SZ.filtro === 'urgenti' ? 'Niente di urgente. Ottimo!' : 'Niente da mostrare.'}</div>`;
+  if (!ls.length) {
+    const msg = SZ.q ? 'Nessun prodotto caricato con questo nome.' : SZ.filtro === 'urgenti' ? 'Niente di urgente. Ottimo!' : 'Niente da mostrare.';
+    const altri = !SZ.q && SZ.filtro !== 'tutti' && lottiAttivi().length;
+    return `<div class="empty">${msg}${altri ? `<div style="margin-top:10px"><button class="btn small" type="button" data-act="sz-filtro" data-f="tutti">Vedi tutti i prodotti caricati</button></div>` : ''}</div>`;
+  }
   let html = '';
-  for (const [k, label] of FASCE) {
+  if (SZ.q && SZ.filtro !== 'tutti') html += `<div class="faint small">Ricerca su tutti i prodotti caricati, non solo «${esc((FILTRI.find(x => x[0] === SZ.filtro) || ['', ''])[1])}».</div>`;
+  for (const [k, label] of [...FASCE, ['nessuna', 'Senza scadenza']]) {
     const g = ls.filter(l => fascia(l) === k);
     if (!g.length) continue;
     html += `<div class="section-title"><h2>${label}</h2><span class="count">${g.length}</span></div><div class="list">${g.map(rigaLotto).join('')}</div>`;
@@ -898,10 +911,12 @@ let CAT = { q: '', forn: '', limite: 60, senzaCodice: false };
 function catListHTML() {
   const res = cerca(CAT.q, { fornitoreId: CAT.forn, limit: CAT.limite, soloSenzaCodice: CAT.senzaCodice });
   if (!res.total) return `<div class="empty">Nessun prodotto.</div>`;
+  const prima = new Map();
+  for (const l of lottiAttivi()) if (l.scadenza) { const x = prima.get(l.prodottoId); if (!x || l.scadenza < x) prima.set(l.prodottoId, l.scadenza); }
   return `<div class="faint">${res.total} prodotti</div><div class="list">${res.items.map(p => {
-    const g = giacenza(p.id);
+    const g = giacenza(p.id), s = prima.get(p.id);
     return `<a class="item" href="#prodotto/${encodeURIComponent(p.id)}"><div class="main"><div class="name">${esc(p.nome)}</div>
-      <div class="sub">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${g ? ' · in negozio ' + fmtNum(g) : ''}</div></div>
+      <div class="sub">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${g ? ' · in negozio ' + fmtNum(g) : ''}${s ? ' · scade ' + fmtDate(s) : ''}</div></div>
       ${(p.codici || []).length ? '<span class="tag ok">codice</span>' : ''}<span class="chev">›</span></a>`;
   }).join('')}</div>${res.total > res.items.length ? `<button class="btn block" type="button" data-act="cat-altri">Mostra altri (${res.total - res.items.length})</button>` : ''}`;
 }
@@ -932,7 +947,12 @@ routes.prodotto = id => {
   const forn = [...S.fornitori.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
   const lotti = lottiAttivi().filter(l => l.prodottoId === p.id).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
   const calc = prezzoCalcolato(p);
-  const html = `<div class="card">
+  const html = `<div><h2 style="margin:0">${esc(p.nome)}</h2><div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>
+    <div class="section-title"><h2>In negozio</h2><span class="count">${fmtNum(giacenza(p.id))} pz</span></div>
+    ${lotti.length ? `<div class="faint small">Per cambiare la scadenza o i pezzi tocca <b>Modifica</b>.</div><div class="list">${lotti.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>` : '<div class="empty">Nessuna confezione registrata.</div>'}
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button></div>
+    <div class="section-title"><h2>Dati del prodotto</h2></div>
+    <div class="card">
       <label class="field">Nome<textarea id="pNome" rows="2" style="min-height:0">${esc(p.nome)}</textarea></label>
       <label class="field">Fornitore<select id="pForn"><option value="">— nessuno —</option>${forn.map(f => `<option value="${esc(f.id)}" ${p.fornitoreId === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></label>
       <div class="btn-grid" style="grid-template-columns:1fr 1fr">
@@ -953,9 +973,6 @@ routes.prodotto = id => {
     <div class="card"><label class="field">Note<textarea id="pNote" style="min-height:80px">${esc(p.note)}</textarea></label>
       ${p.origine ? `<div class="faint small">Origine: ${esc(p.origine)}</div>` : ''}</div>
     <button class="btn primary block" type="button" data-act="p-salva" data-id="${esc(p.id)}">Salva modifiche</button>
-    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button></div>
-    <div class="section-title"><h2>In negozio</h2><span class="count">${fmtNum(giacenza(p.id))} pz</span></div>
-    ${lotti.length ? `<div class="list">${lotti.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>` : '<div class="empty">Nessuna confezione registrata.</div>'}
     <button class="btn danger block" type="button" data-act="p-elimina" data-id="${esc(p.id)}">Elimina prodotto</button>`;
   return {
     title: 'Scheda prodotto', html, back: '#catalogo', tab: 'catalogo',
@@ -1179,7 +1196,8 @@ A['lot-modifica'] = el => {
     <button class="btn danger block" type="button" id="mDel">Elimina questa riga</button>`, b => {
     const iS = b.querySelector('#mS'), cb = b.querySelector('#mSenza'), pv = b.querySelector('#mPrev');
     const prev = () => { if (cb.checked) { pv.textContent = ''; return; } const r = parseScadenza(iS.value); pv.textContent = r ? fmtDateLong(r.iso) + ' · ' + relDays(daysUntil(r.iso)) : (iS.value.replace(/\D/g, '').length >= 4 ? 'Data non valida' : ''); pv.classList.toggle('err', !r); };
-    iS.addEventListener('input', prev); cb.addEventListener('change', () => { iS.disabled = cb.checked; prev(); }); prev();
+    iS.addEventListener('input', prev); iS.addEventListener('focus', () => iS.select());
+    cb.addEventListener('change', () => { iS.disabled = cb.checked; prev(); if (!cb.checked) iS.focus(); }); prev();
     b.querySelector('#mOk').onclick = async () => {
       const q = parseInt(b.querySelector('#mQ').value, 10);
       if (!q || q < 1) { toast('Quantità non valida', { err: true }); return; }
