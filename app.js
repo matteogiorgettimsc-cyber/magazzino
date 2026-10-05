@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.2.1';
+const VERSIONE = '1.2.2';
 
 /* =========================================================
    Utilità
@@ -1015,7 +1015,7 @@ routes.impostazioni = () => {
   const s = settings();
   const lb = S.meta.lastBackup;
   const html = `<div class="card"><h2>Backup su Drive</h2>
-      <p class="muted small">I dati stanno solo su questo telefono. Il backup crea un file: nel menu che si apre scegli <b>Drive</b>. Fallo ogni giorno a fine lavoro.</p>
+      <p class="muted small">I dati stanno solo su questo telefono. Il backup crea un file: nel menu che si apre scegli <b>Drive</b>, poi in alto l'<b>account del negozio</b> e la cartella. Fallo ogni giorno a fine lavoro.</p>
       <div class="faint">Ultimo backup: ${lb ? fmtDate(lb.slice(0, 10)) : 'mai'}</div>
       <button class="btn primary block" type="button" data-act="backup">Fai backup ora</button>
       <button class="btn block" type="button" data-act="ripristina">Ripristina da un backup</button></div>
@@ -1045,20 +1045,33 @@ routes.impostazioni = () => {
 };
 async function faiBackup() {
   const data = { app: 'spesasfusa-magazzino', versione: 1, esportato: new Date().toISOString(), fornitori: [...S.fornitori.values()], prodotti: [...S.prodotti.values()], lotti: [...S.lotti.values()], ordini: [...S.ordini.values()], sprechi: [...S.sprechi.values()], impostazioni: S.meta.settings || {} };
-  const nome = `magazzino-backup-${todayISO()}.json`;
-  const json = JSON.stringify(data);
-  const file = new File([json], nome, { type: 'application/json' });
-  let fatto = false;
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Backup magazzino' }); fatto = true; }
-    catch (e) { if (e.name === 'AbortError') { toast('Backup annullato', { err: true }); return; } }
+  // Chrome su Android condivide solo alcuni tipi di file: il testo sì, il .json no.
+  // Il backup è salvato come .txt (dentro c'è lo stesso contenuto) così si può scegliere Drive, l'account e la cartella.
+  const nome = `magazzino-backup-${todayISO()}.txt`;
+  const testo = JSON.stringify(data);
+  const file = new File([testo], nome, { type: 'text/plain' });
+  let puoCondividere = false;
+  try { puoCondividere = !!(navigator.canShare && navigator.canShare({ files: [file] })); } catch (e) { }
+  if (puoCondividere) {
+    try {
+      await navigator.share({ files: [file], title: 'Backup magazzino' });
+      await setMeta('lastBackup', todayISO());
+      toast('Backup inviato. Controlla che sia finito su Drive, nell\'account del negozio.'); render(); return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') { toast('Backup annullato: non è stato salvato', { err: true }); return; }
+    }
   }
-  if (!fatto) {
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' })); a.download = nome;
-    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); fatto = true;
-  }
+  scaricaFile(testo, nome);
   await setMeta('lastBackup', todayISO());
-  toast('Backup pronto: salvalo su Drive'); render();
+  render();
+  openModal(`${mhead('Backup salvato nei Download')}
+    <p>Questo telefono non mi permette di aprire il menu per scegliere Drive, quindi il file <b>${esc(nome)}</b> è nella cartella <b>Download</b>.</p>
+    <p class="muted small">Per metterlo su Drive: apri l'app <b>Drive</b> → scegli l'account del negozio → pulsante <b>+</b> → <b>Carica</b> → cartella Download → il file.</p>
+    <button class="btn primary block" type="button" data-act="close-modal">Ho capito</button>`);
+}
+function scaricaFile(testo, nome) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([testo], { type: 'text/plain' })); a.download = nome;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 let fileMode = null;
 $('#fileInput').addEventListener('change', async e => {
