@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.0.1';
+const VERSIONE = '1.0.2';
 
 /* =========================================================
    Utilità
@@ -211,41 +211,63 @@ function confirmBox(text, { ok = 'Conferma', danger = false, title = 'Conferma' 
    - lettore Bluetooth: si comporta come una tastiera e manda "Invio"
    - fotocamera: BarcodeDetector di Chrome per Android
    ========================================================= */
-const SC = { chars: '', times: [], field: null, before: null };
-function resetSC() { SC.chars = ''; SC.times = []; SC.field = null; SC.before = null; }
+const SC = { chars: '', times: [], field: null, before: null, timer: null };
+const tastiRicevuti = [];   // per la schermata "Prova del lettore"
+function resetSC() { clearTimeout(SC.timer); SC.chars = ''; SC.times = []; SC.field = null; SC.before = null; }
+function confermaScan() {
+  const code = SC.chars, field = SC.field, before = SC.before;
+  resetSC();
+  if (field && before !== null) { field.value = before; field.dispatchEvent(new Event('input', { bubbles: true })); }
+  onScan(code);
+}
 const isTextField = t => t && (t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'file'].includes(t.type) || t.tagName === 'TEXTAREA' || t.isContentEditable);
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const now = performance.now();
   const field = isTextField(e.target) ? e.target : null;
-  if (SC.times.length && now - SC.times[SC.times.length - 1] > 120) resetSC();
+  const prec = SC.times.length ? SC.times[SC.times.length - 1] : null;
+  tastiRicevuti.push(`${e.key === 'Enter' ? '⏎' : e.key === 'Tab' ? '⇥' : e.key.length === 1 ? e.key : '[' + e.key + ']'}`);
+  if (tastiRicevuti.length > 60) tastiRicevuti.shift();
+  aggiornaDiagnosi();
+  if (prec !== null && now - prec > 300) resetSC();
   if (e.key === 'Enter' || e.key === 'Tab') {
     const n = SC.chars.length;
     const avg = n > 1 ? (SC.times[n - 1] - SC.times[0]) / (n - 1) : 999;
-    const isScan = n >= 4 && (field ? avg < 35 : true);
-    if (isScan) {
-      e.preventDefault(); e.stopPropagation();
-      const code = SC.chars;
-      if (field && SC.before !== null) { field.value = SC.before; field.dispatchEvent(new Event('input', { bubbles: true })); }
-      resetSC(); onScan(code); return;
-    }
+    if (n >= 4 && (field ? avg < 80 : true)) { e.preventDefault(); e.stopPropagation(); confermaScan(); return; }
     resetSC(); return;
   }
   if (e.key && e.key.length === 1) {
     if (!SC.chars) { SC.field = field; SC.before = field ? field.value : null; }
     SC.chars += e.key; SC.times.push(now);
-    if (!field) e.preventDefault();
+    if (!field) {
+      e.preventDefault();
+      // lettori che non mandano "Invio": se arrivano almeno 8 cifre e poi silenzio, è un codice
+      clearTimeout(SC.timer);
+      SC.timer = setTimeout(() => { if (/^\d{8,}$/.test(SC.chars)) confermaScan(); else resetSC(); }, 400);
+    }
   }
 }, true);
+function aggiornaDiagnosi() {
+  const el = document.getElementById('diagTasti');
+  if (el) el.textContent = tastiRicevuti.join(' ') || '—';
+}
 
 let camStream = null, camTimer = null;
 async function openCamera() {
   if (!('BarcodeDetector' in window)) { toast('Su questo dispositivo la fotocamera non legge i codici: usa il lettore o scrivi il codice', { err: true }); return; }
-  let formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code'];
-  try { const sup = await BarcodeDetector.getSupportedFormats(); formats = formats.filter(f => sup.includes(f)); } catch (e) { }
-  const det = new BarcodeDetector({ formats });
+  const voluti = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code'];
+  let det;
+  try {
+    let sup = []; try { sup = await BarcodeDetector.getSupportedFormats(); } catch (e) { }
+    const f = voluti.filter(x => sup.includes(x));
+    det = f.length ? new BarcodeDetector({ formats: f }) : new BarcodeDetector();
+  } catch (e) {
+    try { det = new BarcodeDetector(); }
+    catch (e2) { toast('La fotocamera di questo telefono non riesce a leggere i codici: usa "Scrivi codice"', { err: true }); return; }
+  }
   openModal(`${mhead('Inquadra il codice a barre')}<div class="video-wrap"><video id="camVideo" playsinline muted></video></div>
-    <div class="row"><p class="faint spacer" style="margin:0">Tieni il codice dentro il riquadro, ben fermo e con buona luce.</p><button class="btn small" type="button" id="camTorch" hidden>Luce</button></div>`, async b => {
+    <div class="row"><p class="faint spacer" style="margin:0" id="camMsg">Tieni il codice dentro il riquadro, ben fermo e con buona luce.</p><button class="btn small" type="button" id="camTorch" hidden>Luce</button></div>
+    <button class="btn block" type="button" data-act="scrivi-codice">Non legge? Scrivi il codice</button>`, async b => {
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }); }
     catch (e) { closeModal(); toast('Non riesco ad aprire la fotocamera: controlla i permessi di Chrome', { err: true }); return; }
@@ -263,7 +285,9 @@ async function openCamera() {
     } catch (e) { }
     v.srcObject = stream; await v.play().catch(() => { });
     let ultimo = null, volte = 0;
+    const inizio = Date.now();
     const tick = async () => {
+      if (camStream && Date.now() - inizio > 9000) { const m = b.querySelector('#camMsg'); if (m) m.textContent = 'Non riesco a leggerlo: prova ad avvicinarti o allontanarti un po\', con più luce. Oppure scrivi il codice.'; }
       if (!camStream) return;
       try {
         const r = await det.detect(v);
@@ -281,9 +305,11 @@ async function openCamera() {
 }
 function stopCamera() { clearTimeout(camTimer); if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; } }
 
+let ultimoCodice = '';
 function onScan(code) {
   code = String(code || '').trim();
   if (!code) return;
+  ultimoCodice = code;
   beep();
   if (modal.open && modalScan) { modalScan(code); return; }
   if (modal.open) closeModal();
@@ -465,6 +491,7 @@ routes.home = () => {
   html += `<div class="notice ${warn ? 'red' : 'green'}"><div class="spacer">${giorniBk == null ? '<b>Nessun backup ancora.</b> Fallo ogni giorno a fine lavoro.' : giorniBk === 0 ? 'Backup fatto oggi.' : `Ultimo backup: <b>${giorniBk === 1 ? 'ieri' : giorniBk + ' giorni fa'}</b>.`}</div>
     <button class="btn small ${warn ? 'primary' : ''}" type="button" data-act="backup">Fai backup</button></div>`;
   if (installPrompt) html += `<button class="btn block" type="button" data-act="installa">Installa l'app sul telefono</button>`;
+  html += `<div class="faint small" style="text-align:center">Versione ${VERSIONE}</div>`;
   return { title: settings().negozio, html, tab: 'home' };
 };
 
@@ -875,11 +902,17 @@ routes.impostazioni = () => {
         <div class="btn-grid" style="grid-template-columns:repeat(3,1fr)">${s.soglie[t].map((v, i) => `<label class="field"><span class="hint">${['rosso', 'arancione', 'giallo'][i]}</span><input type="number" inputmode="numeric" min="0" data-soglia="${t}|${i}" value="${v}"></label>`).join('')}</div></div>`).join('')}
       <label class="field">Nome del negozio nei messaggi<input type="text" id="sNeg" value="${esc(s.negozio)}"></label>
       <button class="btn primary block" type="button" data-act="s-salva">Salva impostazioni</button></div>
+    <div class="card"><h2>Prova del lettore</h2>
+      <p class="muted small">Scansiona un codice qualsiasi stando su questa pagina: qui sotto vedi cosa arriva al telefono.</p>
+      <dl class="kv"><dt>Ultimo codice letto</dt><dd id="diagCodice">${esc(ultimoCodice || 'nessuno')}</dd></dl>
+      <div class="faint small">Tasti ricevuti: <span id="diagTasti" style="font-family:ui-monospace,monospace;overflow-wrap:anywhere">${esc(tastiRicevuti.join(' ') || '—')}</span></div>
+      <button class="btn small" type="button" data-act="camera">Prova con la fotocamera</button></div>
     <div class="card"><h2>Informazioni</h2>
       <dl class="kv"><dt>Versione</dt><dd>${VERSIONE}</dd><dt>Dati protetti dalla pulizia del browser</dt><dd id="persist">${persistito == null ? '…' : persistito ? 'sì' : 'no'}</dd></dl>
       ${installPrompt ? `<button class="btn block" type="button" data-act="installa">Installa l'app sul telefono</button>` : ''}</div>`;
   return {
     title: 'Impostazioni', html, back: '#home',
+    onScan: code => { const el = $('#diagCodice'); if (el) el.textContent = code; toast('Lettura riuscita: ' + code); },
     mount: () => { if (navigator.storage && navigator.storage.persisted) navigator.storage.persisted().then(v => { persistito = v; const el = $('#persist'); if (el) el.textContent = v ? 'sì' : 'no'; }); }
   };
 };
@@ -1106,6 +1139,10 @@ async function init() {
   route();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => { persistito = p; if (!p) navigator.storage.persist().then(v => { persistito = v; }); });
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    if (navigator.serviceWorker.controller) {
+      let ricaricato = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => { if (ricaricato || CS.pid) return; ricaricato = true; location.reload(); });
+    }
     navigator.serviceWorker.register('sw.js').then(reg => {
       reg.addEventListener('updatefound', () => {
         const w = reg.installing;
