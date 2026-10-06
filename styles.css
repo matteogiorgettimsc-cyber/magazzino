@@ -310,3 +310,43 @@ button.notice{width:100%;font:inherit;color:inherit;text-align:left;cursor:point
 .diff{font-size:1.7rem;font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap}
 .item .dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--orange)}
 .banco-az .btn{padding:0 8px;white-space:nowrap;gap:6px}
+
+/* ---------- sfuso ---------- */
+.tag.sfuso{background:#F3E6D2;color:#6B4413}
+.sf-unita{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:.92rem;color:var(--ink-soft)}
+.sf-unita b{color:var(--ink)}
+.segmented.mini{padding:3px;border-radius:10px}
+.segmented.mini button{min-height:36px;padding:0 14px;font-size:.9rem}
+.kp-qta.solo{grid-template-columns:minmax(0,1fr)}
+.keypad .ok.largo{grid-column:1/-1;min-height:56px}
+.vcard.peso .lab{color:#8A5A1E}
+.peso-prod{display:flex;flex-direction:column;gap:2px}
+.peso-prod b{font-size:1.15rem}
+.peso-prod span{font-size:.9rem;color:var(--ink-soft)}
+.peso-display{display:flex;align-items:baseline;justify-content:flex-end;gap:8px;padding:8px 16px;border:2px solid var(--accent-mid);border-radius:16px;background:#fff}
+.peso-display span{font-size:2.8rem;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1.1}
+.peso-display small{font-size:1.3rem;font-weight:700;color:var(--ink-soft)}
+.peso-info{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:.95rem;color:var(--ink-soft);min-height:1.4em}
+.peso-info b{font-size:1.25rem;color:var(--ink);font-variant-numeric:tabular-nums}
+.peso-veloci{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.peso-veloci .chip{min-height:44px;font-variant-numeric:tabular-nums}
+.peso-kp button{min-height:54px}
+.eti-riga{cursor:pointer}
+.eti-riga input{width:22px;height:22px;accent-color:var(--accent);flex:none}
+
+/* etichette: si vedono solo in stampa */
+#stampa{display:none}
+@media print{
+  @page{size:A4;margin:0}
+  body{padding:0!important;background:#fff}
+  body > *:not(#stampa){display:none!important}
+  #stampa{display:block}
+  .foglio{width:210mm;height:296mm;padding-top:.5mm;display:grid;grid-template-columns:repeat(3,70mm);grid-auto-rows:37mm;page-break-after:always;break-after:page}
+  .foglio:last-child{page-break-after:auto;break-after:auto}
+  .eti{box-sizing:border-box;padding:3.2mm 4mm 2.5mm;display:flex;flex-direction:column;align-items:center;justify-content:space-between;overflow:hidden;color:#000;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;text-align:center}
+  .eti-nome{font-size:10.5pt;font-weight:700;line-height:1.15;max-height:2.35em;overflow:hidden}
+  .eti-prezzo{font-size:15pt;font-weight:800;line-height:1.1}
+  .eti-prezzo small{font-size:9pt;font-weight:600}
+  .eti .barre{width:46mm;height:10mm;display:block}
+  .eti-cod{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:7.5pt;letter-spacing:.06em;line-height:1}
+}
