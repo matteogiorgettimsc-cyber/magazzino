@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.6.0';
+const VERSIONE = '1.6.1';
 
 /* =========================================================
    Utilità
@@ -640,7 +640,7 @@ routes.home = () => {
   html += `<div class="notice ${warn ? 'red' : 'green'}"><div class="spacer">${giorniBk == null ? '<b>Nessun backup ancora.</b> Fallo ogni giorno a fine lavoro.' : giorniBk === 0 ? 'Backup fatto oggi.' : `Ultimo backup: <b>${giorniBk === 1 ? 'ieri' : giorniBk + ' giorni fa'}</b>.`}</div>
     <button class="btn small ${warn ? 'primary' : ''}" type="button" data-act="backup">Fai backup</button></div>`;
   if (installPrompt) html += `<button class="btn block" type="button" data-act="installa">Installa l'app sul telefono</button>`;
-  if (syncAttiva()) html += `<div id="syncStato" class="sync-stato" style="text-align:center">${esc(testoStato())}</div>`;
+  if (syncAttiva()) html += `<div id="syncStato" class="${classeStato()}" style="text-align:center">${esc(testoStato())}</div>`;
   html += `<div class="faint small" style="text-align:center">Versione ${VERSIONE}</div>`;
   return { title: settings().negozio, html, tab: 'home' };
 };
@@ -2016,10 +2016,11 @@ function testoStato() {
     default: return syncAttiva() ? `Sincronizzo…${attesa}` : '';
   }
 }
+const classeStato = () => 'sync-stato ' + (SYNC.stato === 'ok' ? 'ok' : SYNC.stato === 'errore' || SYNC.stato === 'accesso' ? 'err' : '');
 function mostraStato() {
   const el = document.getElementById('syncStato'); if (!el) return;
   el.textContent = testoStato();
-  el.className = 'sync-stato ' + (SYNC.stato === 'ok' ? 'ok' : SYNC.stato === 'errore' || SYNC.stato === 'accesso' ? 'err' : '');
+  el.className = classeStato();
 }
 /* --- collegare un dispositivo --- */
 async function registraDispositivo(nome) {
@@ -2042,7 +2043,7 @@ function cardSync() {
   const disp = SYNC.dispositivi && SYNC.dispositivi.length ? SYNC.dispositivi.map(d => esc(d.nome)).join(', ') : '';
   return `<div class="card"><h2>Più dispositivi insieme</h2>
     <dl class="kv"><dt>Questo dispositivo</dt><dd>${esc(S.meta.syncDev || '')}</dd><dt>Account</dt><dd>${esc(S.meta.syncAuth.email || '')}</dd>${disp ? `<dt>Collegati</dt><dd>${disp}</dd>` : ''}</dl>
-    <div id="syncStato" class="sync-stato">${esc(testoStato())}</div>
+    <div id="syncStato" class="${classeStato()}">${esc(testoStato())}</div>
     <button class="btn block" type="button" data-act="sync-ora">Sincronizza ora</button>
     <button class="btn ghost block" type="button" data-act="sync-scollega">Scollega questo dispositivo</button></div>`;
 }
