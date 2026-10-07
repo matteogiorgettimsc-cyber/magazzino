@@ -1805,7 +1805,7 @@ function stampaEtichette(ids, start = 0) {
      ripetuto dopo una risposta persa non conta due volte
    - si scarica solo quello che è cambiato dall'ultima volta (più 15 secondi di margine)
    ========================================================= */
-const SYNC_CONF = { apiKey: '', projectId: '', email: '' };
+const SYNC_CONF = { apiKey: 'AIzaSyBj_vigsG7m3jQg3MaRSBTwoKkXcPB3HKk', projectId: 'magazzino-spesa-sfusa-69c90', email: 'laspesasfusa@gmail.com' };   // dati pubblici del progetto Firebase: a proteggere i dati sono password e regole
 const SYNC_STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure'];
 const SYNC_META = ['settings', 'etiPosizione'];
 const syncConf = () => ({ ...SYNC_CONF, ...(S.meta.syncConf || {}) });
