@@ -374,3 +374,9 @@ button.notice{width:100%;font:inherit;color:inherit;text-align:left;cursor:point
 .sync-stato{font-size:.85rem;color:var(--ink-soft)}
 .sync-stato.ok::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px;vertical-align:1px}
 .sync-stato.err{color:var(--red)}
+/* scelta per eliminare */
+.sel-riga{cursor:pointer}
+.sel-riga input{width:22px;height:22px;accent-color:var(--red);flex:none}
+.sel-barra{position:sticky;bottom:calc(80px + env(safe-area-inset-bottom,0px));z-index:5;display:grid;grid-template-columns:1fr 2fr;gap:10px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:10px;box-shadow:0 6px 20px rgba(32,38,31,.18)}
+.sel-barra .btn{margin:0}

@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.6.2';
+const VERSIONE = '1.7.0';
 
 /* =========================================================
    Utilità
@@ -151,6 +151,13 @@ async function remove(store, id) {
   S[store].delete(id);
   const q = prev && syncAttiva() && SYNC_STORES.includes(store) ? [voceCoda({ st: store, id, del: true })] : [];
   await txConCoda(store, s => s.delete(id), q);
+  if (store === 'prodotti') rebuildCodeIndex();
+}
+async function removeMany(store, ids) {
+  const prev = ids.map(id => S[store].get(id)).filter(Boolean);
+  ids.forEach(id => S[store].delete(id));
+  const q = syncAttiva() && SYNC_STORES.includes(store) ? prev.map(p => voceCoda({ st: store, id: p.id, del: true })) : [];
+  await txConCoda(store, s => ids.forEach(id => s.delete(id)), q);
   if (store === 'prodotti') rebuildCodeIndex();
 }
 async function setMeta(key, value) {
@@ -1481,21 +1488,37 @@ function inviaOrdineModal(o) {
 /* =========================================================
    CATALOGO, PRODOTTO, FORNITORI
    ========================================================= */
-let CAT = { q: '', forn: '', limite: 60, senzaCodice: false, sfuso: false };
+let CAT = { q: '', forn: '', limite: 60, senzaCodice: false, sfuso: false, sel: null };   // sel: prodotti scelti per eliminarli (null = scelta spenta)
+const filtroCat = (limit = CAT.limite) => cerca(CAT.q, { fornitoreId: CAT.forn, limit, soloSenzaCodice: CAT.senzaCodice, soloSfuso: CAT.sfuso });
 function catListHTML() {
-  const res = cerca(CAT.q, { fornitoreId: CAT.forn, limit: CAT.limite, soloSenzaCodice: CAT.senzaCodice, soloSfuso: CAT.sfuso });
+  const res = filtroCat(), sel = CAT.sel;
   if (!res.total) return `<div class="empty">Nessun prodotto.</div>`;
   const prima = new Map();
   for (const l of lottiAttivi()) if (l.scadenza) { const x = prima.get(l.prodottoId); if (!x || l.scadenza < x) prima.set(l.prodottoId, l.scadenza); }
-  return `<div class="faint">${res.total} prodotti</div><div class="list">${res.items.map(p => {
+  const testa = sel
+    ? `<div class="row wrap"><b class="spacer" id="selN">${testoSel(sel.size, 'prodotto', 'prodotti')}</b><button class="btn small" type="button" data-act="cat-sel-tutti">Tutti i ${res.total}</button><button class="btn small" type="button" data-act="cat-sel-nessuno">Nessuno</button></div>`
+    : `<div class="row"><span class="faint spacer">${res.total} prodotti</span><button class="btn small" type="button" data-act="cat-sel">Seleziona</button></div>`;
+  return `${testa}<div class="list">${res.items.map(p => {
     const g = giacenza(p.id), s = prima.get(p.id);
-    return `<a class="item" href="#prodotto/${encodeURIComponent(p.id)}"><div class="main"><div class="name">${esc(p.nome)}</div>
+    const corpo = `<div class="main"><div class="name">${esc(p.nome)}</div>
       <div class="sub">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${g ? ' · in negozio ' + fq(p, g) : ''}${s ? ' · scade ' + fmtDate(s) : ''}</div></div>
-      ${p.sfuso ? '<span class="tag sfuso">sfuso</span>' : ''}${(p.codici || []).length ? '<span class="tag ok">codice</span>' : ''}<span class="chev">›</span></a>`;
+      ${p.sfuso ? '<span class="tag sfuso">sfuso</span>' : ''}${(p.codici || []).length ? '<span class="tag ok">codice</span>' : ''}`;
+    return sel ? `<label class="item sel-riga"><input type="checkbox" data-sel="${esc(p.id)}" ${sel.has(p.id) ? 'checked' : ''}>${corpo}</label>`
+      : `<a class="item" href="#prodotto/${encodeURIComponent(p.id)}">${corpo}<span class="chev">›</span></a>`;
   }).join('')}</div>${res.total > res.items.length ? `<button class="btn block" type="button" data-act="cat-altri">Mostra altri (${res.total - res.items.length})</button>` : ''}`;
+}
+const testoSel = (n, uno, tanti) => n === 1 ? `1 ${uno} scelto` : `${n} ${tanti} scelti`;
+/* barra in fondo mentre si sceglie cosa eliminare */
+const barraSel = (n, uno, tanti, act, fine) => `<div class="sel-barra"><button class="btn" type="button" data-act="${fine}">Annulla</button>
+  <button class="btn danger" type="button" data-act="${act}" id="selDel" ${n ? '' : 'disabled'}>Elimina ${n === 1 ? '1 ' + uno : n + ' ' + tanti}</button></div>`;
+function aggiornaSel(b, sel, uno, tanti) {
+  const n = sel.size, t = b.querySelector('#selN'), d = b.querySelector('#selDel');
+  if (t) t.textContent = testoSel(n, uno, tanti);
+  if (d) { d.textContent = `Elimina ${n === 1 ? '1 ' + uno : n + ' ' + tanti}`; d.disabled = !n; }
 }
 const segCat = on => `<div class="segmented"><a href="#catalogo" class="${on === 'p' ? 'on' : ''}">Prodotti</a><a href="#fornitori" class="${on === 'f' ? 'on' : ''}">Fornitori</a></div>`;
 routes.catalogo = arg => {
+  if (current.fresh) CAT.sel = null;     // la scelta per eliminare si spegne uscendo dalla pagina
   if (current.fresh && arg) { CAT.forn = arg; CAT.q = ''; CAT.limite = 60; }
   const forn = [...S.fornitori.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
   const html = `${segCat('p')}
@@ -1503,13 +1526,18 @@ routes.catalogo = arg => {
     <div class="row wrap"><select id="catF" style="flex:1;min-width:200px"><option value="">Tutti i fornitori</option>${forn.map(f => `<option value="${esc(f.id)}" ${CAT.forn === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select>
       <label class="check"><input type="checkbox" id="catSC" ${CAT.senzaCodice ? 'checked' : ''}> Senza codice</label>
       <label class="check"><input type="checkbox" id="catSF" ${CAT.sfuso ? 'checked' : ''}> Sfuso</label></div>
-    ${[...S.prodotti.values()].some(p => p.sfuso) ? '<a class="btn block" href="#etichette">Etichette dei contenitori sfusi</a>' : ''}
+    ${!CAT.sel && [...S.prodotti.values()].some(p => p.sfuso) ? '<a class="btn block" href="#etichette">Etichette dei contenitori sfusi</a>' : ''}
     <div id="catList" class="stack">${catListHTML()}</div>
-    <button class="btn block" type="button" data-act="nuovo-prodotto">+ Nuovo prodotto</button>`;
+    ${CAT.sel ? barraSel(CAT.sel.size, 'prodotto', 'prodotti', 'cat-elimina', 'cat-sel-fine') : '<button class="btn block" type="button" data-act="nuovo-prodotto">+ Nuovo prodotto</button>'}`;
   return {
     title: 'Catalogo', html, tab: 'catalogo',
     mount: b => {
       const upd = () => { CAT.limite = 60; b.querySelector('#catList').innerHTML = catListHTML(); };
+      b.querySelector('#catList').addEventListener('change', e => {
+        const c = e.target.closest('[data-sel]'); if (!c || !CAT.sel) return;
+        if (c.checked) CAT.sel.add(c.dataset.sel); else CAT.sel.delete(c.dataset.sel);
+        aggiornaSel(b, CAT.sel, 'prodotto', 'prodotti');
+      });
       b.querySelector('#catQ').addEventListener('input', e => { CAT.q = e.target.value; upd(); });
       b.querySelector('#catF').addEventListener('change', e => { CAT.forn = e.target.value; upd(); });
       b.querySelector('#catSC').addEventListener('change', e => { CAT.senzaCodice = e.target.checked; upd(); });
@@ -1615,18 +1643,34 @@ routes.prodotto = id => {
     }
   };
 };
+let FSEL = null;   // fornitori scelti per eliminarli (null = scelta spenta)
 routes.fornitori = () => {
   const counts = new Map(); for (const p of S.prodotti.values()) counts.set(p.fornitoreId, (counts.get(p.fornitoreId) || 0) + 1);
   const all = [...S.fornitori.values()];
   const dn = all.filter(f => f.daNominare).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
   const ok = all.filter(f => !f.daNominare).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
-  const row = f => `<a class="item" href="#fornitore/${encodeURIComponent(f.id)}"><div class="main"><div class="name">${esc(f.nome)}</div><div class="sub">${counts.get(f.id) || 0} prodotti · ${METODI[f.metodo || '']}</div></div>${f.daNominare ? '<span class="tag warn">da nominare</span>' : ''}<span class="chev">›</span></a>`;
+  if (current.fresh) FSEL = null;
+  if (FSEL) for (const id of [...FSEL]) if (!S.fornitori.has(id)) FSEL.delete(id);
+  const corpo = f => `<div class="main"><div class="name">${esc(f.nome)}</div><div class="sub">${counts.get(f.id) || 0} prodotti · ${METODI[f.metodo || '']}</div></div>${f.daNominare ? '<span class="tag warn">da nominare</span>' : ''}`;
+  const row = f => FSEL ? `<label class="item sel-riga"><input type="checkbox" data-sel="${esc(f.id)}" ${FSEL.has(f.id) ? 'checked' : ''}>${corpo(f)}</label>`
+    : `<a class="item" href="#fornitore/${encodeURIComponent(f.id)}">${corpo(f)}<span class="chev">›</span></a>`;
+  const testa = FSEL
+    ? `<div class="row wrap"><b class="spacer" id="selN">${testoSel(FSEL.size, 'fornitore', 'fornitori')}</b><button class="btn small" type="button" data-act="for-sel-tutti">Tutti</button><button class="btn small" type="button" data-act="for-sel-nessuno">Nessuno</button></div>`
+    : `<div class="row"><span class="faint spacer">${all.length} fornitori</span><button class="btn small" type="button" data-act="for-sel">Seleziona</button></div>`;
   const html = `${segCat('f')}
+    ${all.length ? testa : ''}
     ${dn.length ? `<div class="section-title"><h2>Da nominare</h2><span class="count">${dn.length}</span></div><div class="faint small">Nei listini questi fogli non avevano il nome del fornitore. Apri e scrivi il nome giusto.</div><div class="list">${dn.map(row).join('')}</div>` : ''}
     <div class="section-title"><h2>Fornitori</h2><span class="count">${ok.length}</span></div>
     <div class="list">${ok.map(row).join('') || '<div class="empty">Nessun fornitore.</div>'}</div>
-    <button class="btn block" type="button" data-act="nuovo-fornitore">+ Nuovo fornitore</button>`;
-  return { title: 'Fornitori', html, tab: 'catalogo' };
+    ${FSEL ? barraSel(FSEL.size, 'fornitore', 'fornitori', 'for-elimina', 'for-sel-fine') : '<button class="btn block" type="button" data-act="nuovo-fornitore">+ Nuovo fornitore</button>'}`;
+  return {
+    title: 'Fornitori', html, tab: 'catalogo',
+    mount: b => b.addEventListener('change', e => {
+      const c = e.target.closest('[data-sel]'); if (!c || !FSEL) return;
+      if (c.checked) FSEL.add(c.dataset.sel); else FSEL.delete(c.dataset.sel);
+      aggiornaSel(b, FSEL, 'fornitore', 'fornitori');
+    })
+  };
 };
 routes.fornitore = id => {
   const f = fornitore(id);
@@ -1641,7 +1685,7 @@ routes.fornitore = id => {
       <label class="field">Note <span class="hint">giorni di consegna, ordine minimo, trasporto</span><textarea id="fNote" style="min-height:80px">${esc(f.note)}</textarea></label>
       <button class="btn primary block" type="button" data-act="f-salva" data-id="${esc(f.id)}">Salva</button></div>
     <a class="btn block" href="#catalogo/${encodeURIComponent(f.id)}">Vedi i ${n} prodotti</a>
-    ${n ? '' : `<button class="btn danger block" type="button" data-act="f-elimina" data-id="${esc(f.id)}">Elimina fornitore</button>`}`;
+    <button class="btn danger block" type="button" data-act="f-elimina" data-id="${esc(f.id)}">Elimina fornitore</button>`;
   return { title: 'Fornitore', html, back: '#fornitori', tab: 'catalogo' };
 };
 
@@ -2462,8 +2506,74 @@ A['eti-stampa'] = () => {
 A['p-codice-del'] = async el => { const p = prodotto(current.arg); if (!p) return; await save('prodotti', { ...p, codici: (p.codici || []).filter(c => c !== el.dataset.c) }); aggiornaCodici(); };
 A['p-elimina'] = async el => {
   const p = prodotto(el.dataset.id); if (!p) return;
-  if (!(await confirmBox(`Elimino "${p.nome}" dal catalogo? Le sue scadenze restano nello storico.`, { ok: 'Elimina', danger: true }))) return;
-  await remove('prodotti', p.id); location.hash = '#catalogo';
+  const g = giacenza(p.id);
+  if (!(await confirmBox(`Elimino "${p.nome}" dal catalogo?${g ? ` In negozio risultano ancora ${fq(p, g)}: escono dal magazzino.` : ''}`, { ok: 'Elimina', danger: true }))) return;
+  const prima = await eliminaProdotti([p.id]);
+  location.hash = '#catalogo';
+  setTimeout(() => toastAnnulla(`Eliminato: ${p.nome}`, prima), 120);   // dopo il cambio pagina, che chiude gli avvisi
+};
+/* eliminare in blocco: prodotti, le loro confezioni in negozio e le righe negli ordini da fare.
+   Si tiene la versione di prima di tutto, così «Annulla» rimette ogni cosa com'era. */
+async function eliminaProdotti(ids) {
+  const set = new Set(ids.filter(id => S.prodotti.has(id)));
+  const prima = {
+    prodotti: [...set].map(id => S.prodotti.get(id)),
+    lotti: lottiAttivi().filter(l => set.has(l.prodottoId)),
+    ordini: [...S.ordini.values()].filter(o => o.stato === 'aperto' && o.righe.some(r => set.has(r.prodottoId))),
+    fornitori: []
+  };
+  await removeMany('prodotti', [...set]);
+  if (prima.lotti.length) await saveMany('lotti', prima.lotti.map(l => ({ ...l, stato: 'eliminato', chiuso: todayISO() })));
+  if (prima.ordini.length) await saveMany('ordini', prima.ordini.map(o => ({ ...o, righe: o.righe.filter(r => !set.has(r.prodottoId)) })));
+  return prima;
+}
+async function eliminaFornitori(ids, conProdotti) {
+  const set = new Set(ids.filter(id => S.fornitori.has(id)));
+  const prodIds = [...S.prodotti.values()].filter(p => set.has(p.fornitoreId)).map(p => p.id);
+  const forn = [...set].map(id => S.fornitori.get(id));
+  let prima = { prodotti: [], lotti: [], ordini: [], fornitori: forn };
+  if (prodIds.length && conProdotti) prima = { ...(await eliminaProdotti(prodIds)), fornitori: forn };
+  else if (prodIds.length) { prima.prodotti = prodIds.map(id => S.prodotti.get(id)); await saveMany('prodotti', prima.prodotti.map(p => ({ ...p, fornitoreId: '' }))); }
+  const bozze = [...S.ordini.values()].filter(o => o.stato === 'aperto' && set.has(o.fornitoreId));
+  for (const o of bozze) if (!prima.ordini.some(x => x.id === o.id)) prima.ordini.push(o);
+  if (bozze.length) await removeMany('ordini', bozze.map(o => o.id));
+  await removeMany('fornitori', [...set]);
+  return prima;
+}
+async function rimetti(prima) { for (const st of ['fornitori', 'prodotti', 'lotti', 'ordini']) if (prima[st] && prima[st].length) await saveMany(st, prima[st]); }
+function toastAnnulla(msg, prima) {
+  toast(msg, { action: { label: 'Annulla', run: async () => { await rimetti(prima); toast('Rimesso tutto com\'era'); render(); } } });
+}
+/* chiede cosa fare dei prodotti dei fornitori da eliminare; null = annullato */
+async function chiediFornitori(ids) {
+  const n = ids.length, k = [...S.prodotti.values()].filter(p => ids.includes(p.fornitoreId)).length;
+  const chi = n === 1 ? `il fornitore "${fornitore(ids[0]).nome}"` : `${n} fornitori`;
+  if (!k) return (await confirmBox(`Elimino ${chi}?`, { ok: 'Elimina', danger: true })) ? false : null;
+  return sceltaBox(`Elimino ${chi}. ${n === 1 ? 'Ha' : 'Hanno'} ${k === 1 ? '1 prodotto' : k + ' prodotti'} nel catalogo: cosa ne faccio?`,
+    { si: `Elimina anche ${k === 1 ? 'il prodotto' : 'i ' + k + ' prodotti'}`, no: 'Tieni i prodotti, senza fornitore', title: 'Elimina fornitori' });
+}
+A['cat-sel'] = () => { CAT.sel = new Set(); render(); };
+A['cat-sel-fine'] = () => { CAT.sel = null; render(); };
+A['cat-sel-tutti'] = () => { CAT.sel = new Set(filtroCat(Infinity).items.map(p => p.id)); render(); };
+A['cat-sel-nessuno'] = () => { CAT.sel = new Set(); render(); };
+A['cat-elimina'] = async () => {
+  const ids = [...(CAT.sel || [])].filter(id => S.prodotti.has(id)); if (!ids.length) return;
+  const conMerce = ids.filter(id => giacenza(id) > 0).length;
+  if (!(await confirmBox(`Elimino ${ids.length === 1 ? '1 prodotto' : ids.length + ' prodotti'} dal catalogo?${conMerce ? ` ${conMerce === 1 ? '1 ha' : conMerce + ' hanno'} ancora merce in negozio: esce dal magazzino.` : ''}`, { ok: 'Elimina', danger: true }))) return;
+  const prima = await eliminaProdotti(ids);
+  CAT.sel = null; render();
+  toastAnnulla(`Eliminati ${ids.length === 1 ? '1 prodotto' : ids.length + ' prodotti'}`, prima);
+};
+A['for-sel'] = () => { FSEL = new Set(); render(); };
+A['for-sel-fine'] = () => { FSEL = null; render(); };
+A['for-sel-tutti'] = () => { FSEL = new Set(S.fornitori.keys()); render(); };
+A['for-sel-nessuno'] = () => { FSEL = new Set(); render(); };
+A['for-elimina'] = async () => {
+  const ids = [...(FSEL || [])].filter(id => S.fornitori.has(id)); if (!ids.length) return;
+  const con = await chiediFornitori(ids); if (con === null) return;
+  const prima = await eliminaFornitori(ids, con);
+  FSEL = null; render();
+  toastAnnulla(`Eliminati ${ids.length === 1 ? '1 fornitore' : ids.length + ' fornitori'}${con && prima.prodotti.length ? ` e ${prima.prodotti.length} prodotti` : ''}`, prima);
 };
 A['nuovo-fornitore'] = async () => {
   const f = { id: uid('f'), nome: 'Nuovo fornitore', daNominare: false, metodo: '', telefono: '', email: '', sito: '', note: '' };
@@ -2475,7 +2585,13 @@ A['f-salva'] = async el => {
   await save('fornitori', { ...f, nome, daNominare: f.daNominare && /^da nominare/i.test(nome), metodo: $('#fMet').value, telefono: $('#fTel').value.trim(), email: $('#fMail').value.trim(), sito: $('#fSito').value.trim(), note: $('#fNote').value.trim() });
   toast('Salvato'); render();
 };
-A['f-elimina'] = async el => { const f = fornitore(el.dataset.id); if (!f) return; if (!(await confirmBox(`Elimino il fornitore "${f.nome}"?`, { ok: 'Elimina', danger: true }))) return; await remove('fornitori', f.id); location.hash = '#fornitori'; };
+A['f-elimina'] = async el => {
+  const f = fornitore(el.dataset.id); if (!f) return;
+  const con = await chiediFornitori([f.id]); if (con === null) return;
+  const prima = await eliminaFornitori([f.id], con);
+  location.hash = '#fornitori';
+  setTimeout(() => toastAnnulla(`Eliminato: ${f.nome}`, prima), 120);
+};
 /* impostazioni */
 A['s-salva'] = async () => {
   const s = settings(); const soglie = JSON.parse(JSON.stringify(s.soglie));
