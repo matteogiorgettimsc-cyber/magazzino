@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.6.1';
+const VERSIONE = '1.6.2';
 
 /* =========================================================
    Utilità
@@ -540,7 +540,7 @@ function schedaRapida(p) {
     ${lotti.length ? `<div class="list">${lotti.map(l => rigaConfezione(l)).join('')}</div>` : '<div class="faint">Nessuna confezione registrata in negozio.</div>'}
     ${u ? `<div class="faint">Ultimo ordine: ${p.sfuso ? fmtSacchi(u.qta, p) : fmtNum(u.qta)} il ${fmtDate(u.data)}</div>` : ''}
     <div class="stack">
-      <button class="btn primary block" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button>
+      <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn primary" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn primary" type="button" data-act="sr-inventario" data-id="${esc(p.id)}">Inventario</button></div>
       <button class="btn block" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button>
       <a class="btn ghost block" href="#prodotto/${encodeURIComponent(p.id)}" data-act="close-modal-link">Apri la scheda</a>
     </div>`);
@@ -698,7 +698,7 @@ function anteprimaScad() {
   return { t: '', err: false };
 }
 routes.carico = arg => {
-  if (arg === 'inventario' && CS.modo !== 'inventario' && !CS.pid) CS = nuovoCarico('inventario');
+  if (arg === 'inventario' && CS.modo !== 'inventario') CS = cambiaModo('inventario');
   if (arg !== 'inventario' && CS.modo === 'inventario' && !CS.pid && arg !== 'keep') CS = nuovoCarico('arrivo');
   const inv = CS.modo === 'inventario';
   const p = CS.pid ? prodotto(CS.pid) : null;
@@ -1542,7 +1542,7 @@ routes.prodotto = id => {
   const html = `<div><h2 style="margin:0">${esc(p.nome)}</h2><div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>
     <div class="section-title"><h2>In negozio</h2><span class="count">${fq(p, giacenza(p.id))}</span></div>
     ${lotti.length ? `<div class="faint small">Per cambiare la scadenza o ${p.sfuso ? 'i ' + nomeBase(p) : 'i pezzi'} tocca <b>Modifica</b>.</div><div class="list">${lotti.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>` : '<div class="empty">Nessuna confezione registrata.</div>'}
-    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button></div>
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn" type="button" data-act="sr-inventario" data-id="${esc(p.id)}">Inventario</button><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}" style="grid-column:1/-1">Aggiungi all'ordine</button></div>
     <div class="section-title"><h2>Dati del prodotto</h2></div>
     <div class="card">
       <label class="field">Nome<textarea id="pNome" rows="2" style="min-height:0">${esc(p.nome)}</textarea></label>
@@ -2217,9 +2217,18 @@ A.ripristina = () => {
 A['import-catalogo'] = () => { fileMode = 'catalogo'; $('#fileInput').click(); };
 A.installa = async () => { if (!installPrompt) return; installPrompt.prompt(); try { await installPrompt.userChoice; } catch (e) { } installPrompt = null; render(); };
 A['sr-carico'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (!p) return; CS = caricoPer(p, 'arrivo'); location.hash = '#carico/keep'; if (current.name === 'carico') render(); };
+A['sr-inventario'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (!p) return; CS = caricoPer(p, 'inventario'); location.hash = '#carico/inventario'; if (current.name === 'carico') render(); };
 A['sr-ordina'] = async el => { closeModal(); await aggiungiOrdine(el.dataset.id); render(); };
 /* arrivo merce */
-A.modo = el => { const m = el.dataset.m; if (CS.pid && CS.modo !== m) { toast('Prima salva o annulla il prodotto aperto', { err: true }); return; } CS = nuovoCarico(m); location.hash = m === 'inventario' ? '#carico/inventario' : '#carico'; render(); };
+A.modo = el => { const m = el.dataset.m; if (CS.modo === m) return; CS = cambiaModo(m); location.hash = m === 'inventario' ? '#carico/inventario' : '#carico'; render(); };
+/* da Arrivo a Inventario (e ritorno) senza perdere il prodotto aperto né la scadenza già scritta */
+function cambiaModo(m) {
+  const p = CS.pid ? prodotto(CS.pid) : null;
+  if (!p) return nuovoCarico(m);
+  const c = caricoPer(p, m);
+  c.scad = CS.scad; c.senza = CS.senza; c.field = CS.senza ? 'qta' : CS.field;
+  return c;
+}
 A['carico-cerca'] = () => pickerModal({ title: 'Cerca il prodotto', onPick: p => { CS = caricoPer(p, CS.modo); render(); } });
 A.unita = el => { const u = el.dataset.u; if (CS.unita === u) return; CS.unita = u; CS.qta = u === 'sacchi' ? '1' : ''; CS.field = 'qta'; CS.qtaFresh = true; render(); };
 A['carico-annulla'] = () => { CS = nuovoCarico(CS.modo); render(); };
