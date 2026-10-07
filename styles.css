@@ -115,7 +115,7 @@ h3{font-size:.95rem;margin:0;font-weight:700}
 /* campi */
 label.field{display:flex;flex-direction:column;gap:6px;font-weight:600;font-size:.92rem}
 label.field .hint{font-weight:400;color:var(--ink-faint);font-size:.82rem}
-input[type=text],input[type=search],input[type=tel],input[type=email],input[type=url],input[type=number],select,textarea{
+input[type=text],input[type=search],input[type=tel],input[type=email],input[type=password],input[type=url],input[type=number],select,textarea{
   width:100%;min-height:var(--tap);border:1px solid #C9CFBE;border-radius:12px;background:#fff;padding:10px 14px;font-size:1rem;
 }
 textarea{min-height:120px;resize:vertical;line-height:1.45}
@@ -370,3 +370,7 @@ button.notice{width:100%;font:inherit;color:inherit;text-align:left;cursor:point
   .eti .barre{width:46mm;height:10mm;display:block}
   .eti-cod{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:7.5pt;letter-spacing:.06em;line-height:1}
 }
+/* sincronizzazione */
+.sync-stato{font-size:.85rem;color:var(--ink-soft)}
+.sync-stato.ok::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px;vertical-align:1px}
+.sync-stato.err{color:var(--red)}

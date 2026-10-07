@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.5.0';
+const VERSIONE = '1.6.0';
 
 /* =========================================================
    Utilità
@@ -95,16 +95,17 @@ const DB_NAME = 'spesasfusa-magazzino';
 const STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'meta'];
 const DATI = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure'];   // archivi salvati nel backup
 let db;
-const S = { fornitori: new Map(), prodotti: new Map(), lotti: new Map(), ordini: new Map(), sprechi: new Map(), vendite: new Map(), chiusure: new Map(), meta: {} };
+const S = { fornitori: new Map(), prodotti: new Map(), lotti: new Map(), ordini: new Map(), sprechi: new Map(), vendite: new Map(), chiusure: new Map(), meta: {}, coda: new Map() };
 
 function openDB() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, 3);
+    const r = indexedDB.open(DB_NAME, 4);
     r.onupgradeneeded = () => {
       const d = r.result;
       for (const s of STORES) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: s === 'meta' ? 'key' : 'id' });
+      if (!d.objectStoreNames.contains('coda')) d.createObjectStore('coda', { keyPath: 'k' });   // modifiche da mandare agli altri dispositivi
     };
-    r.onsuccess = () => res(r.result);
+    r.onsuccess = () => { const d = r.result; d.onversionchange = () => { d.close(); location.reload(); }; res(d); };
     r.onerror = () => rej(r.error);
   });
 }
@@ -126,11 +127,68 @@ function getAll(store) {
 async function loadAll() {
   for (const s of DATI) S[s] = new Map((await getAll(s)).map(o => [o.id, o]));
   S.meta = {}; (await getAll('meta')).forEach(m => { S.meta[m.key] = m.value; });
+  S.coda = new Map((await getAll('coda')).map(e => [e.k, e]));
+  for (const k of S.coda.keys()) if (k > ultimoK) ultimoK = k;
 }
-async function save(store, obj) { S[store].set(obj.id, obj); await tx(store, s => s.put(obj)); if (store === 'prodotti') rebuildCodeIndex(); }
-async function saveMany(store, arr) { arr.forEach(o => S[store].set(o.id, o)); await tx(store, s => arr.forEach(o => s.put(o))); if (store === 'prodotti') rebuildCodeIndex(); }
-async function remove(store, id) { S[store].delete(id); await tx(store, s => s.delete(id)); if (store === 'prodotti') rebuildCodeIndex(); }
-async function setMeta(key, value) { S.meta[key] = value; await tx('meta', s => s.put({ key, value })); }
+/* ogni scrittura passa da qui: con la sincronizzazione attiva, la modifica entra nella coda
+   nella stessa transazione, così non si perde nemmeno se l'app si chiude subito dopo */
+async function save(store, obj) {
+  const prev = S[store].get(obj.id);
+  S[store].set(obj.id, obj);
+  const q = codaPer(store, [[prev, obj]]);
+  await txConCoda(store, s => s.put(obj), q);
+  if (store === 'prodotti') rebuildCodeIndex();
+}
+async function saveMany(store, arr) {
+  const coppie = arr.map(o => [S[store].get(o.id), o]);
+  arr.forEach(o => S[store].set(o.id, o));
+  const q = codaPer(store, coppie);
+  await txConCoda(store, s => arr.forEach(o => s.put(o)), q);
+  if (store === 'prodotti') rebuildCodeIndex();
+}
+async function remove(store, id) {
+  const prev = S[store].get(id);
+  S[store].delete(id);
+  const q = prev && syncAttiva() && SYNC_STORES.includes(store) ? [voceCoda({ st: store, id, del: true })] : [];
+  await txConCoda(store, s => s.delete(id), q);
+  if (store === 'prodotti') rebuildCodeIndex();
+}
+async function setMeta(key, value) {
+  S.meta[key] = value;
+  const q = syncAttiva() && SYNC_META.includes(key) ? [voceCoda({ st: 'meta', id: key, set: { value } })] : [];
+  await txConCoda('meta', s => s.put({ key, value }), q);
+}
+function txConCoda(store, fn, coda) {
+  if (!coda.length) return tx(store, fn);
+  coda.forEach(e => S.coda.set(e.k, e));
+  return new Promise((res, rej) => {
+    const t = db.transaction([store, 'coda'], 'readwrite');
+    fn(t.objectStore(store));
+    const c = t.objectStore('coda'); coda.forEach(e => c.put(e));
+    t.oncomplete = () => { res(); syncPresto(); };
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error || new Error('Scrittura annullata'));
+  });
+}
+/* cosa è cambiato in un record: solo i campi diversi; per le confezioni la quantità va come differenza */
+let ultimoK = 0;
+const voceCoda = e => { ultimoK = Math.max(Date.now() * 1000, ultimoK + 1); return { k: ultimoK, ...e }; };
+function codaPer(store, coppie) {
+  if (!syncAttiva() || !SYNC_STORES.includes(store)) return [];
+  const out = [];
+  for (const [prev, obj] of coppie) {
+    const set = {}; let dq = 0, n = 0;
+    const chiavi = new Set([...Object.keys(obj), ...(prev ? Object.keys(prev) : [])]);
+    for (const k of chiavi) {
+      if (k[0] === '_') continue;    // campi solo di questo dispositivo
+      if (store === 'lotti' && k === 'quantita') { dq = r3((+obj.quantita || 0) - (prev ? +prev.quantita || 0 : 0)); continue; }
+      const a = prev ? prev[k] : undefined, b = obj[k];
+      if (!prev || JSON.stringify(a ?? null) !== JSON.stringify(b ?? null)) { set[k] = b ?? null; n++; }
+    }
+    if (n || dq) out.push(voceCoda({ st: store, id: obj.id, set, dq }));
+  }
+  return out;
+}
 
 const DEFAULT_SETTINGS = { soglie: { preferibilmente: [7, 15, 30], entro: [2, 5, 10] }, negozio: 'La Spesa Sfusa', avanzoSfuso: 5 };
 function settings() {
@@ -218,6 +276,7 @@ function openModal(html, mount, { onScan = null, onClose = null } = {}) {
 function pulisciModal() {
   stopCamera(); $('#modalBody').innerHTML = ''; modalScan = null;
   const cb = modalOnClose; modalOnClose = null; if (cb) cb();
+  if (SYNC.ridisegna) setTimeout(() => { if (SYNC.ridisegna && !modal.open) aggiornaVista(); }, 0);
 }
 function closeModal() {
   if (modal.open) modal.close();
@@ -512,7 +571,7 @@ function route() {
   render(true);
 }
 function render(scrollTop = false) {
-  current.fresh = !!scrollTop;
+  current.fresh = !!scrollTop; SYNC.ridisegna = false;
   const r = routes[current.name](current.arg) || {};
   $('#viewTitle').textContent = r.title || 'Magazzino';
   document.title = (r.title ? r.title + ' – ' : '') + 'Magazzino';
@@ -581,6 +640,7 @@ routes.home = () => {
   html += `<div class="notice ${warn ? 'red' : 'green'}"><div class="spacer">${giorniBk == null ? '<b>Nessun backup ancora.</b> Fallo ogni giorno a fine lavoro.' : giorniBk === 0 ? 'Backup fatto oggi.' : `Ultimo backup: <b>${giorniBk === 1 ? 'ieri' : giorniBk + ' giorni fa'}</b>.`}</div>
     <button class="btn small ${warn ? 'primary' : ''}" type="button" data-act="backup">Fai backup</button></div>`;
   if (installPrompt) html += `<button class="btn block" type="button" data-act="installa">Installa l'app sul telefono</button>`;
+  if (syncAttiva()) html += `<div id="syncStato" class="sync-stato" style="text-align:center">${esc(testoStato())}</div>`;
   html += `<div class="faint small" style="text-align:center">Versione ${VERSIONE}</div>`;
   return { title: settings().negozio, html, tab: 'home' };
 };
@@ -1630,9 +1690,15 @@ function barcodeSVG(code) {
   }
   return `<svg class="barre" viewBox="0 0 ${w} 50" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" aria-label="Codice ${esc(code)}" role="img"><rect width="${w}" height="50" fill="#fff"/><g fill="#000">${r}</g></svg>`;
 }
+/* con più dispositivi, ognuno ha il suo numero (10-99) dentro il codice: due dispositivi non creano mai lo stesso codice */
+function formaCodice(n) {
+  const slot = S.meta.syncSlot;
+  const d = slot ? '29' + String(slot).padStart(2, '0') + String(n).padStart(8, '0') : '29' + String(n).padStart(10, '0');
+  return d + eanCheck(d);
+}
 async function codiceInterno() {
   let n = S.meta.ultimoCodiceInterno || 0, code;
-  do { n++; const d = '29' + String(n).padStart(10, '0'); code = d + eanCheck(d); } while (codeIndex.has(code));
+  do { n++; code = formaCodice(n); } while (codeIndex.has(code));
   await setMeta('ultimoCodiceInterno', n);
   return code;
 }
@@ -1711,7 +1777,7 @@ function stampaEtichette(ids, start = 0) {
   const lista = ids.map(prodotto).filter(Boolean).map(p => {
     if (codiceEtichetta(p)) return p;
     let code;
-    do { n++; const d = '29' + String(n).padStart(10, '0'); code = d + eanCheck(d); } while (codeIndex.has(code));
+    do { n++; code = formaCodice(n); } while (codeIndex.has(code));
     const np = { ...p, codici: [...(p.codici || []), code] };
     codeIndex.set(code, np.id); nuovi.push(np);
     return np;
@@ -1730,6 +1796,258 @@ function stampaEtichette(ids, start = 0) {
 }
 
 /* =========================================================
+   SINCRONIZZAZIONE tra i dispositivi del negozio (Firebase)
+   - ogni modifica entra in una coda salvata sul dispositivo e parte appena c'è internet
+   - sul server ogni record è un documento; si mandano solo i campi cambiati
+   - la quantità di una confezione è la somma dei contributi dei dispositivi: ognuno scrive
+     solo il suo (campo q_<numero del dispositivo>, sempre il totale, mai un "aggiungi"),
+     così due vendite in contemporanea dallo stesso sacco non si perdono e un invio
+     ripetuto dopo una risposta persa non conta due volte
+   - si scarica solo quello che è cambiato dall'ultima volta (più 15 secondi di margine)
+   ========================================================= */
+const SYNC_CONF = { apiKey: '', projectId: '', email: '' };
+const SYNC_STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure'];
+const SYNC_META = ['settings', 'etiPosizione'];
+const syncConf = () => ({ ...SYNC_CONF, ...(S.meta.syncConf || {}) });
+const syncPronta = () => !!(syncConf().apiKey && syncConf().projectId);
+function syncAttiva() { return !!(S.meta.syncAuth && S.meta.syncAuth.refreshToken); }
+let SYNC = { stato: 'spento', msg: '', ultimo: null, corre: false, ancora: false, timer: null, presto: null, ridisegna: false, dispositivi: null };
+const nomiFs = c => `projects/${c.projectId}/databases/(default)/documents`;
+const docId = (st, id) => encodeURIComponent(st + '~' + id);
+const campo = k => /^[A-Za-z_][A-Za-z_0-9]*$/.test(k) ? k : '`' + k.replace(/[`\\]/g, m => '\\' + m) + '`';
+const tsMs = t => { const m = Date.parse(t); return isNaN(m) ? 0 : m; };
+
+async function accedi(email, password) {
+  const c = syncConf();
+  let r;
+  try {
+    r = await fetch(`${c.authUrl || 'https://identitytoolkit.googleapis.com/v1'}/accounts:signInWithPassword?key=${encodeURIComponent(c.apiKey)}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, returnSecureToken: true }) });
+  } catch (e) { throw new Error('Serve internet per collegare il dispositivo'); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const m = (j.error && j.error.message) || '';
+    if (/INVALID_LOGIN_CREDENTIALS|INVALID_PASSWORD|EMAIL_NOT_FOUND|INVALID_EMAIL|MISSING_PASSWORD/.test(m)) throw new Error('Email o password sbagliate');
+    if (/TOO_MANY_ATTEMPTS/.test(m)) throw new Error('Troppi tentativi: riprova tra qualche minuto');
+    if (/OPERATION_NOT_ALLOWED|PASSWORD_LOGIN_DISABLED/.test(m)) throw new Error('Su Firebase l\'accesso con email e password non è attivo');
+    if (/API.?KEY/i.test(m)) throw new Error('La chiave del progetto (apiKey) non è giusta');
+    throw new Error('Accesso non riuscito' + (m ? ': ' + m : ''));
+  }
+  return { idToken: j.idToken, refreshToken: j.refreshToken, exp: Date.now() + (+j.expiresIn || 3600) * 1000, email: (j.email || email).toLowerCase() };
+}
+/* il "biglietto" di accesso dura un'ora: si rinnova da solo, senza chiedere niente */
+async function tokenValido() {
+  const a = S.meta.syncAuth; if (!a) throw new Error('Dispositivo non collegato');
+  if (a.idToken && a.exp - 120000 > Date.now()) return a.idToken;
+  const c = syncConf();
+  const r = await fetch(`${c.tokenUrl || 'https://securetoken.googleapis.com/v1'}/token?key=${encodeURIComponent(c.apiKey)}`,
+    { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(a.refreshToken) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const e = new Error(r.status >= 400 && r.status < 500 ? 'Accesso scaduto: ricollega questo dispositivo in Impostazioni' : 'Il server non risponde');
+    e.accesso = r.status >= 400 && r.status < 500; throw e;
+  }
+  const n = { ...a, idToken: j.id_token, refreshToken: j.refresh_token || a.refreshToken, exp: Date.now() + (+j.expires_in || 3600) * 1000 };
+  await setMeta('syncAuth', n);
+  return n.idToken;
+}
+async function chiamaFs(path, body, method = 'POST', riprova = true) {
+  const c = syncConf(), t = await tokenValido();
+  const r = await fetch(`${c.firestoreUrl || 'https://firestore.googleapis.com/v1'}/${nomiFs(c)}${path}`,
+    { method, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + t }, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 404 && method === 'GET') return null;
+  if (r.status === 401 && riprova) {   // biglietto non più valido: lo rinnovo e riprovo una volta
+    await setMeta('syncAuth', { ...S.meta.syncAuth, exp: 0 });
+    return chiamaFs(path, body, method, false);
+  }
+  const j = await r.json().catch(() => null);
+  if (!r.ok) {
+    const m = (j && j.error && j.error.message) || r.statusText || String(r.status);
+    throw new Error(r.status === 403 ? 'Il server non accetta questo utente: controlla l\'email nelle regole di Firestore'
+      : /does not exist|NOT_FOUND/i.test(m) ? 'Su Firebase manca il database Firestore' : 'Errore del server: ' + m);
+  }
+  return j;
+}
+/* --- invio: la coda raggruppata per record, al massimo 400 record per volta --- */
+function scrittura(x, nb) {
+  const fields = { st: { stringValue: x.st }, rid: { stringValue: String(x.id) }, del: { booleanValue: !!x.del } };
+  const mask = ['st', 'rid', 'del'];
+  if (!x.del) for (const [k, v] of Object.entries(x.set)) { fields['f_' + k] = { stringValue: JSON.stringify(v ?? null) }; mask.push(campo('f_' + k)); }
+  if (!x.del && x.mio !== undefined) { const f = 'q_' + (S.meta.syncSlot || 0); fields[f] = { doubleValue: x.mio }; mask.push(f); }
+  return { update: { name: `${nb}/dati/${docId(x.st, x.id)}`, fields }, updateMask: { fieldPaths: mask }, updateTransforms: [{ fieldPath: 'srv', setToServerValue: 'REQUEST_TIME' }] };
+}
+async function invia() {
+  const voci = [...S.coda.values()].sort((a, b) => a.k - b.k);
+  if (!voci.length) return 0;
+  const per = new Map();
+  for (const e of voci) {
+    const key = e.st + '~' + e.id;
+    let x = per.get(key);
+    if (!x) { x = { st: e.st, id: e.id, set: {}, dq: 0, del: false, keys: [] }; per.set(key, x); }
+    x.keys.push(e.k);
+    if (e.del) { x.del = true; x.set = {}; x.dq = 0; }
+    else { x.del = false; Object.assign(x.set, e.set || {}); x.dq = r3(x.dq + (e.dq || 0)); }
+  }
+  const tutti = [...per.values()], nb = nomiFs(syncConf());
+  // confezioni: il mio contributo totale = quello già confermato dal server + le differenze in coda
+  for (const x of tutti) if (x.st === 'lotti' && !x.del && x.dq) { const l = S.lotti.get(x.id); x.mio = r3(((l && l._mio) || 0) + x.dq); }
+  for (let i = 0; i < tutti.length; i += 400) {
+    const parte = tutti.slice(i, i + 400);
+    await chiamaFs(':commit', { writes: parte.map(x => scrittura(x, nb)) });
+    const ks = parte.flatMap(x => x.keys);
+    const conf = parte.filter(x => x.mio !== undefined && S.lotti.has(x.id)).map(x => { const n = { ...S.lotti.get(x.id), _mio: x.mio }; S.lotti.set(x.id, n); return n; });
+    ks.forEach(k => S.coda.delete(k));
+    await new Promise((res, rej) => {
+      const t = db.transaction(['coda', 'lotti'], 'readwrite');
+      const c = t.objectStore('coda'); ks.forEach(k => c.delete(k));
+      const l = t.objectStore('lotti'); conf.forEach(n => l.put(n));
+      t.oncomplete = res; t.onerror = () => rej(t.error);
+    });
+    mostraStato();
+  }
+  return tutti.length;
+}
+/* --- ricezione --- */
+function leggiDoc(d) {
+  const f = d.fields || {};
+  const st = f.st && f.st.stringValue, rid = f.rid && f.rid.stringValue;
+  if (!st || rid == null) return null;
+  const rec = {};
+  for (const [k, v] of Object.entries(f)) if (k.startsWith('f_') && v.stringValue != null) { try { rec[k.slice(2)] = JSON.parse(v.stringValue); } catch (e) { } }
+  if (st === 'lotti') {
+    let q = 0;
+    for (const [k, v] of Object.entries(f)) if (/^q_\d+$/.test(k)) q += +(v.doubleValue ?? v.integerValue ?? 0);
+    rec.quantita = r3(q);
+    const mio = f['q_' + (S.meta.syncSlot || 0)];
+    rec._mio = mio ? r3(+(mio.doubleValue ?? mio.integerValue ?? 0)) : 0;
+  }
+  return { st, id: rec.id !== undefined ? rec.id : rid, del: !!(f.del && f.del.booleanValue), rec, srv: f.srv && f.srv.timestampValue };
+}
+const firma = o => JSON.stringify(Object.keys(o).filter(k => o[k] != null).sort().map(k => [k, o[k]]));
+async function applica(recs) {
+  const inCoda = new Set([...S.coda.values()].map(e => e.st + '~' + e.id));
+  const ops = new Map(); let n = 0;
+  const op = (st, f) => { if (!ops.has(st)) ops.set(st, []); ops.get(st).push(f); };
+  for (const r of recs) {
+    if (r.st === 'sys') { if (r.id === 'dispositivi') SYNC.dispositivi = Object.values(r.rec).filter(x => x && x.nome); continue; }
+    if (inCoda.has(r.st + '~' + r.id)) continue;      // ho modifiche mie non ancora partite: lo riprendo dopo l'invio
+    if (r.st === 'meta') {
+      if (!SYNC_META.includes(r.id) || r.del) continue;
+      const v = r.rec.value;
+      if (JSON.stringify(S.meta[r.id] ?? null) === JSON.stringify(v ?? null)) continue;
+      S.meta[r.id] = v; op('meta', s => s.put({ key: r.id, value: v })); n++; continue;
+    }
+    if (!SYNC_STORES.includes(r.st)) continue;
+    const cur = S[r.st].get(r.id);
+    if (r.del) { if (cur) { S[r.st].delete(r.id); op(r.st, s => s.delete(r.id)); n++; } continue; }
+    const rec = { ...r.rec, id: r.id };
+    if (cur && firma(cur) === firma(rec)) continue;
+    S[r.st].set(r.id, rec); op(r.st, s => s.put(rec)); n++;
+  }
+  for (const [st, fs] of ops) await tx(st, s => fs.forEach(f => f(s)));
+  if (ops.has('prodotti')) rebuildCodeIndex();
+  return n;
+}
+async function ricevi() {
+  const LIM = 300;
+  const da = S.meta.syncDa ? new Date(tsMs(S.meta.syncDa) - 15000).toISOString() : '1970-01-01T00:00:00Z';
+  let cursore = null, max = S.meta.syncDa || null, n = 0;
+  for (;;) {
+    const q = {
+      from: [{ collectionId: 'dati' }],
+      where: { fieldFilter: { field: { fieldPath: 'srv' }, op: 'GREATER_THAN_OR_EQUAL', value: { timestampValue: da } } },
+      orderBy: [{ field: { fieldPath: 'srv' }, direction: 'ASCENDING' }, { field: { fieldPath: '__name__' }, direction: 'ASCENDING' }],
+      limit: LIM
+    };
+    if (cursore) q.startAt = { values: [{ timestampValue: cursore.srv }, { referenceValue: cursore.name }], before: false };
+    const docs = ((await chiamaFs(':runQuery', { structuredQuery: q })) || []).filter(x => x.document).map(x => x.document);
+    const recs = docs.map(leggiDoc).filter(Boolean);
+    n += await applica(recs);
+    for (const r of recs) if (r.srv && (!max || tsMs(r.srv) > tsMs(max))) max = r.srv;
+    if (docs.length < LIM) break;
+    const ul = docs[docs.length - 1]; cursore = { srv: ul.fields.srv.timestampValue, name: ul.name };
+  }
+  if (max && max !== S.meta.syncDa) await setMeta('syncDa', max);
+  return n;
+}
+/* --- il giro: prima mando, poi ricevo --- */
+async function giro() {
+  if (!syncAttiva()) return;
+  if (SYNC.corre) { SYNC.ancora = true; return; }
+  SYNC.corre = true;
+  try {
+    if (navigator.onLine === false) { SYNC.stato = 'offline'; return; }
+    let volte = 0;
+    do {
+      SYNC.ancora = false;
+      await invia();
+      const n = await ricevi();
+      SYNC.stato = 'ok'; SYNC.msg = ''; SYNC.ultimo = Date.now();
+      if (n || SYNC.ridisegna) aggiornaVista();
+    } while (SYNC.ancora && ++volte < 3);
+  } catch (e) {
+    SYNC.stato = e.accesso ? 'accesso' : e instanceof TypeError ? 'offline' : 'errore';
+    SYNC.msg = e.message;
+  } finally { SYNC.corre = false; mostraStato(); }
+}
+function syncPresto() { if (!syncAttiva()) return; clearTimeout(SYNC.presto); SYNC.presto = setTimeout(giro, 1200); mostraStato(); }
+function avviaSync() {
+  clearInterval(SYNC.timer);
+  if (!syncAttiva()) { SYNC.stato = 'spento'; return; }
+  SYNC.timer = setInterval(() => { if (!document.hidden) giro(); }, 20000);
+  giro();
+}
+window.addEventListener('online', () => giro());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) giro(); });
+/* arrivano modifiche dagli altri: si ridisegna, ma non mentre si scrive in un modulo */
+function aggiornaVista() {
+  aggiornaBadge();
+  const ae = document.activeElement;
+  if (modal.open || ['prodotto', 'fornitore', 'impostazioni', 'chiusura'].includes(current.name) || (ae && ae.matches && ae.matches('input,textarea,select'))) { SYNC.ridisegna = true; return; }
+  render();
+}
+function testoStato() {
+  const n = S.coda.size, attesa = n ? ` · ${n === 1 ? '1 modifica' : n + ' modifiche'} da inviare` : '';
+  switch (SYNC.stato) {
+    case 'ok': return `Sincronizzato alle ${fmtOra(SYNC.ultimo)}${attesa}`;
+    case 'offline': return `Senza internet${attesa}. Si sincronizza appena torna.`;
+    case 'accesso': return 'Accesso scaduto: ricollega questo dispositivo in Impostazioni';
+    case 'errore': return `Sincronizzazione non riuscita: ${SYNC.msg}${attesa}`;
+    default: return syncAttiva() ? `Sincronizzo…${attesa}` : '';
+  }
+}
+function mostraStato() {
+  const el = document.getElementById('syncStato'); if (!el) return;
+  el.textContent = testoStato();
+  el.className = 'sync-stato ' + (SYNC.stato === 'ok' ? 'ok' : SYNC.stato === 'errore' || SYNC.stato === 'accesso' ? 'err' : '');
+}
+/* --- collegare un dispositivo --- */
+async function registraDispositivo(nome) {
+  const d = await chiamaFs('/dati/' + docId('sys', 'dispositivi'), null, 'GET');
+  const usati = new Set();
+  if (d && d.fields) for (const k of Object.keys(d.fields)) if (/^f_\d+$/.test(k)) usati.add(+k.slice(2));
+  let slot = S.meta.syncSlot;
+  if (!slot) { const liberi = []; for (let i = 10; i < 100; i++) if (!usati.has(i)) liberi.push(i); slot = liberi[Math.floor(Math.random() * liberi.length)] || 99; }
+  await chiamaFs(':commit', { writes: [scrittura({ st: 'sys', id: 'dispositivi', set: { [slot]: { nome, dal: todayISO() } } }, nomiFs(syncConf()))] });
+  await setMeta('syncSlot', slot);
+}
+function cardSync() {
+  if (!syncPronta()) return `<div class="card"><h2>Più dispositivi insieme</h2><p class="muted small">Per usare telefono e tablet insieme, con gli stessi dati. Non è ancora configurata per il negozio.</p></div>`;
+  if (!syncAttiva()) return `<div class="card"><h2>Più dispositivi insieme</h2>
+    <p class="muted small">Collega questo dispositivo al negozio: vendite, arrivi, scadenze e prodotti saranno uguali su tutti i dispositivi collegati, anche se si lavora insieme. Serve internet solo per collegarlo; dopo funziona anche senza e si aggiorna appena torna la rete.</p>
+    <label class="field">Email del negozio<input type="email" id="syEmail" autocomplete="username" value="${esc(syncConf().email || '')}"></label>
+    <label class="field">Password<input type="password" id="syPw" autocomplete="current-password"></label>
+    <label class="field">Nome di questo dispositivo<input type="text" id="syNome" value="${/tablet|ipad/i.test(navigator.userAgent) || (Math.min(screen.width, screen.height) >= 600) ? 'Tablet' : 'Telefono'}"></label>
+    <button class="btn primary block" type="button" data-act="sync-collega">Collega questo dispositivo</button></div>`;
+  const disp = SYNC.dispositivi && SYNC.dispositivi.length ? SYNC.dispositivi.map(d => esc(d.nome)).join(', ') : '';
+  return `<div class="card"><h2>Più dispositivi insieme</h2>
+    <dl class="kv"><dt>Questo dispositivo</dt><dd>${esc(S.meta.syncDev || '')}</dd><dt>Account</dt><dd>${esc(S.meta.syncAuth.email || '')}</dd>${disp ? `<dt>Collegati</dt><dd>${disp}</dd>` : ''}</dl>
+    <div id="syncStato" class="sync-stato">${esc(testoStato())}</div>
+    <button class="btn block" type="button" data-act="sync-ora">Sincronizza ora</button>
+    <button class="btn ghost block" type="button" data-act="sync-scollega">Scollega questo dispositivo</button></div>`;
+}
+
+/* =========================================================
    IMPOSTAZIONI, BACKUP
    ========================================================= */
 let persistito = null;
@@ -1737,10 +2055,11 @@ routes.impostazioni = () => {
   const s = settings();
   const lb = S.meta.lastBackup;
   const html = `<div class="card"><h2>Backup su Drive</h2>
-      <p class="muted small">I dati stanno solo su questo telefono. Il backup crea un file: nel menu che si apre scegli <b>Drive</b>, poi in alto l'<b>account del negozio</b> e la cartella. Fallo ogni giorno a fine lavoro.</p>
+      <p class="muted small">${syncAttiva() ? 'I dati sono anche sugli altri dispositivi collegati, ma il backup resta la copia di sicurezza.' : 'I dati stanno solo su questo telefono.'} Il backup crea un file: nel menu che si apre scegli <b>Drive</b>, poi in alto l'<b>account del negozio</b> e la cartella. Fallo ogni giorno a fine lavoro.</p>
       <div class="faint">Ultimo backup: ${lb ? fmtDate(lb.slice(0, 10)) : 'mai'}</div>
       <button class="btn primary block" type="button" data-act="backup">Fai backup ora</button>
       <button class="btn block" type="button" data-act="ripristina">Ripristina da un backup</button></div>
+    ${cardSync()}
     <div class="card"><h2>Catalogo</h2>
       <dl class="kv"><dt>Prodotti</dt><dd>${S.prodotti.size}</dd><dt>Fornitori</dt><dd>${S.fornitori.size}</dd><dt>Con codice a barre</dt><dd>${[...S.prodotti.values()].filter(p => (p.codici || []).length).length}</dd><dt>Confezioni in negozio</dt><dd>${lottiAttivi().length}</dd></dl>
       <button class="btn block" type="button" data-act="import-catalogo">Carica catalogo dai listini</button>
@@ -1832,13 +2151,68 @@ $('#fileInput').addEventListener('change', async e => {
    Azioni (pulsanti)
    ========================================================= */
 const A = {};
+/* sincronizzazione */
+A['sync-collega'] = async el => {
+  const email = $('#syEmail').value.trim().toLowerCase(), pw = $('#syPw').value, nome = ($('#syNome').value || '').trim() || 'Dispositivo';
+  if (!email || !pw) { toast('Scrivi email e password', { err: true }); return; }
+  el.disabled = true; el.textContent = 'Collego…';
+  try {
+    const auth = await accedi(email, pw);
+    await setMeta('syncAuth', auth);
+    // sul server ci sono già i dati del negozio?
+    const prova = ((await chiamaFs(':runQuery', { structuredQuery: { from: [{ collectionId: 'dati' }], limit: 3 } })) || [])
+      .filter(x => x.document).map(x => leggiDoc(x.document)).filter(r => r && r.st !== 'sys');
+    const vuoto = !prova.length;
+    const locali = SYNC_STORES.reduce((t, st) => t + S[st].size, 0);
+    if (!vuoto && locali) {
+      const ok = await confirmBox('Sul server ci sono già i dati del negozio. Questo dispositivo ha dei dati suoi: li sostituisco con quelli del negozio? Prima ne salvo una copia nella cartella Download.', { ok: 'Usa i dati del negozio', danger: true });
+      if (!ok) { await setMeta('syncAuth', null); render(); return; }
+      const copia = { app: 'spesasfusa-magazzino', versione: 2, esportato: new Date().toISOString(), impostazioni: S.meta.settings || {} };
+      for (const st of DATI) copia[st] = [...S[st].values()];
+      scaricaFile(JSON.stringify(copia), `magazzino-prima-del-collegamento-${todayISO()}.txt`);
+      for (const st of SYNC_STORES) { S[st] = new Map(); await tx(st, x => x.clear()); }
+      rebuildCodeIndex();
+    }
+    await registraDispositivo(nome);
+    await setMeta('syncDev', nome);
+    await setMeta('syncDa', null);
+    if (vuoto) {   // primo dispositivo: manda tutto quello che ha
+      const pulite = [...S.lotti.values()].filter(l => l._mio !== undefined).map(l => { const n = { ...l }; delete n._mio; S.lotti.set(n.id, n); return n; });
+      if (pulite.length) await tx('lotti', x => pulite.forEach(n => x.put(n)));
+      const voci = [];
+      for (const st of SYNC_STORES) for (const o of S[st].values()) voci.push(...codaPer(st, [[undefined, o]]));
+      for (const k of SYNC_META) if (S.meta[k] !== undefined) voci.push(voceCoda({ st: 'meta', id: k, set: { value: S.meta[k] } }));
+      voci.forEach(e => S.coda.set(e.k, e));
+      await tx('coda', x => voci.forEach(e => x.put(e)));
+    }
+    toast(vuoto ? 'Collegato: mando i dati del negozio al server' : 'Collegato: scarico i dati del negozio', { ms: 5000 });
+    SYNC.stato = 'via';
+    render(); avviaSync();
+  } catch (e) {
+    if (!S.meta.syncDev) await setMeta('syncAuth', null);
+    toast(e.message, { err: true });
+    if (document.contains(el)) { el.disabled = false; el.textContent = 'Collega questo dispositivo'; }
+  }
+};
+A['sync-ora'] = async () => { await giro(); if (SYNC.stato === 'ok') toast('Sincronizzato'); else toast(testoStato(), { err: true }); render(); };
+A['sync-scollega'] = async () => {
+  const n = S.coda.size;
+  if (!(await confirmBox(`Scollego questo dispositivo? I dati restano qui, ma non si aggiornano più con gli altri dispositivi.${n ? ` Attenzione: ${n === 1 ? '1 modifica non è ancora partita' : n + ' modifiche non sono ancora partite'}, gli altri non le riceveranno.` : ''}`, { ok: 'Scollega', danger: true }))) return;
+  clearInterval(SYNC.timer);
+  for (const k of ['syncAuth', 'syncDa', 'syncDev']) await setMeta(k, null);
+  S.coda.clear(); await tx('coda', x => x.clear());
+  SYNC.stato = 'spento'; toast('Dispositivo scollegato'); render();
+};
 A['close-modal'] = () => closeModal();
 A['close-modal-link'] = el => { closeModal(); location.hash = el.getAttribute('href'); };
 A.back = () => { if (current.back) location.hash = current.back; else history.back(); };
 A.camera = () => openCamera();
 A['scrivi-codice'] = () => scriviCodice();
 A.backup = () => faiBackup();
-A.ripristina = () => { fileMode = 'ripristina'; $('#fileInput').click(); };
+A.ripristina = () => {
+  if (syncAttiva()) { toast('Con più dispositivi collegati non si ripristina un backup: i dati arrivano dagli altri. Prima scollega questo dispositivo.', { err: true, ms: 6000 }); return; }
+  fileMode = 'ripristina'; $('#fileInput').click();
+};
 A['import-catalogo'] = () => { fileMode = 'catalogo'; $('#fileInput').click(); };
 A.installa = async () => { if (!installPrompt) return; installPrompt.prompt(); try { await installPrompt.userChoice; } catch (e) { } installPrompt = null; render(); };
 A['sr-carico'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (!p) return; CS = caricoPer(p, 'arrivo'); location.hash = '#carico/keep'; if (current.name === 'carico') render(); };
@@ -2173,6 +2547,7 @@ async function init() {
   rebuildCodeIndex();
   try { await migraSprechi(); } catch (e) { }
   route();
+  avviaSync();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => { persistito = p; if (!p) navigator.storage.persist().then(v => { persistito = v; }); });
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     if (navigator.serviceWorker.controller) {
@@ -2190,7 +2565,7 @@ async function init() {
       });
     }).catch(() => { });
   }
-  window.__app = { S, onScan, parseScadenza, save, VERSIONE };
+  window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta };
 }
 init();
 })();
