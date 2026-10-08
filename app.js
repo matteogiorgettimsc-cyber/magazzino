@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.10.1';
+const VERSIONE = '1.11.0';
 
 /* =========================================================
    Utilità
@@ -255,13 +255,14 @@ function ultimoOrdine(pid) {
 }
 const giacenza = pid => r3(lottiAttivi().filter(l => l.prodottoId === pid).reduce((s, l) => s + (+l.quantita || 0), 0));
 const nameNorm = new WeakMap();
-function cerca(q, { fornitoreId = '', limit = 60, soloSenzaCodice = false, soloSfuso = false } = {}) {
+function cerca(q, { fornitoreId = '', limit = 60, soloSenzaCodice = false, soloSfuso = false, categoria = '' } = {}) {
   const nq = norm(q), words = nq ? nq.split(' ') : [], code = String(q || '').trim();
   const out = [];
   for (const p of S.prodotti.values()) {
     if (fornitoreId && p.fornitoreId !== fornitoreId) continue;
     if (soloSenzaCodice && (p.codici || []).length) continue;
     if (soloSfuso && !p.sfuso) continue;
+    if (categoria && (catDi(p) || SENZA_CAT) !== categoria) continue;
     if (!words.length) { out.push([p, 1]); continue; }
     if (code && (p.codici || []).includes(code)) { out.push([p, -1]); continue; }
     let n = nameNorm.get(p); if (!n) { n = norm(p.nome); nameNorm.set(p, n); }
@@ -1599,15 +1600,15 @@ function inviaOrdineModal(o) {
 /* =========================================================
    CATALOGO, PRODOTTO, FORNITORI
    ========================================================= */
-let CAT = { q: '', forn: '', limite: 60, senzaCodice: false, sfuso: false, sel: null };   // sel: prodotti scelti per eliminarli (null = scelta spenta)
-const filtroCat = (limit = CAT.limite) => cerca(CAT.q, { fornitoreId: CAT.forn, limit, soloSenzaCodice: CAT.senzaCodice, soloSfuso: CAT.sfuso });
+let CAT = { q: '', forn: '', cat: '', limite: 60, senzaCodice: false, sfuso: false, sel: null };   // sel: prodotti scelti per eliminarli (null = scelta spenta)
+const filtroCat = (limit = CAT.limite) => cerca(CAT.q, { fornitoreId: CAT.forn, limit, soloSenzaCodice: CAT.senzaCodice, soloSfuso: CAT.sfuso, categoria: CAT.cat });
 function catListHTML() {
   const res = filtroCat(), sel = CAT.sel;
   if (!res.total) return `<div class="empty">Nessun prodotto.</div>`;
   const prima = new Map();
   for (const l of lottiAttivi()) if (l.scadenza) { const x = prima.get(l.prodottoId); if (!x || l.scadenza < x) prima.set(l.prodottoId, l.scadenza); }
   const testa = sel
-    ? `<div class="row wrap"><b class="spacer" id="selN">${testoSel(sel.size, 'prodotto', 'prodotti')}</b><button class="btn small" type="button" data-act="cat-sel-tutti">Tutti i ${res.total}</button><button class="btn small" type="button" data-act="cat-sel-nessuno">Nessuno</button></div>`
+    ? `<div class="row wrap"><b class="spacer" id="selN">${testoSel(sel.size, 'prodotto', 'prodotti')}</b><button class="btn small" type="button" data-act="cat-sel-tutti">Tutti i ${res.total}</button><button class="btn small" type="button" data-act="cat-sel-nessuno">Nessuno</button><button class="btn small" type="button" data-act="cat-categoria">Categoria…</button></div>`
     : `<div class="row"><span class="faint spacer">${res.total} prodotti</span><button class="btn small" type="button" data-act="cat-sel">Seleziona</button></div>`;
   return `${testa}<div class="list">${res.items.map(p => {
     const g = giacenza(p.id), s = prima.get(p.id);
@@ -1639,6 +1640,7 @@ routes.catalogo = arg => {
     <div class="row wrap"><select id="catF" style="flex:1;min-width:200px"><option value="">Tutti i fornitori</option>${forn.map(f => `<option value="${esc(f.id)}" ${CAT.forn === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select>
       <label class="check"><input type="checkbox" id="catSC" ${CAT.senzaCodice ? 'checked' : ''}> Senza codice</label>
       <label class="check"><input type="checkbox" id="catSF" ${CAT.sfuso ? 'checked' : ''}> Sfuso</label></div>
+    <select id="catC"><option value="">Tutte le categorie</option>${[...categorieUsate().filter(c => [...S.prodotti.values()].some(p => catDi(p) === c)), SENZA_CAT].map(c => `<option value="${esc(c)}" ${CAT.cat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
     ${!CAT.sel && [...S.prodotti.values()].some(p => p.sfuso) ? '<a class="btn block" href="#etichette">Etichette dei contenitori sfusi</a>' : ''}
     <div id="catList" class="stack">${catListHTML()}</div>
     ${CAT.sel ? barraSel(CAT.sel.size, 'prodotto', 'prodotti', 'cat-elimina', 'cat-sel-fine') : '<button class="btn block" type="button" data-act="nuovo-prodotto">+ Nuovo prodotto</button>'}`;
@@ -1655,6 +1657,7 @@ routes.catalogo = arg => {
       b.querySelector('#catF').addEventListener('change', e => { CAT.forn = e.target.value; upd(); });
       b.querySelector('#catSC').addEventListener('change', e => { CAT.senzaCodice = e.target.checked; upd(); });
       b.querySelector('#catSF').addEventListener('change', e => { CAT.sfuso = e.target.checked; upd(); });
+      b.querySelector('#catC').addEventListener('change', e => { CAT.cat = e.target.value; upd(); });
     },
     onScan: code => { const p = byCode(code); if (p) location.hash = '#prodotto/' + encodeURIComponent(p.id); else collegaCodice(code, p2 => { location.hash = '#prodotto/' + encodeURIComponent(p2.id); }); }
   };
@@ -1702,7 +1705,8 @@ routes.prodotto = id => {
       <label class="field">Fornitore<select id="pForn"><option value="">— nessuno —</option>${forn.map(f => `<option value="${esc(f.id)}" ${p.fornitoreId === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></label>
       <div class="btn-grid" style="grid-template-columns:1fr 1fr">
         <label class="field">Formato<input type="text" id="pFormato" value="${esc(p.formato)}"></label>
-        <label class="field">Categoria<input type="text" id="pCat" value="${esc(p.categoria)}"></label></div>
+        <label class="field">Categoria<input type="text" id="pCat" list="pCatLista" value="${esc(p.categoria)}" autocomplete="off"></label></div>
+      <datalist id="pCatLista">${categorieUsate().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
       <label class="field">Tipo di scadenza<select id="pTipo"><option value="preferibilmente" ${p.tipoScadenza !== 'entro' ? 'selected' : ''}>Preferibilmente entro (secchi, conserve)</option><option value="entro" ${p.tipoScadenza === 'entro' ? 'selected' : ''}>Da consumarsi entro (freschi)</option></select></label>
       <div class="field" style="font-weight:600">Codici a barre
         <div class="row wrap" id="pCodici">${codiciHtml(p)}</div></div>
@@ -2570,6 +2574,9 @@ routes.cruscotto = () => {
       ${n.senzaCosto ? `<div class="faint small">${n.senzaCosto === 1 ? '1 prodotto venduto non ha' : n.senzaCosto + ' prodotti venduti non hanno'} prezzo d'acquisto o IVA: non ${n.senzaCosto === 1 ? 'è contato' : 'sono contati'} nel margine.</div>` : ''}
       <div class="faint small">Con il ricarico del 50% il margine è circa il 33%; con il 40%, circa il 29%. Frutta e verdura non sono contate.</div></div>`;
   if (n.piuVenduti.length) html += `<div class="section-title"><h2>Più venduti</h2></div><div class="list venduti">${n.piuVenduti.map(([pid, e]) => { const p = prodotto(pid); return `<a class="item" href="#prodotto/${encodeURIComponent(pid)}"><div class="main"><div class="name">${esc(p ? p.nome : '?')}</div><div class="sub">${fq(p, r3(e.qta))}</div></div><span class="prezzo">${fmtEuro(r2(e.imp))}</span></a>`; }).join('')}</div>`;
+  const vc = venditeCategorie(CRU);
+  if (vc.lista.some(e => e.imp > 0)) html += `<div class="section-title"><h2>Per categoria</h2></div>${barreHTML(vc.lista.filter(e => e.imp > 0).slice(0, 5).map(e => ({ nome: e.nome, valore: e.imp, href: '#categoria/' + encodeURIComponent(e.nome), sotto: Math.round(e.quota) + '% del venduto' + (e.perc != null ? ' · margine ' + fmtNum(e.perc) + '%' : '') })), vc.lista[0].imp)}`;
+  html += `<a class="btn block" href="#categorie">Vendite per categoria e grafici</a>`;
   html += `<div class="section-title"><h2>Merce</h2></div><div class="stats" style="grid-template-columns:1fr 1fr">
       <div class="stat"><b class="euro">${fmtEuro(m.valore)}</b><span>In negozio, al prezzo d'acquisto</span></div>
       <a class="stat ${n.sprechi ? 'red' : ''}" href="#sprechi"><b class="euro">${fmtEuro(n.sprechi)}</b><span>Buttati nel periodo · ${n.nSprechi}</span></a></div>`;
@@ -2741,6 +2748,10 @@ function fogliRiepilogo(mese) {
       [T('Totale'), '', '', { et: d.totPagati }], [],
       [T('Ancora da pagare (scadenze del mese)')],
       ...d.daPagare.map(x => [D(x.data), x.nome, x.k === 'f' ? 'fattura ' + x.fa.numero : 'spesa', E(x.importo)])] },
+    { nome: 'Categorie', larghezze: [30, 16, 22, 16, 12], righe: [
+      ['Categoria', 'Venduto', 'Quantità', 'Margine', 'Margine %'].map(T),
+      ...venditeMese(mese).lista.filter(e => e.imp).map(e => [e.nome, E(e.imp), qtaCat(e), E(r2(e.ricavo - e.costo)), e.perc != null ? e.perc : '']),
+      [], ['Vendite scansionate al banco; margine sul prezzo senza IVA, con il prezzo d\'acquisto di oggi.']] },
     { nome: 'Merce buttata', larghezze: [12, 34, 14, 22, 14], righe: [
       ['Giorno', 'Prodotto', 'Quantità', 'Motivo', 'Valore (costo)'].map(T),
       ...d.sprechi.map(r => { const p = prodotto(r.prodottoId); return [D(r.data), p ? p.nome : '?', p && isSfuso(p) ? fmtSf(p, r.qta) : r.qta, r.motivo, E(valoreSpreco(r))]; }),
@@ -2823,6 +2834,181 @@ function cassaModal(data, mese) {
     };
   });
 }
+
+/* =========================================================
+   CATEGORIE: cosa si vende di più e di meno, con i grafici
+   - la categoria è un campo libero del prodotto; c'è un elenco di base
+   - "Proponi dal nome" la scrive per i prodotti che non ce l'hanno (si può annullare)
+   ========================================================= */
+const CATEGORIE_BASE = ['Pasta', 'Riso e cereali', 'Farine', 'Legumi', 'Frutta secca e semi', 'Biscotti, snack e dolci', 'Pane e forno', 'Latte, formaggi e freschi', 'Olio, aceto e condimenti', 'Conserve e sughi', 'Spezie e sale', 'Caffè, tè e tisane', 'Miele, marmellate e creme', 'Zucchero e dolcificanti', 'Bevande', 'Detersivi e casa', 'Cura della persona', 'Frutta e verdura', 'Altro'];
+const SENZA_CAT = 'Senza categoria';
+const catDi = p => (p && p.categoria || '').trim();
+const categorieUsate = () => [...new Set([...CATEGORIE_BASE, ...[...S.prodotti.values()].map(catDi).filter(Boolean)])].sort((a, b) => a.localeCompare(b, 'it'));
+/* l'ordine conta: «farina di ceci» è una farina, «biscotti di farro» sono biscotti, «latte di avena» è una bevanda */
+const REGOLE_CAT = [
+  ['Detersivi e casa', /\b(detersiv|detergent|ammorbident|bucato|lavatrice|lavastoviglie|sgrassat|anticalcare|candeggin|percarbonat|acido citrico|bicarbonato|sapone (di )?marsiglia|spugn|pavimenti|vetri|igienizz|piatti a mano)/],
+  ['Cura della persona', /\b(shampoo|balsamo capelli|bagnoschiuma|docciaschiuma|dentifric|deodorant|crema (viso|corpo|mani)|saponett|sapone liquido|struccant|spazzolin|assorbent|burrocacao|cosmet)/],
+  ['Farine', /\b(farina|farine|semola|amido|fecola|lievito|crusca)/],
+  ['Bevande', /\b(succo|succhi|bevanda|drink|latte (di |d )?(avena|soia|riso|mandorl|cocco|nocciol|farro|anacard)|acqua|vino|birra|kombucha|spremut|nettare)/],
+  ['Caffè, tè e tisane', /\b(caffe|orzo solubile|cicoria solubile|te (verde|nero|bianco|rosso)|the\b|tisan|infuso|camomill|rooibos|matcha|cacao)/],
+  ['Pasta', /\b(pasta|spaghett|penne|fusill|maccheron|rigaton|tagliatell|lasagn|linguin|farfall|orecchiett|gnocch|couscous|cous cous|bulgur|tortellin|raviol|noodle|vermicell|ditalin|mezze maniche|paccher|trofie|strozzapret|bucatin|sedanin|conchigli|tagliolin|pappardell|casarecc|mafald|stellin)/],
+  ['Biscotti, snack e dolci', /\b(biscott|cracker|gallett|grissin|taralli|fette biscottate|wafer|cioccolat|barrett|snack|chips|merendin|torta|crostat|plumcake|frollin|amaretti|cantucci|torrone|caramell|pop ?corn|merenda|pasticcin|panettone|pandoro|colomba)/],
+  ['Pane e forno', /\b(pane|panin|focacc|pizza|piadin|pancarre|schiacciat|frisell)/],
+  ['Miele, marmellate e creme', /\b(miele|marmellat|confettur|composta|spalmabil|crema (di|al|alla) (nocciol|mandorl|pistacch|arachid|cacao)|burro di (arachidi|mandorl|nocciol|anacard|cacao)|tahin|sciroppo d acero|malto)/],
+  ['Zucchero e dolcificanti', /\b(zucchero|dolcificant|stevia|eritritolo|sciroppo d agave|fruttosio)/],
+  ['Olio, aceto e condimenti', /\b(olio|aceto|salsa di soia|tamari|shoyu|senape|maionese|ketchup|condiment|glassa|gomasio|miso)\b/],
+  ['Conserve e sughi', /\b(passata|pelati|polpa di pomodoro|pomodor|sugo|sughi|pesto|ragu|conserv|sottolio|sott olio|sottaceto|olive|capperi|carciofin|zuppa|minestr|vellutat|brodo|dado|crema di (verdur|carciof|zucca|funghi))/],
+  ['Latte, formaggi e freschi', /\b(latte|yogurt|yoghurt|kefir|formagg|mozzarell|ricott|burro|panna|stracchin|parmigian|pecorin|grana|uova|uovo|affettat|prosciutt|salam|bresaola|stracciatell|scamorz|caciott|feta|tofu|tempeh|seitan)/],
+  ['Riso e cereali', /\b(riso|quinoa|miglio|grano saraceno|orzo|farro|avena|fiocchi|muesli|granola|amaranto|sorgo|polenta|mais|corn ?flakes|cereali|teff|kamut|segale)/],
+  ['Legumi', /\b(ceci|lenticch|fagiol|piselli|lupin|soia|cicerchi|fave|azuki|edamame|hummus|legumi)/],
+  ['Frutta secca e semi', /\b(mandorl|noci|nocciol|anacard|pistacch|arachid|pinoli|semi|uvetta|uva sultanina|datter|fichi secchi|albicocche secche|prugne|goji|mirtilli rossi|cranberr|frutta secca|disidratat|essiccat|cocco|candit|scorze|bacche)/],
+  ['Spezie e sale', /\b(sale|spezi|pepe|curcuma|paprika|cannella|zenzero|origano|rosmarino|basilico|timo|curry|noce moscata|chiodi di garofano|cumino|peperoncino|erbe|vaniglia|alloro|salvia)\b/],
+  ['Frutta e verdura', /\b(mele|pere|banan|aranc|limon|mandarin|kiwi|patate|zucchin|carot|insalat|lattuga|cipoll|aglio|melanzan|peperon|spinac|cavol|broccol|finocch|sedano|verdur|frutta fresca)/],
+];
+function categoriaDalNome(nome) { const n = norm(nome); for (const [c, re] of REGOLE_CAT) if (re.test(n)) return c; return ''; }
+function proponiCategorie() {
+  const prop = [...S.prodotti.values()].filter(p => !catDi(p)).map(p => [p, categoriaDalNome(p.nome)]);
+  const si = prop.filter(x => x[1]), conta = new Map();
+  for (const [, c] of si) conta.set(c, (conta.get(c) || 0) + 1);
+  if (!prop.length) { toast('Tutti i prodotti hanno già una categoria'); return; }
+  openModal(`${mhead('Categorie dal nome')}
+    <p style="margin:0">Riconosco la categoria di <b>${si.length}</b> prodotti su ${prop.length} senza categoria.</p>
+    ${si.length ? `<div class="list">${[...conta.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `<div class="item"><div class="main"><div class="name">${esc(c)}</div></div><b>${n}</b></div>`).join('')}</div>` : ''}
+    <p class="muted small" style="margin:0">Quelli che non riconosco restano «${SENZA_CAT}»: si sistemano dal Catalogo (Seleziona → Categoria) o nella scheda del prodotto. Le categorie già scritte non cambiano.</p>
+    ${si.length ? `<button class="btn primary block" type="button" data-x="ok">Scrivi le categorie (${si.length})</button>` : ''}
+    <button class="btn block" type="button" data-act="close-modal">${si.length ? 'Non ora' : 'Chiudi'}</button>`, b => {
+    const ok = b.querySelector('[data-x=ok]');
+    if (ok) ok.onclick = async () => {
+      const prima = si.map(([p]) => ({ ...p }));
+      await saveMany('prodotti', si.map(([p, c]) => ({ ...p, categoria: c })));
+      closeModal(); render();
+      setTimeout(() => toast(`Categoria scritta per ${si.length} prodotti`, { action: { label: 'Annulla', run: async () => { await saveMany('prodotti', prima.map(p => ({ ...S.prodotti.get(p.id) || p, categoria: '' }))); render(); } } }), 120);
+    };
+  });
+}
+function categoriaModal(ids) {
+  openModal(`${mhead('Categoria')}
+    <p class="muted small" style="margin:0">${ids.length === 1 ? '1 prodotto scelto' : ids.length + ' prodotti scelti'}.</p>
+    <label class="field">Categoria<input type="text" id="cgNome" list="cgLista" autocomplete="off" placeholder="scegli o scrivi"></label>
+    <datalist id="cgLista">${categorieUsate().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+    <button class="btn primary block" type="button" data-x="ok">Salva</button>`, b => {
+    b.querySelector('[data-x=ok]').onclick = async () => {
+      const c = b.querySelector('#cgNome').value.trim();
+      const prima = ids.map(id => S.prodotti.get(id)).filter(Boolean).map(p => ({ ...p }));
+      await saveMany('prodotti', prima.map(p => ({ ...p, categoria: c })));
+      CAT.sel = null; closeModal(); render();
+      setTimeout(() => toast(`${c || SENZA_CAT}: ${prima.length === 1 ? '1 prodotto' : prima.length + ' prodotti'}`, { action: { label: 'Annulla', run: async () => { await saveMany('prodotti', prima.map(p => ({ ...(S.prodotti.get(p.id) || p), categoria: p.categoria || '' }))); render(); } } }), 120);
+    };
+  });
+}
+/* vendite di un periodo raggruppate per categoria e per prodotto */
+function venditeCategorie(f) {
+  const [da, a] = Array.isArray(f) ? f : periodo(f), per = new Map(), nuova = () => ({ imp: 0, ricavo: 0, costo: 0, pz: 0, kg: 0, l: 0, prodotti: new Map(), merce: 0, sprechi: 0 });
+  const voce = c => { if (!per.has(c)) per.set(c, nuova()); return per.get(c); };
+  let totale = 0;
+  for (const v of S.vendite.values()) {
+    if (!v.prodottoId || v.data < da || v.data > a) continue;
+    const imp = importo(v); if (imp == null) continue;
+    const p = prodotto(v.prodottoId), e = voce(catDi(p) || SENZA_CAT), q = v.qta * segnoVendita(v);
+    e.imp += imp; totale += imp;
+    if (!isSfuso(p)) e.pz += q; else if (inLitri(p)) e.l += q; else e.kg += q;
+    if (p && p.prezzoAcquisto != null && p.iva != null) { e.ricavo += imp / (1 + p.iva / 100); e.costo += p.prezzoAcquisto * q; }
+    const x = e.prodotti.get(v.prodottoId) || { imp: 0, qta: 0 }; x.imp += imp; x.qta += q; e.prodotti.set(v.prodottoId, x);
+  }
+  for (const l of lottiAttivi()) { const p = prodotto(l.prodottoId); if (p && p.prezzoAcquisto != null && l.quantita > 0) voce(catDi(p) || SENZA_CAT).merce += p.prezzoAcquisto * l.quantita; }
+  for (const r of S.sprechi.values()) if (r.data >= da && r.data <= a && perso(r)) voce(catDi(prodotto(r.prodottoId)) || SENZA_CAT).sprechi += valoreSpreco(r) || 0;
+  const lista = [...per.entries()].map(([nome, e]) => ({ nome, ...e, imp: r2(e.imp), perc: e.ricavo > 0 ? Math.round((e.ricavo - e.costo) / e.ricavo * 1000) / 10 : null, quota: totale ? e.imp / totale * 100 : 0 }))
+    .sort((x, y) => y.imp - x.imp || y.merce - x.merce);
+  return { da, a, lista, totale: r2(totale) };
+}
+const venditeMese = mese => venditeCategorie([`${mese}-01`, `${mese}-31`]);
+const qtaCat = e => [e.pz ? `${fmtNum(r3(e.pz))} pz` : '', e.kg ? fmtKg(e.kg) : '', e.l ? fmtLitri(e.l) : ''].filter(Boolean).join(' + ');
+/* barre orizzontali: una riga per voce (nome e valore sopra, barra sotto), dal più al meno */
+function barreHTML(voci, max) {
+  return `<div class="list barre">${voci.map(v => `<a class="item hbar" href="${v.href}"><div class="main"><div class="hb-testa"><span class="name">${esc(v.nome)}</span><b>${fmtEuro(v.valore)}</b></div>
+    <div class="hb-traccia" aria-hidden="true"><i style="width:${max > 0 ? Math.max(v.valore > 0 ? 1.5 : 0, v.valore / max * 100).toFixed(1) : 0}%"></i></div>
+    ${v.sotto ? `<div class="sub">${v.sotto}</div>` : ''}</div><span class="chev">›</span></a>`).join('')}</div>`;
+}
+/* andamento nel tempo: colonne (un giorno o un mese ciascuna), una serie alla volta */
+let VC = { periodo: 'mese', serie: 'cassa' };
+function puntiAndamento(f, serie) {
+  const [da, a] = periodo(f), mesi = f === 'anno';
+  const chiave = d => mesi ? d.slice(0, 7) : d, punti = new Map();
+  if (mesi) { const [y, m] = a.split('-').map(Number); for (let i = 11; i >= 0; i--) { const x = new Date(y, m - 1 - i, 1); punti.set(`${x.getFullYear()}-${pad(x.getMonth() + 1)}`, 0); } }
+  else { for (let d = isoToDate(da); todayISO(d) <= a; d.setDate(d.getDate() + 1)) punti.set(todayISO(d), 0); }
+  if (serie === 'cassa') { for (const c of S.chiusure.values()) if (c.data >= da && c.data <= a && punti.has(chiave(c.data))) punti.set(chiave(c.data), punti.get(chiave(c.data)) + (+c.incasso || 0)); }
+  else for (const v of S.vendite.values()) if (v.data >= da && v.data <= a && punti.has(chiave(v.data))) { const imp = importo(v); if (imp != null) punti.set(chiave(v.data), punti.get(chiave(v.data)) + imp); }
+  return { mesi, punti: [...punti.entries()].map(([k, val]) => ({ k, val: r2(val) })) };
+}
+function colonneSVG({ mesi, punti }) {
+  const W = 340, H = 170, L = 44, B = 22, T = 8, n = punti.length, max = Math.max(...punti.map(p => p.val), 0);
+  if (!max) return '<div class="empty" style="padding:18px">Niente da mostrare in questo periodo.</div>';
+  const mag = 10 ** Math.floor(Math.log10(max)), top = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map(x => x * mag).find(x => x >= max - 1e-9);
+  const y = v => T + (H - T - B) * (1 - v / top);
+  const larg = (W - L) / n, bw = Math.max(2, larg - 2);
+  const etichetta = p => mesi ? MESI[+p.k.slice(5) - 1].slice(0, 3) : String(+p.k.slice(8));
+  const ogni = mesi ? 1 : n > 20 ? 5 : n > 10 ? 2 : 1;
+  let g = '';
+  for (const v of [0, top / 2, top]) g += `<line x1="${L}" x2="${W}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" class="ch-grid"/><text x="${L - 6}" y="${(y(v) + 3.5).toFixed(1)}" class="ch-asse" text-anchor="end">${v >= 1000 ? fmtNum(Math.round(v / 100) / 10) + 'k' : Math.round(v)}</text>`;
+  punti.forEach((p, i) => {
+    const x = L + i * larg + 1, h = y(0) - y(p.val), r = Math.min(4, bw / 2, h);
+    if (p.val > 0) g += `<path class="ch-bar" data-i="${i}" d="M${x.toFixed(1)},${y(0).toFixed(1)} v${(-h + r).toFixed(1)} q0,${(-r).toFixed(1)} ${r.toFixed(1)},${(-r).toFixed(1)} h${(bw - 2 * r).toFixed(1)} q${r.toFixed(1)},0 ${r.toFixed(1)},${r.toFixed(1)} v${(h - r).toFixed(1)} z"/>`;
+    g += `<rect class="ch-hit" data-i="${i}" x="${(L + i * larg).toFixed(1)}" y="${T}" width="${larg.toFixed(1)}" height="${H - T}"><title>${esc(nomePunto(p, mesi))}: ${fmtEuro(p.val)}</title></rect>`;
+    if (i % ogni === 0 || i === n - 1 && !mesi && (n - 1) % ogni > ogni / 2) g += `<text x="${(L + i * larg + larg / 2).toFixed(1)}" y="${H - 6}" class="ch-asse" text-anchor="middle">${etichetta(p)}</text>`;
+  });
+  return `<svg class="grafico" viewBox="0 0 ${W} ${H}" role="img" aria-label="Andamento">${g}</svg>`;
+}
+const nomePunto = (p, mesi) => mesi ? nomeMese(p.k) : nomeGiorno(p.k);
+routes.categorie = () => {
+  const d = venditeCategorie(VC.periodo), senza = [...S.prodotti.values()].filter(p => !catDi(p)).length;
+  const and = puntiAndamento(VC.periodo, VC.serie), totA = r2(and.punti.reduce((t, p) => t + p.val, 0));
+  const conV = and.punti.filter(p => p.val > 0), media = conV.length ? r2(totA / conV.length) : 0;
+  const migliore = conV.reduce((m, p) => !m || p.val > m.val ? p : m, null);
+  let html = `<div class="chips">${PERIODI_CRU.map(([k, l]) => `<button class="chip ${VC.periodo === k ? 'on' : ''}" type="button" data-act="vc-periodo" data-f="${k}">${l}</button>`).join('')}</div>`;
+  html += `<div class="card"><div class="row"><h3 class="spacer" style="margin:0">Andamento</h3>
+      <div class="segmented mini"><button type="button" class="${VC.serie === 'cassa' ? 'on' : ''}" data-act="vc-serie" data-s="cassa">Cassa</button><button type="button" class="${VC.serie === 'app' ? 'on' : ''}" data-act="vc-serie" data-s="app">Scansionato</button></div></div>
+      <div class="faint small" id="vcInfo">${VC.serie === 'cassa' ? 'Incassi dalle chiusure di cassa' : 'Vendite scansionate nell\'app'}, ${and.mesi ? 'mese per mese' : 'giorno per giorno'}. Tocca una colonna.</div>
+      ${colonneSVG(and)}
+      <dl class="kv"><dt>Totale</dt><dd>${fmtEuro(totA)}</dd><dt>Media ${and.mesi ? 'al mese' : 'al giorno'}</dt><dd>${conV.length ? fmtEuro(media) : '–'}</dd>${migliore ? `<dt>${and.mesi ? 'Mese migliore' : 'Giorno migliore'}</dt><dd>${esc(nomePunto(migliore, and.mesi))}: ${fmtEuro(migliore.val)}</dd>` : ''}</dl></div>`;
+  if (senza) html += `<div class="notice"><span class="spacer"><b>${senza}</b> ${senza === 1 ? 'prodotto è' : 'prodotti sono'} senza categoria.</span><button class="btn small" type="button" data-act="cat-proponi">Proponi dal nome</button></div>`;
+  html += `<div class="section-title"><h2>Per categoria</h2><span class="count">${fmtEuro(d.totale)}</span></div>`;
+  html += d.lista.length ? barreHTML(d.lista.map(e => ({
+    nome: e.nome, valore: e.imp, href: '#categoria/' + encodeURIComponent(e.nome),
+    sotto: e.imp ? [qtaCat(e), Math.round(e.quota) + '% del venduto', e.perc != null ? 'margine ' + fmtNum(e.perc) + '%' : ''].filter(Boolean).join(' · ') : `nessuna vendita · in negozio ${fmtEuro(r2(e.merce))} di merce`
+  })), d.lista[0].imp) : '<div class="empty">Nessuna vendita scansionata in questo periodo.</div>';
+  html += `<div class="faint small">Dalla più venduta alla meno venduta. Contano le vendite scansionate al banco (frutta e verdura no). Tocca una categoria per vedere i suoi prodotti.</div>`;
+  return {
+    title: 'Vendite e grafici', html, back: '#cruscotto', tab: 'home',
+    mount: b => {
+      const svg = b.querySelector('svg.grafico'), info = b.querySelector('#vcInfo'); if (!svg) return;
+      svg.addEventListener('click', e => {
+        const r = e.target.closest('[data-i]'); if (!r) return;
+        const p = and.punti[+r.dataset.i];
+        svg.querySelectorAll('.ch-bar.on').forEach(x => x.classList.remove('on'));
+        const bar = svg.querySelector(`.ch-bar[data-i="${r.dataset.i}"]`); if (bar) bar.classList.add('on');
+        info.innerHTML = `<b>${esc(nomePunto(p, and.mesi))}</b>: ${fmtEuro(p.val)}`;
+      });
+    }
+  };
+};
+routes.categoria = arg => {
+  const nome = arg || SENZA_CAT, d = venditeCategorie(VC.periodo), e = d.lista.find(x => x.nome === nome);
+  const prodotti = [...S.prodotti.values()].filter(p => (catDi(p) || SENZA_CAT) === nome);
+  const venduti = e ? [...e.prodotti.entries()].map(([pid, x]) => ({ p: prodotto(pid), ...x })).filter(x => x.p && x.imp > 0).sort((a, b) => b.imp - a.imp) : [];
+  const conVendite = new Set(venduti.map(x => x.p.id));
+  const fermi = prodotti.filter(p => !conVendite.has(p.id) && giacenza(p.id) > 0).map(p => ({ p, g: giacenza(p.id), val: (p.prezzoAcquisto || 0) * giacenza(p.id) })).sort((a, b) => b.val - a.val);
+  let html = `<div class="chips">${PERIODI_CRU.map(([k, l]) => `<button class="chip ${VC.periodo === k ? 'on' : ''}" type="button" data-act="vc-periodo" data-f="${k}">${l}</button>`).join('')}</div>
+    <div class="stats" style="grid-template-columns:1fr 1fr"><div class="stat green"><b class="euro">${fmtEuro(e ? e.imp : 0)}</b><span>Venduto · ${e ? Math.round(e.quota) : 0}% del totale</span></div>
+      <div class="stat"><b class="euro">${e && e.perc != null ? fmtNum(e.perc) + '%' : '–'}</b><span>Margine</span></div></div>`;
+  html += `<div class="section-title"><h2>I più venduti</h2><span class="count">${venduti.length}</span></div>`;
+  html += venduti.length ? barreHTML(venduti.slice(0, 15).map(x => ({ nome: x.p.nome, valore: r2(x.imp), href: '#prodotto/' + encodeURIComponent(x.p.id), sotto: fq(x.p, r3(x.qta)) })), venduti[0].imp) : '<div class="empty">Nessuna vendita in questo periodo.</div>';
+  if (venduti.length > 15) html += `<div class="faint small">E altri ${venduti.length - 15} prodotti venduti meno.</div>`;
+  if (venduti.length > 3) html += `<div class="section-title"><h2>I meno venduti</h2></div><div class="list">${venduti.slice(-3).reverse().map(x => `<a class="item" href="#prodotto/${encodeURIComponent(x.p.id)}"><div class="main"><div class="name">${esc(x.p.nome)}</div><div class="sub">${fq(x.p, r3(x.qta))}</div></div><span class="prezzo">${fmtEuro(r2(x.imp))}</span></a>`).join('')}</div>`;
+  if (fermi.length) html += `<div class="section-title"><h2>In negozio ma non venduti</h2><span class="count">${fermi.length}</span></div><div class="list">${fermi.slice(0, 10).map(x => `<a class="item" href="#prodotto/${encodeURIComponent(x.p.id)}"><div class="main"><div class="name">${esc(x.p.nome)}</div><div class="sub">in negozio ${fq(x.p, x.g)}</div></div><span class="prezzo">${x.val ? fmtEuro(r2(x.val)) : ''}</span></a>`).join('')}</div>
+    <div class="faint small">Nessuna vendita nel periodo scelto. Valore al prezzo d'acquisto.</div>`;
+  html += `<button class="btn block" type="button" data-act="cat-vedi" data-c="${esc(nome)}">Vedi i ${prodotti.length} prodotti nel Catalogo</button>`;
+  return { title: nome, html, back: '#categorie', tab: 'home' };
+};
 
 /* =========================================================
    SINCRONIZZAZIONE tra i dispositivi del negozio (Firebase)
@@ -3202,6 +3388,11 @@ A['fa-pag-fatto'] = async el => {
 };
 A['cru-periodo'] = el => { CRU = el.dataset.f; render(); };
 A['cassa-nuova'] = el => cassaModal(null, el.dataset.m);
+A['vc-periodo'] = el => { VC.periodo = el.dataset.f; render(); };
+A['vc-serie'] = el => { VC.serie = el.dataset.s; render(); };
+A['cat-proponi'] = () => proponiCategorie();
+A['cat-vedi'] = el => { CAT = { ...CAT, q: '', forn: '', cat: el.dataset.c, senzaCodice: false, sfuso: false, limite: 60, sel: null }; location.hash = '#catalogo'; };
+A['cat-categoria'] = () => { const ids = [...(CAT.sel || [])].filter(id => S.prodotti.has(id)); if (!ids.length) { toast('Scegli prima i prodotti', { err: true }); return; } categoriaModal(ids); };
 A['cassa-mod'] = el => cassaModal(el.dataset.d);
 A['riep-excel'] = el => riepilogoExcel(el.dataset.m).catch(e => toast('Non riesco a preparare il file: ' + e.message, { err: true }));
 A['pag-segna'] = async el => {

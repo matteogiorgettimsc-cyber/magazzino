@@ -13,5 +13,7 @@ App per il negozio: vendita al banco, scadenze e ordini, funziona anche senza in
 - Pagamenti (dalla 1.10.0): Fatture e pagamenti → "Pagamenti": le scadenze delle fatture più le altre spese (affitto, bollette…), anche ripetute ogni mese o ogni anno. Segnata pagata una spesa che si ripete, l'app prepara la successiva.
 - Cruscotto (dalla 1.10.0): Home → "Cruscotto": cosa c'è da fare, incassi dalle chiusure, fatture e spese del periodo, margine stimato sulle vendite scansionate, valore della merce, merce ferma da 60 giorni.
 - Riepilogo del mese (dalla 1.10.0): dal Cruscotto. Incassi giorno per giorno, fatture con IVA per aliquota, spese e pagamenti; "Scarica in Excel" prepara un file .xlsx con un foglio per ogni parte.
+- Storico di cassa (dalla 1.10.1): dal Cruscotto o da Chiusura di oggi; gli incassi giorno per giorno, da correggere o cancellare.
+- Categorie e grafici (dalla 1.11.0): Cruscotto → "Vendite per categoria e grafici": andamento degli incassi (colonne), vendite per categoria dalla più alla meno venduta, e per ogni categoria i prodotti più e meno venduti. "Proponi dal nome" scrive la categoria ai prodotti che non ce l'hanno; dal Catalogo, Seleziona → Categoria… per più prodotti insieme.
 - Backup: dall'app, pulsante "Fai backup", poi salva il file su Drive. Dalla versione 1.3.0 il backup contiene anche le vendite.
 

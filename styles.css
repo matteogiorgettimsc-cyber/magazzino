@@ -418,3 +418,17 @@ table.tab .n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nu
 table.tab th.n{text-align:right}
 table.tab tr.tot td{font-weight:700;background:var(--surface-alt)}
 @media (min-width:640px){ .stats.cru{grid-template-columns:repeat(4,1fr)} }
+
+/* grafici */
+.barre .hbar{align-items:center}
+.hb-testa{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.hb-testa b{font-variant-numeric:tabular-nums;white-space:nowrap}
+.hb-traccia{height:10px;background:var(--surface-alt);border-radius:0 5px 5px 0;overflow:hidden}
+.hb-traccia i{display:block;height:100%;background:var(--accent-mid);border-radius:0 4px 4px 0}
+svg.grafico{width:100%;height:auto;display:block;touch-action:manipulation}
+.ch-grid{stroke:var(--line);stroke-width:1}
+.ch-asse{fill:var(--ink-faint);font-size:10px;font-family:inherit}
+.ch-bar{fill:var(--accent-mid)}
+.ch-bar.on{fill:var(--accent)}
+.ch-hit{fill:transparent;cursor:pointer}
+.ch-hit:hover + .ch-bar,.ch-bar:hover{fill:var(--accent)}
