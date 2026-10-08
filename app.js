@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.8.0';
+const VERSIONE = '1.8.1';
 
 /* =========================================================
    Utilità
@@ -164,7 +164,11 @@ function dopoLotti(coppie) {
   const c = l => l && l.stato === 'attivo' ? (+l.quantita || 0) : 0;
   const delta = new Map();
   for (const [prev, obj] of coppie) { const pid = (obj || prev).prodottoId; delta.set(pid, (delta.get(pid) || 0) + c(obj) - c(prev)); }
-  for (const [pid, d] of delta) if (d < 0) { const dopo = giacenza(pid); controllaScorta(pid, r3(dopo - d), dopo); }
+  for (const [pid, d] of delta) {
+    const dopo = giacenza(pid);
+    if (d < 0) controllaScorta(pid, r3(dopo - d), dopo);
+    else if (d > 0 && (S.meta.riordinoTolti || {})[pid]) { const s = sogliaScorta(prodotto(pid)); if (s == null || dopo > s) setTimeout(() => segnaTolto(pid, false), 0); }
+  }
 }
 async function removeMany(store, ids) {
   const prev = ids.map(id => S[store].get(id)).filter(Boolean);
@@ -1436,7 +1440,51 @@ async function togliDaOrdine(pid) {
   const p = prodotto(pid), o = p && ordineAperto(p.fornitoreId);
   if (!o) return;
   await save('ordini', { ...o, righe: o.righe.filter(r => r.prodottoId !== pid) });
+  await segnaTolto(pid, true);
   toast(`Tolto da Da ordinare: ${p.nome}`); render();
+}
+/* tolto a mano da Da ordinare: non ce lo rimetto finché la merce non risale sopra la soglia */
+async function segnaTolto(pid, si) {
+  const t = { ...(S.meta.riordinoTolti || {}) };
+  if (si ? t[pid] : !t[pid]) return;
+  if (si) t[pid] = todayISO(); else delete t[pid];
+  await setMeta('riordinoTolti', t);
+}
+/* controllo di tutte le scorte: prodotti già contati (con almeno una confezione registrata, anche finita)
+   che sono alla soglia o sotto, e non ancora ordinati. Serve per la merce caricata con pochi pezzi
+   (inventario, arrivi) e per quello che è finito prima della 1.8.0. */
+function daRiordinare() {
+  const g = new Map(), contati = new Set();
+  for (const l of S.lotti.values()) { contati.add(l.prodottoId); if (l.stato === 'attivo') g.set(l.prodottoId, (g.get(l.prodottoId) || 0) + (+l.quantita || 0)); }
+  const tolti = S.meta.riordinoTolti || {}, out = [];
+  for (const p of S.prodotti.values()) {
+    if (!contati.has(p.id) || !p.fornitoreId || tolti[p.id]) continue;
+    const s = sogliaScorta(p);
+    if (s == null || r3(g.get(p.id) || 0) > s) continue;
+    const o = ordineAperto(p.fornitoreId);
+    if (o && o.righe.some(r => r.prodottoId === p.id)) continue;
+    if (inArrivo(p.id)) continue;
+    out.push(p);
+  }
+  return out;
+}
+let controlloInCorso = false;
+async function controlloScorte({ avviso = true } = {}) {
+  if (controlloInCorso) return 0;
+  controlloInCorso = true;
+  try {
+    // chi è risalito sopra la soglia esce dai «tolti»
+    const t = S.meta.riordinoTolti || {}, via = Object.keys(t).filter(pid => { const p = prodotto(pid), s = sogliaScorta(p); return !p || s == null || giacenza(pid) > s; });
+    if (via.length) { const n = { ...t }; via.forEach(k => delete n[k]); await setMeta('riordinoTolti', n); }
+    const lista = daRiordinare();
+    for (const p of lista) { const u = ultimoOrdine(p.id); await aggiungiOrdine(p.id, u && u.qta > 0 ? u.qta : 1, { silent: true, auto: true }); }
+    if (lista.length) {
+      aggiornaBadge();
+      if (avviso) toast(lista.length === 1 ? `Sta finendo ${lista[0].nome}: messo in Da ordinare` : `${lista.length} prodotti stanno finendo: messi in Da ordinare`,
+        { action: { label: 'Vedi', run: () => { location.hash = '#ordini'; } } });
+    }
+    return lista.length;
+  } finally { controlloInCorso = false; }
 }
 async function aggiungiOrdine(pid, qta = 1, { silent = false, auto = false } = {}) {
   const p = prodotto(pid); if (!p) return;
@@ -1499,6 +1547,7 @@ function ordiniHTML() {
 routes.ordini = () => ({
   title: 'Ordini', html: ordiniHTML(), tab: 'ordini',
   mount: b => {
+    if (current.fresh) controlloScorte({ avviso: false }).then(n => { if (n && current.name === 'ordini') render(); });
     b.addEventListener('change', async e => {
       const i = e.target.closest('[data-riga]'); if (!i) return;
       const [oid, pid] = i.dataset.riga.split('|'); const o = S.ordini.get(oid); const v = Math.max(0, parseInt(i.value, 10) || 0);
@@ -1529,6 +1578,7 @@ function inviaOrdineModal(o) {
     on('copia', async () => { try { await navigator.clipboard.writeText(txt()); toast('Testo copiato'); } catch (e) { b.querySelector('#ordTxt').select(); toast('Seleziona e copia il testo', { err: true }); } });
     on('share', () => condividiTesto(txt(), 'Testo'));
     on('fatto', async () => {
+      for (const r of o.righe) if (!(r.qta > 0)) await segnaTolto(r.prodottoId, true);   // messo a 0: non serviva
       await save('ordini', { ...o, stato: 'inviato', inviato: todayISO(), righe: o.righe.filter(r => r.qta > 0), testo: txt() });
       closeModal(); toast('Ordine segnato come inviato'); render();
     });
@@ -1914,7 +1964,7 @@ function stampaEtichette(ids, start = 0) {
    ========================================================= */
 const SYNC_CONF = { apiKey: 'AIzaSyBj_vigsG7m3jQg3MaRSBTwoKkXcPB3HKk', projectId: 'magazzino-spesa-sfusa-69c90', email: 'laspesasfusa@gmail.com' };   // dati pubblici del progetto Firebase: a proteggere i dati sono password e regole
 const SYNC_STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure'];
-const SYNC_META = ['settings', 'etiPosizione'];
+const SYNC_META = ['settings', 'etiPosizione', 'riordinoTolti'];
 const syncConf = () => ({ ...SYNC_CONF, ...(S.meta.syncConf || {}) });
 const syncPronta = () => !!(syncConf().apiKey && syncConf().projectId);
 function syncAttiva() { return !!(S.meta.syncAuth && S.meta.syncAuth.refreshToken); }
@@ -2503,7 +2553,7 @@ const cambiaRiga = async (el, fn) => {
 };
 A['riga-'] = el => cambiaRiga(el, r => ({ ...r, qta: Math.max(0, r.qta - 1) }));
 A['riga+'] = el => cambiaRiga(el, r => ({ ...r, qta: r.qta + 1 }));
-A['riga-del'] = el => cambiaRiga(el, () => null);
+A['riga-del'] = async el => { await segnaTolto(el.dataset.p, true); return cambiaRiga(el, () => null); };
 A['ord-invia'] = el => { const o = S.ordini.get(el.dataset.o); if (!o) return; if (!o.righe.some(r => r.qta > 0)) { toast('Non c\'è niente da ordinare', { err: true }); return; } inviaOrdineModal(o); };
 A['ord-chiudi'] = async el => {
   const o = S.ordini.get(el.dataset.o); if (!o) return;
@@ -2742,6 +2792,10 @@ async function init() {
   try { await migraSprechi(); } catch (e) { }
   route();
   avviaSync();
+  setTimeout(function primoControllo() {
+    if (syncAttiva() && !SYNC.ultimo && SYNC.stato !== 'offline' && SYNC.stato !== 'errore' && SYNC.stato !== 'accesso' && (primoControllo.n = (primoControllo.n || 0) + 1) < 30) { setTimeout(primoControllo, 1000); return; }
+    controlloScorte().catch(e => console.error(e));
+  }, 1200);
   if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => { persistito = p; if (!p) navigator.storage.persist().then(v => { persistito = v; }); });
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     if (navigator.serviceWorker.controller) {
