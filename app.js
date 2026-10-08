@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.9.0';
+const VERSIONE = '1.8.1';
 
 /* =========================================================
    Utilità
@@ -92,14 +92,14 @@ function beep() {
    Dati (IndexedDB) – tutto in memoria, scrittura immediata
    ========================================================= */
 const DB_NAME = 'spesasfusa-magazzino';
-const STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'fatture', 'meta'];
-const DATI = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'fatture'];   // archivi salvati nel backup
+const STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'meta'];
+const DATI = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure'];   // archivi salvati nel backup
 let db;
-const S = { fornitori: new Map(), prodotti: new Map(), lotti: new Map(), ordini: new Map(), sprechi: new Map(), vendite: new Map(), chiusure: new Map(), fatture: new Map(), meta: {}, coda: new Map() };
+const S = { fornitori: new Map(), prodotti: new Map(), lotti: new Map(), ordini: new Map(), sprechi: new Map(), vendite: new Map(), chiusure: new Map(), meta: {}, coda: new Map() };
 
 function openDB() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, 5);
+    const r = indexedDB.open(DB_NAME, 4);
     r.onupgradeneeded = () => {
       const d = r.result;
       for (const s of STORES) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: s === 'meta' ? 'key' : 'id' });
@@ -469,8 +469,8 @@ function rigaProdotto(p, act) {
     <div class="sub">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${g ? ' · in negozio ' + fq(p, g) : ''}</div></div>
     ${p.sfuso ? '<span class="tag sfuso">sfuso</span>' : ''}${(p.codici || []).length ? '<span class="tag ok">codice</span>' : ''}</button>`;
 }
-function pickerModal({ title, intro = '', code = null, onPick, q0 = '', fornitoreId = '', nomeNuovo = null }) {
-  let q = q0;
+function pickerModal({ title, intro = '', code = null, onPick }) {
+  let q = '';
   const draw = b => {
     const res = cerca(q, { limit: 40 });
     b.querySelector('#pkList').innerHTML = res.items.length
@@ -478,7 +478,7 @@ function pickerModal({ title, intro = '', code = null, onPick, q0 = '', fornitor
       : `<div class="empty">Nessun prodotto trovato.</div>`;
   };
   openModal(`${mhead(title)}${intro}
-    <input type="search" id="pkQ" placeholder="Cerca per nome, es. mozzarella bufala" autocomplete="off" value="${esc(q0)}">
+    <input type="search" id="pkQ" placeholder="Cerca per nome, es. mozzarella bufala" autocomplete="off">
     <div class="list" id="pkList"></div>
     <button class="btn block" type="button" id="pkNew">+ Nuovo prodotto${code ? ' con questo codice' : ''}</button>`, b => {
     const i = b.querySelector('#pkQ');
@@ -495,7 +495,7 @@ function pickerModal({ title, intro = '', code = null, onPick, q0 = '', fornitor
         await save('prodotti', np); closeModal(); toast(`Codice collegato a ${np.nome}`); onPick(np);
       } else { closeModal(); onPick(p); }
     });
-    b.querySelector('#pkNew').onclick = () => nuovoProdottoModal({ code, nome: nomeNuovo || q, fornitoreId, onDone: onPick });
+    b.querySelector('#pkNew').onclick = () => nuovoProdottoModal({ code, nome: q, onDone: onPick });
     setTimeout(() => i.focus(), 50);
   }, { onScan: c => { const p = byCode(c); closeModal(); if (p) onPick(p); else collegaCodice(c, onPick); } });
 }
@@ -657,13 +657,6 @@ routes.home = () => {
     <a class="big-btn" href="#carico/inventario">Inventario<small>Conta quello che c'è già</small></a></div>`;
   const rv = venditeDel(todayISO());
   if (rv.length) html += `<a class="card tight" href="#banco" style="text-decoration:none"><div class="row"><div class="spacer"><b>Banco di oggi</b><div class="faint small">${totaleQta(rv, v => v.tipo === 'reso' ? -1 : 1)} · ${fmtEuro(rv.reduce((t, v) => t + (importo(v) || 0), 0))}</div></div><span class="chev">›</span></div></a>`;
-  {
-    const fat = [...S.fatture.values()], daC = fat.filter(f => f.stato !== 'controllata').length;
-    const tra7 = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
-    const pag = scadenzePagamento().filter(x => !x.p.pagata && x.data <= tra7).length;
-    const sub = fat.length ? [daC ? `${daC} da controllare` : 'tutte controllate', pag ? `${pag} ${pag === 1 ? 'pagamento' : 'pagamenti'} entro 7 giorni` : ''].filter(Boolean).join(' · ') : 'Carica le fatture dei fornitori';
-    html += `<a class="card tight" href="#fatture" style="text-decoration:none"><div class="row"><div class="spacer"><b>Fatture e pagamenti</b><div class="faint small ${pag ? 'arancio' : ''}">${sub}</div></div><span class="chev">›</span></div></a>`;
-  }
   const spm = sprechiPeriodo('mese').filter(perso);
   if (spm.length) html += `<a class="card tight" href="#sprechi" style="text-decoration:none"><div class="row"><div class="spacer"><b>Sprechi di questo mese</b><div class="faint small">${totaleQta(spm)} · ${fmtEuro(spm.reduce((t, r) => t + (valoreSpreco(r) || 0), 0))}</div></div><span class="chev">›</span></div></a>`;
   html += `<div class="faint" style="text-align:center">Puoi anche scansionare un prodotto in qualsiasi momento per vedere cosa fare.</div>`;
@@ -807,7 +800,6 @@ async function salvaCarico() {
   }
   const l = { id: uid('l'), prodottoId: p.id, quantita: qta, scadenza: scad, arrivo: todayISO(), creato: Date.now(), stato: 'attivo', gestito: false, nota: '', ordineId: null, origine: CS.modo, sprechi: [] };
   if (qc.sacchi) l.sacchi = qc.sacchi;
-  if (CS.modo === 'arrivo') l.qtaIniziale = qta;   // per il confronto con le fatture
   if (CS.modo === 'arrivo') {
     const info = infoOrdine(p);
     if (info) {
@@ -1799,7 +1791,6 @@ routes.fornitore = id => {
   const n = [...S.prodotti.values()].filter(p => p.fornitoreId === f.id).length;
   const html = `<div class="card">
       <label class="field">Nome<input type="text" id="fNome" value="${esc(f.nome)}"></label>
-      <label class="field">Partita IVA <span class="hint">serve a riconoscere le sue fatture</span><input type="text" id="fPiva" value="${esc(f.piva || '')}" autocomplete="off" placeholder="es. IT01234567890"></label>
       <label class="field">Come si ordina<select id="fMet">${Object.entries(METODI).map(([k, v]) => `<option value="${k}" ${(f.metodo || '') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
       <label class="field">Telefono / WhatsApp<input type="tel" id="fTel" value="${esc(f.telefono)}" placeholder="es. 333 1234567"></label>
       <label class="field">Email<input type="email" id="fMail" value="${esc(f.email)}"></label>
@@ -1962,398 +1953,6 @@ function stampaEtichette(ids, start = 0) {
 }
 
 /* =========================================================
-   FATTURE DEI FORNITORI (FatturaPA)
-   - si caricano i file scaricati da «Fatture e Corrispettivi»: .xml, .p7m firmati o un .zip con tanti file
-   - la fattura NON carica la merce (si carica scansionando, per le scadenze): serve a controllare
-     fatturato e arrivato, ad aggiornare i prezzi d'acquisto e a tenere le scadenze dei pagamenti
-   - le righe collegate a un prodotto si ricordano per fornitore (codice articolo o descrizione)
-   ========================================================= */
-/* --- .zip: indice centrale, file salvati o compressi (deflate) --- */
-async function apriZip(u8) {
-  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-  let e = -1;
-  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
-  if (e < 0) throw new Error('il file .zip non è leggibile');
-  const n = dv.getUint16(e + 10, true); let off = dv.getUint32(e + 16, true);
-  const out = [];
-  for (let k = 0; k < n; k++) {
-    if (dv.getUint32(off, true) !== 0x02014b50) break;
-    const metodo = dv.getUint16(off + 10, true), csize = dv.getUint32(off + 20, true);
-    const nl = dv.getUint16(off + 28, true), el = dv.getUint16(off + 30, true), cl = dv.getUint16(off + 32, true), loc = dv.getUint32(off + 42, true);
-    const nome = new TextDecoder().decode(u8.subarray(off + 46, off + 46 + nl));
-    off += 46 + nl + el + cl;
-    if (nome.endsWith('/')) continue;
-    const ini = loc + 30 + dv.getUint16(loc + 26, true) + dv.getUint16(loc + 28, true);
-    const dati = u8.subarray(ini, ini + csize);
-    let bytes = null;
-    if (metodo === 0) bytes = dati;
-    else if (metodo === 8) bytes = new Uint8Array(await new Response(new Blob([dati]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
-    if (bytes) out.push({ nome: nome.split('/').pop(), bytes });
-  }
-  return out;
-}
-/* --- .p7m: la fattura sta dentro la busta firmata (CMS SignedData), a volte scritta in base64 --- */
-function contenutoP7m(u8) {
-  if (u8[0] !== 0x30) {
-    try { const t = new TextDecoder('latin1').decode(u8).replace(/-----[^-]+-----/g, '').replace(/\s+/g, ''); u8 = Uint8Array.from(atob(t), c => c.charCodeAt(0)); } catch (e) { return null; }
-  }
-  const leggi = p => {
-    const tag = u8[p]; let q = p + 1, len = u8[q++];
-    if (len & 0x80) { const nb = len & 0x7f; if (!nb) len = -1; else { len = 0; for (let i = 0; i < nb; i++) len = len * 256 + u8[q++]; } }
-    return { tag, cons: !!(tag & 0x20), len, start: q };
-  };
-  const fine = n => { if (n.len >= 0) return n.start + n.len; let p = n.start; while (!(u8[p] === 0 && u8[p + 1] === 0)) p = fine(leggi(p)); return p + 2; };
-  const figli = n => {
-    const out = []; let p = n.start; const e = n.len >= 0 ? n.start + n.len : u8.length;
-    while (p < e) { if (n.len < 0 && u8[p] === 0 && u8[p + 1] === 0) break; const c = leggi(p); out.push(c); p = fine(c); }
-    return out;
-  };
-  const ottetti = n => n.cons ? figli(n).flatMap(ottetti) : [u8.subarray(n.start, n.start + n.len)];
-  try {
-    const ci = figli(leggi(0));                         // ContentInfo: tipo, [0]
-    const sd = figli(figli(ci[1])[0]);                  // SignedData: versione, algoritmi, contenuto, …
-    const eci = figli(sd[2]);                           // EncapsulatedContentInfo: tipo, [0]
-    const pezzi = ottetti(figli(eci[1])[0]);
-    const r = new Uint8Array(pezzi.reduce((t, x) => t + x.length, 0)); let o = 0;
-    for (const x of pezzi) { r.set(x, o); o += x.length; }
-    return r;
-  } catch (e) {
-    // ripiego: il testo XML in chiaro dentro la busta
-    const t = new TextDecoder('latin1').decode(u8), a = t.indexOf('<?xml'), m = t.match(/<\/[\w.-]*:?FatturaElettronica>/);
-    return a >= 0 && m ? u8.subarray(a, m.index + m[0].length) : null;
-  }
-}
-function testoXml(u8) {
-  const m = new TextDecoder('latin1').decode(u8.subarray(0, 200)).match(/encoding=["']([^"']+)/i);
-  let enc = m ? m[1].toLowerCase() : 'utf-8';
-  if (/^(iso-?8859-?(1|15)|latin-?1|windows-1252|cp1252)$/.test(enc)) enc = 'windows-1252';
-  try { return new TextDecoder(enc).decode(u8); } catch (e) { return new TextDecoder().decode(u8); }
-}
-/* --- lettura della FatturaPA: un file può contenere più fatture (lotto) --- */
-const xFigli = (el, n) => el ? [...el.children].filter(c => c.localName === n) : [];
-const xFiglio = (el, n) => xFigli(el, n)[0] || null;
-const xVia = (el, path) => path.split('/').reduce((e, n) => xFiglio(e, n), el);
-const xTesto = (el, path) => { const e = path ? xVia(el, path) : el; return e ? e.textContent.trim() : ''; };
-const xNum = t => { if (t === '' || t == null) return null; const v = parseFloat(String(t).replace(',', '.')); return isNaN(v) ? null : v; };
-const r2 = x => Math.round((+x || 0) * 100) / 100;
-function leggiFatturaPA(xml, file) {
-  const doc = new DOMParser().parseFromString(xml, 'application/xml');
-  if (doc.getElementsByTagName('parsererror').length) throw new Error('XML non valido');
-  const root = doc.documentElement;
-  if (root.localName !== 'FatturaElettronica') return [];      // ricevute, notifiche, metadati: si saltano
-  const h = xFiglio(root, 'FatturaElettronicaHeader');
-  const ced = xVia(h, 'CedentePrestatore/DatiAnagrafici'), an = xFiglio(ced, 'Anagrafica');
-  const codice = xTesto(ced, 'IdFiscaleIVA/IdCodice');
-  const forn = {
-    nome: xTesto(an, 'Denominazione') || [xTesto(an, 'Nome'), xTesto(an, 'Cognome')].filter(Boolean).join(' ') || 'Fornitore senza nome',
-    piva: codice ? (xTesto(ced, 'IdFiscaleIVA/IdPaese') || 'IT') + codice : '',
-    cf: xTesto(ced, 'CodiceFiscale')
-  };
-  return xFigli(root, 'FatturaElettronicaBody').map(b => {
-    const dg = xFiglio(b, 'DatiGenerali'), g = xFiglio(dg, 'DatiGeneraliDocumento');
-    const tipo = xTesto(g, 'TipoDocumento'), numero = xTesto(g, 'Numero'), data = xTesto(g, 'Data');
-    const bs = xFiglio(b, 'DatiBeniServizi');
-    const righe = xFigli(bs, 'DettaglioLinee').map(l => {
-      const qta = xNum(xTesto(l, 'Quantita')), totale = xNum(xTesto(l, 'PrezzoTotale')), pu = xNum(xTesto(l, 'PrezzoUnitario'));
-      return {
-        n: +xTesto(l, 'NumeroLinea') || 0,
-        codici: xFigli(l, 'CodiceArticolo').map(c => ({ tipo: xTesto(c, 'CodiceTipo'), valore: xTesto(c, 'CodiceValore') })).filter(c => c.valore),
-        descrizione: xTesto(l, 'Descrizione'), qta, um: xTesto(l, 'UnitaMisura'),
-        prezzo: qta && totale != null ? Math.round(totale / qta * 10000) / 10000 : pu,     // netto: comprende gli sconti di riga
-        totale, iva: xNum(xTesto(l, 'AliquotaIVA')), cessione: xTesto(l, 'TipoCessionePrestazione')
-      };
-    });
-    const riepilogo = xFigli(bs, 'DatiRiepilogo').map(r => ({ aliquota: xNum(xTesto(r, 'AliquotaIVA')), natura: xTesto(r, 'Natura'), imponibile: xNum(xTesto(r, 'ImponibileImporto')) || 0, imposta: xNum(xTesto(r, 'Imposta')) || 0 }));
-    const pagamenti = xFigli(b, 'DatiPagamento').flatMap(p => xFigli(p, 'DettaglioPagamento').map(d => ({
-      modalita: xTesto(d, 'ModalitaPagamento'), scadenza: xTesto(d, 'DataScadenzaPagamento') || null, importo: xNum(xTesto(d, 'ImportoPagamento')), iban: xTesto(d, 'IBAN'), pagata: null
-    })));
-    let totale = xNum(xTesto(g, 'ImportoTotaleDocumento'));
-    if (totale == null) totale = r2(riepilogo.reduce((t, r) => t + r.imponibile + r.imposta, 0));
-    const chi = (forn.piva || forn.cf || norm(forn.nome)).replace(/[^A-Za-z0-9]/g, '');
-    return {
-      id: `fa-${chi}-${data}-${numero.replace(/[^A-Za-z0-9]/g, '_')}-${tipo}`,
-      tipo, numero, data, totale, divisa: xTesto(g, 'Divisa') || 'EUR',
-      fornitore: forn, fornitoreId: null,
-      ddt: xFigli(dg, 'DatiDDT').map(d => ({ numero: xTesto(d, 'NumeroDDT'), data: xTesto(d, 'DataDDT') })),
-      righe, riepilogo, pagamenti, file, importata: Date.now(), stato: 'nuova'
-    };
-  });
-}
-/* --- da un file scelto alle fatture (anche dentro uno zip, anche firmate) --- */
-async function fattureDaFile(nome, u8, prof = 0) {
-  if (u8[0] === 0x50 && u8[1] === 0x4b) {                // PK: zip
-    if (prof > 1) return { fatture: [], saltati: [nome] };
-    const out = { fatture: [], saltati: [] };
-    for (const x of await apriZip(u8)) { const r = await fattureDaFile(x.nome, x.bytes, prof + 1); out.fatture.push(...r.fatture); out.saltati.push(...r.saltati); }
-    return out;
-  }
-  let xmlBytes = u8;
-  if (/\.p7m$/i.test(nome) || u8[0] === 0x30) xmlBytes = contenutoP7m(u8);
-  if (!xmlBytes) return { fatture: [], saltati: [nome] };
-  try {
-    const f = leggiFatturaPA(testoXml(xmlBytes), nome.replace(/\.p7m$/i, ''));
-    return { fatture: f, saltati: f.length ? [] : [nome] };
-  } catch (e) { return { fatture: [], saltati: [nome] }; }
-}
-const fornPerPiva = piva => piva ? [...S.fornitori.values()].find(f => f.piva && f.piva.replace(/\s/g, '').toUpperCase() === piva.toUpperCase()) : null;
-async function caricaFatture(files) {
-  let nuove = 0, doppie = 0; const saltati = [], perFornitore = new Set();
-  for (const file of files) {
-    let r;
-    try { r = await fattureDaFile(file.name, new Uint8Array(await file.arrayBuffer())); }
-    catch (e) { saltati.push(file.name); continue; }
-    saltati.push(...r.saltati);
-    for (const fa of r.fatture) {
-      if (S.fatture.has(fa.id)) { doppie++; continue; }
-      const f = fornPerPiva(fa.fornitore.piva);
-      if (f) fa.fornitoreId = f.id;
-      await save('fatture', fa); nuove++; perFornitore.add(fa.fornitore.nome);
-      if (fa.fornitoreId) await imparaDaEan([fa]);
-    }
-  }
-  return { nuove, doppie, saltati };
-}
-/* --- righe: collegamento ai prodotti, ricordato sul fornitore --- */
-const chiaviRiga = r => [...r.codici.map(c => 'c:' + norm(c.valore)), 'd:' + norm(r.descrizione)];
-const nonProdotto = r => !!r.cessione || (r.qta == null && !r.codici.length) || (r.totale != null && r.totale < 0);
-function prodottoRiga(fa, r) {
-  const f = fornitore(fa.fornitoreId), mappa = (f && f.articoli) || {};
-  for (const k of chiaviRiga(r)) if (k in mappa) return mappa[k] === '-' ? { no: true } : (S.prodotti.has(mappa[k]) ? { p: prodotto(mappa[k]), certo: true } : null);
-  if (nonProdotto(r)) return { no: true, auto: true };
-  for (const c of r.codici) { const p = /^\d{8}$|^\d{12,14}$/.test(c.valore) ? byCode(c.valore) : null; if (p) return { p, certo: true, ean: true }; }
-  // un suggerimento per nome tra i prodotti di quel fornitore (va confermato)
-  const parole = norm(r.descrizione).split(' ').filter(w => w.length > 2);
-  if (!parole.length) return null;
-  let best = null, punti = 0;
-  for (const p of S.prodotti.values()) {
-    if (fa.fornitoreId && p.fornitoreId !== fa.fornitoreId) continue;
-    const n = norm(p.nome), x = parole.filter(w => n.includes(w)).length / parole.length;
-    if (x > punti) { punti = x; best = p; }
-  }
-  return best && punti >= 0.6 ? { p: best, certo: false } : null;
-}
-async function ricordaRiga(fa, r, pid) {
-  const f = fornitore(fa.fornitoreId); if (!f) return;
-  const articoli = { ...(f.articoli || {}) };
-  for (const k of chiaviRiga(r)) articoli[k] = pid;
-  await save('fornitori', { ...f, articoli });
-}
-/* le righe riconosciute dal codice a barre insegnano anche il codice articolo del fornitore,
-   così le fatture dopo (a volte senza codice a barre) si riconoscono lo stesso */
-async function imparaDaEan(fatture) {
-  const perForn = new Map();
-  for (const fa of fatture) {
-    const f = fornitore(fa.fornitoreId); if (!f) continue;
-    const art = perForn.get(f.id) || { ...(f.articoli || {}) };
-    for (const r of fa.righe) {
-      if (chiaviRiga(r).some(k => k in art)) continue;
-      const c = r.codici.find(c => /^\d{8}$|^\d{12,14}$/.test(c.valore) && byCode(c.valore));
-      if (c) for (const k of chiaviRiga(r)) art[k] = byCode(c.valore).id;
-    }
-    perForn.set(f.id, art);
-  }
-  for (const [fid, articoli] of perForn) if (JSON.stringify(articoli) !== JSON.stringify(fornitore(fid).articoli || {})) await save('fornitori', { ...fornitore(fid), articoli });
-}
-/* quantità e prezzo della riga nell'unità del magazzino (pezzi, kg o litri) */
-function qtaRiga(p, r) {
-  if (r.qta == null) return null;
-  if (!isSfuso(p)) return r.qta;
-  const um = (r.um || '').toLowerCase().replace(/[^a-z]/g, '');
-  if (/^(kg|kgs|kgm|kilo|kili|chilo|chili|chilogrammi)$/.test(um)) return r.qta;
-  if (/^(g|gr|grammi)$/.test(um)) return r.qta / 1000;
-  if (/^(l|lt|lit|litro|litri)$/.test(um)) return r.qta;
-  if (um === 'ml') return r.qta / 1000;
-  return p.pesoSacco ? r.qta * p.pesoSacco : r.qta;
-}
-function prezzoRigaFattura(p, r) {
-  const q = qtaRiga(p, r);
-  if (q && r.totale != null) return Math.round(r.totale / q * 10000) / 10000;
-  return r.prezzo;
-}
-/* arrivato nell'app intorno alla data della fattura (o dei documenti di trasporto) */
-function finestraFattura(fa) {
-  const date = (fa.ddt || []).map(d => d.data).filter(Boolean).sort();
-  const sposta = (d, g) => { const x = new Date(d + 'T12:00:00'); x.setDate(x.getDate() + g); return x.toISOString().slice(0, 10); };
-  return date.length ? [sposta(date[0], -3), sposta(date[date.length - 1], 5)] : [sposta(fa.data, -12), sposta(fa.data, 5)];
-}
-function arrivatoNellApp(pid, fa) {
-  const [da, a] = finestraFattura(fa);
-  return r3([...S.lotti.values()].filter(l => l.prodottoId === pid && (l.origine || 'arrivo') === 'arrivo' && l.stato !== 'eliminato' && l.arrivo >= da && l.arrivo <= a)
-    .reduce((t, l) => t + (+(l.qtaIniziale ?? l.quantita) || 0), 0));
-}
-/* tutto quello che serve per mostrare e controllare una riga */
-function esameRiga(fa, r) {
-  const m = prodottoRiga(fa, r);
-  const e = { r, m, p: m && m.p ? m.p : null };
-  if (!e.p || !m.certo) return e;
-  const p = e.p, nota = fa.tipo === 'TD04';
-  e.qta = qtaRiga(p, r);
-  if (!nota && e.qta != null) { e.arrivato = arrivatoNellApp(p.id, fa); e.diff = Math.abs(e.arrivato - e.qta) > 0.001; }
-  const nuovo = prezzoRigaFattura(p, r);
-  if (!nota && nuovo != null && nuovo > 0) {
-    e.prezzo = nuovo; e.prima = p.prezzoAcquisto;
-    e.cambia = p.prezzoAcquisto == null || Math.abs(nuovo - p.prezzoAcquisto) >= 0.005;
-    e.strano = p.prezzoAcquisto > 0 && (nuovo / p.prezzoAcquisto > 3 || nuovo / p.prezzoAcquisto < 1 / 3);   // forse è il prezzo di un cartone
-  }
-  return e;
-}
-function statoFattura(fa) {
-  const es = fa.righe.map(r => esameRiga(fa, r));
-  return {
-    es,
-    daCollegare: es.filter(e => !e.m || (e.m.p && !e.m.certo)).length,
-    prezzi: es.filter(e => e.cambia && !e.strano).length,
-    strani: es.filter(e => e.cambia && e.strano).length,
-    differenze: es.filter(e => e.diff).length
-  };
-}
-const NOMI_TIPO = { TD01: 'Fattura', TD02: 'Acconto', TD04: 'Nota di credito', TD05: 'Nota di debito', TD06: 'Parcella', TD24: 'Fattura differita', TD25: 'Fattura differita' };
-const NOMI_PAGAMENTO = { MP01: 'contanti', MP02: 'assegno', MP05: 'bonifico', MP08: 'carta', MP12: 'RiBa', MP19: 'addebito SEPA', MP20: 'addebito SEPA', MP21: 'addebito SEPA', MP23: 'PagoPA' };
-const segnoFattura = fa => fa.tipo === 'TD04' ? -1 : 1;
-/* pagamenti: ogni scadenza di ogni fattura */
-function scadenzePagamento() {
-  const out = [];
-  for (const fa of S.fatture.values()) (fa.pagamenti || []).forEach((p, i) => out.push({ fa, i, p, data: p.scadenza || fa.data, importo: r2((p.importo ?? fa.totale) * segnoFattura(fa)) }));
-  return out.sort((a, b) => a.data.localeCompare(b.data));
-}
-const nomeFornFattura = fa => fa.fornitoreId && fornitore(fa.fornitoreId) ? fornitore(fa.fornitoreId).nome : fa.fornitore.nome;
-function rigaFattura(fa) {
-  const st = statoFattura(fa), tag = [];
-  if (st.daCollegare) tag.push(`<span class="tag warn">${st.daCollegare} da collegare</span>`);
-  const np = st.prezzi + st.strani;
-  if (np) tag.push(`<span class="tag">${np === 1 ? '1 prezzo cambiato' : np + ' prezzi cambiati'}</span>`);
-  if (st.differenze) tag.push(`<span class="tag warn">${st.differenze === 1 ? '1 differenza' : st.differenze + ' differenze'}</span>`);
-  if (!fa.fornitoreId) tag.unshift('<span class="tag warn">fornitore da collegare</span>');
-  return `<a class="item" href="#fattura/${encodeURIComponent(fa.id)}"><div class="main"><div class="name">${esc(nomeFornFattura(fa))}</div>
-    <div class="sub">${NOMI_TIPO[fa.tipo] && fa.tipo !== 'TD01' ? esc(NOMI_TIPO[fa.tipo]) + ' ' : ''}n. ${esc(fa.numero)} del ${fmtDate(fa.data)}${tag.length ? '<br>' + tag.join(' ') : ''}</div></div>
-    <span class="prezzo">${fmtEuro(fa.totale * segnoFattura(fa))}</span><span class="chev">›</span></a>`;
-}
-let FAT = { vista: 'fatture', tutte: false };
-routes.fatture = arg => {
-  if (arg === 'pagamenti' || arg === 'fatture') FAT.vista = arg;
-  const tutte = [...S.fatture.values()].sort((a, b) => b.data.localeCompare(a.data) || b.importata - a.importata);
-  const nuove = tutte.filter(f => f.stato !== 'controllata'), vecchie = tutte.filter(f => f.stato === 'controllata');
-  let html = `<button class="btn primary block" type="button" data-act="fatture-carica">Carica fatture</button>
-    <div class="faint small">Scaricale da <b>Fatture e Corrispettivi</b> (Agenzia delle Entrate, con SPID): fatture ricevute. Puoi scegliere più file insieme: .xml, .p7m o un .zip.</div>
-    <div class="segmented"><a href="#fatture/fatture" class="${FAT.vista === 'fatture' ? 'on' : ''}">Fatture</a><a href="#fatture/pagamenti" class="${FAT.vista === 'pagamenti' ? 'on' : ''}">Pagamenti</a></div>`;
-  if (FAT.vista === 'fatture') {
-    html += `<div class="section-title"><h2>Da controllare</h2><span class="count">${nuove.length}</span></div>`;
-    html += nuove.length ? `<div class="list">${nuove.map(rigaFattura).join('')}</div>` : '<div class="empty">Nessuna fattura da controllare.</div>';
-    if (vecchie.length) {
-      const mostra = FAT.tutte ? vecchie : vecchie.slice(0, 20);
-      html += `<div class="section-title"><h2>Controllate</h2><span class="count">${vecchie.length}</span></div><div class="list">${mostra.map(rigaFattura).join('')}</div>`;
-      if (mostra.length < vecchie.length) html += `<button class="btn block" type="button" data-act="fatture-tutte">Mostra tutte (${vecchie.length})</button>`;
-    }
-  } else {
-    const oggi = todayISO(), tra30 = (() => { const d = new Date(); d.setDate(d.getDate() + 30); return d.toISOString().slice(0, 10); })();
-    const aperte = scadenzePagamento().filter(x => !x.p.pagata);
-    const gruppi = [['Scaduti', aperte.filter(x => x.data < oggi), 'red'], ['Nei prossimi 30 giorni', aperte.filter(x => x.data >= oggi && x.data <= tra30), ''], ['Più avanti', aperte.filter(x => x.data > tra30), '']];
-    for (const [tit, l, cls] of gruppi) {
-      if (!l.length && tit !== 'Nei prossimi 30 giorni') continue;
-      html += `<div class="section-title"><h2>${tit}</h2><span class="count">${l.length ? fmtEuro(r2(l.reduce((t, x) => t + x.importo, 0))) : ''}</span></div>`;
-      html += l.length ? `<div class="list">${l.map(x => rigaPagamento(x, cls)).join('')}</div>` : '<div class="empty">Niente da pagare.</div>';
-    }
-    const fatti = scadenzePagamento().filter(x => x.p.pagata).sort((a, b) => b.p.pagata.localeCompare(a.p.pagata)).slice(0, 10);
-    if (fatti.length) html += `<div class="section-title"><h2>Pagati di recente</h2></div><div class="list">${fatti.map(x => rigaPagamento(x, '')).join('')}</div>`;
-  }
-  return { title: 'Fatture e pagamenti', html, back: '#home', tab: 'home' };
-};
-function rigaPagamento(x, cls) {
-  const pag = x.p.pagata;
-  return `<div class="item" style="flex-wrap:wrap"><a class="main" href="#fattura/${encodeURIComponent(x.fa.id)}" style="color:inherit;text-decoration:none"><div class="name">${esc(nomeFornFattura(x.fa))}</div>
-    <div class="sub ${cls === 'red' && !pag ? 'arancio' : ''}">${pag ? 'pagata il ' + fmtDate(pag) : 'scade ' + fmtDate(x.data)} · ${esc(NOMI_PAGAMENTO[x.p.modalita] || x.p.modalita || '')} · fattura ${esc(x.fa.numero)}</div></a>
-    <span class="prezzo">${fmtEuro(x.importo)}</span>
-    <button class="btn small ${pag ? 'ghost' : ''}" type="button" data-act="pag-segna" data-f="${esc(x.fa.id)}" data-i="${x.i}">${pag ? 'Non pagata' : 'Pagata'}</button></div>`;
-}
-routes.fattura = id => {
-  const fa = S.fatture.get(id);
-  if (!fa) return { title: 'Fattura', html: '<div class="empty">Fattura non trovata.</div>', back: '#fatture', tab: 'home' };
-  const st = statoFattura(fa), nota = fa.tipo === 'TD04';
-  const forn = [...S.fornitori.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
-  // proposta: il fornitore del catalogo che ha una parola lunga del nome in comune con quello della fattura
-  const nf = ' ' + norm(fa.fornitore.nome) + ' ';
-  const simile = !fa.fornitoreId ? (forn.find(f => nf.includes(' ' + norm(f.nome) + ' ')) ||
-    forn.find(f => norm(f.nome).split(' ').some(w => w.length > 3 && !/^(srl|srls|spa|snc|sas|societa|soc|coop|cooperativa)$/.test(w) && nf.includes(' ' + w + ' ')))) : null;
-  let html = `<div class="card"><div class="row"><div class="spacer"><h2 style="margin:0">${esc(nomeFornFattura(fa))}</h2>
-      <div class="faint">${esc(NOMI_TIPO[fa.tipo] || fa.tipo)} n. ${esc(fa.numero)} del ${fmtDate(fa.data)}${fa.fornitore.piva ? ' · P.IVA ' + esc(fa.fornitore.piva) : ''}</div>
-      ${fa.ddt && fa.ddt.length ? `<div class="faint small">Documenti di trasporto: ${fa.ddt.map(d => esc(d.numero) + (d.data ? ' del ' + fmtDate(d.data) : '')).join(', ')}</div>` : ''}</div>
-      <b style="font-size:1.25rem">${fmtEuro(fa.totale * segnoFattura(fa))}</b></div>
-      <div class="faint small">${(fa.riepilogo || []).map(r => `IVA ${r.aliquota != null ? fmtNum(r.aliquota) + '%' : esc(r.natura)}: imponibile ${fmtEuro(r.imponibile)}, imposta ${fmtEuro(r.imposta)}`).join(' · ')}</div></div>`;
-  if (!fa.fornitoreId) html += `<div class="card"><h3>Di quale fornitore è?</h3>
-      <p class="muted small">«${esc(fa.fornitore.nome)}» non è ancora collegato a un fornitore del catalogo. Scegli quello giusto: la prossima volta lo riconosco dalla partita IVA.</p>
-      <select id="faForn"><option value="">— scegli —</option>${forn.map(f => `<option value="${esc(f.id)}" ${simile && simile.id === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select>
-      <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn primary" type="button" data-act="fa-forn" data-id="${esc(fa.id)}">Collega</button><button class="btn" type="button" data-act="fa-forn-nuovo" data-id="${esc(fa.id)}">Nuovo fornitore</button></div></div>`;
-  if (nota) html += `<div class="notice"><span>È una <b>nota di credito</b>: un rimborso o uno sconto del fornitore. Non cambia i prezzi.</span></div>`;
-  if (st.prezzi > 1) html += `<button class="btn block" type="button" data-act="fa-prezzi" data-id="${esc(fa.id)}">Aggiorna tutti i prezzi cambiati (${st.prezzi})</button>`;
-  html += `<div class="section-title"><h2>Righe</h2><span class="count">${fa.righe.length}</span></div><div class="list">${st.es.map((e, i) => rigaFatturaRiga(fa, e, i)).join('')}</div>`;
-  if ((fa.pagamenti || []).length) html += `<div class="section-title"><h2>Pagamento</h2></div><div class="list">${fa.pagamenti.map((p, i) => rigaPagamento({ fa, i, p, data: p.scadenza || fa.data, importo: r2((p.importo ?? fa.totale) * segnoFattura(fa)) }, p.scadenza && p.scadenza < todayISO() ? 'red' : '')).join('')}</div>`;
-  html += fa.stato === 'controllata'
-    ? `<div class="faint small" style="text-align:center">Controllata${fa.controllata ? ' il ' + fmtDate(fa.controllata) : ''}.</div><button class="btn ghost block" type="button" data-act="fa-stato" data-id="${esc(fa.id)}">Rimetti da controllare</button>`
-    : `<button class="btn primary block" type="button" data-act="fa-stato" data-id="${esc(fa.id)}">Fatto: segna come controllata</button>`;
-  html += `<button class="btn danger block" type="button" data-act="fa-elimina" data-id="${esc(fa.id)}">Elimina questa fattura</button>`;
-  return { title: NOMI_TIPO[fa.tipo] || 'Fattura', html, back: '#fatture', tab: 'home' };
-};
-function rigaFatturaRiga(fa, e, i) {
-  const r = e.r, m = e.m, nota = fa.tipo === 'TD04';
-  const qt = r.qta != null ? `${fmtNum(r.qta)}${r.um ? ' ' + esc(r.um.toLowerCase()) : ''} × ${fmtEuro(r.prezzo)}` : '';
-  const testa = `<div class="name">${esc(r.descrizione || 'Riga ' + r.n)}</div><div class="sub">${[qt, r.totale != null ? 'totale ' + fmtEuro(r.totale) : '', r.iva != null ? 'IVA ' + fmtNum(r.iva) + '%' : ''].filter(Boolean).join(' · ')}${r.codici.length ? ' · cod. ' + esc(r.codici[0].valore) : ''}</div>`;
-  const dati = `data-f="${esc(fa.id)}" data-i="${i}"`;
-  let corpo;
-  if (m && m.no) corpo = `<div class="fr-riga faint">Non è un prodotto del magazzino${m.auto ? '' : ` · <button class="link" type="button" data-act="fr-collega" ${dati}>collega</button>`}</div>`;
-  else if (!m) corpo = `<div class="fr-riga"><button class="btn small primary" type="button" data-act="fr-collega" ${dati}>Collega a un prodotto</button><button class="btn small ghost" type="button" data-act="fr-no" ${dati}>Non è un prodotto</button></div>`;
-  else if (!m.certo) corpo = `<div class="fr-riga"><span>È <b>${esc(m.p.nome)}</b>?</span><button class="btn small primary" type="button" data-act="fr-si" ${dati} data-p="${esc(m.p.id)}">Sì</button><button class="btn small" type="button" data-act="fr-collega" ${dati}>No, scegli</button></div>`;
-  else {
-    const p = e.p, righe = [`<div class="fr-riga"><span>→ <a href="#prodotto/${encodeURIComponent(p.id)}"><b>${esc(p.nome)}</b></a></span><button class="link" type="button" data-act="fr-collega" ${dati}>cambia</button></div>`];
-    if (e.arrivato != null && !nota) righe.push(`<div class="fr-riga ${e.diff ? 'arancio' : 'verde'}">${e.diff ? (e.arrivato ? `Arrivati nell'app: ${fq(p, e.arrivato)} su ${fq(p, e.qta)} fatturati` : `Arrivo non registrato nell'app (fatturati ${fq(p, e.qta)})`) : `Arrivati ${fq(p, e.qta)} ✓`}</div>`);
-    if (e.cambia) {
-      const dopo = prezzoCalcolato({ ...p, prezzoAcquisto: e.prezzo, iva: p.iva ?? r.iva });
-      const perc = e.prima ? ` (${e.prezzo > e.prima ? '+' : ''}${fmtNum(Math.round((e.prezzo / e.prima - 1) * 1000) / 10)}%)` : '';
-      righe.push(`<div class="fr-riga fr-prezzo"><span>Acquisto${alBase(p)}: ${e.prima != null ? fmtEuro(e.prima) + ' → ' : ''}<b>${fmtEuro(e.prezzo)}</b>${perc}${e.strano ? ' <span class="tag warn">unità diversa? controlla</span>' : ''}<br>
-        <span class="faint">vendita${alKg(p)}: ${p.prezzoManuale != null ? `scritta a mano ${fmtEuro(perUnita(p, p.prezzoManuale))}, controllala` : `${fmtEuro(perUnita(p, prezzoVendita(p)))} → <b>${fmtEuro(perUnita(p, dopo))}</b>`}</span></span>
-        <button class="btn small" type="button" data-act="fr-prezzo" ${dati}>Aggiorna</button></div>`);
-    } else if (e.prezzo != null) righe.push(`<div class="fr-riga faint">Prezzo d'acquisto uguale ✓</div>`);
-    corpo = righe.join('');
-  }
-  return `<div class="item fr"><div class="main">${testa}${corpo}</div></div>`;
-}
-/* aggiornare il prezzo d'acquisto di una riga: il prezzo di vendita si ricalcola (se non è scritto a mano) */
-async function aggiornaPrezzoRiga(fa, e) {
-  const p = prodotto(e.p.id); if (!p || e.prezzo == null) return null;
-  const prima = prezzoVendita(p);
-  const np = { ...p, prezzoAcquisto: e.prezzo, iva: p.iva ?? e.r.iva };
-  await save('prodotti', np);
-  const dopo = prezzoVendita(np);
-  return dopo !== prima && np.prezzoManuale == null ? { p: np, prima, dopo } : null;
-}
-function avvisoCassa(cambi) {
-  cambi = cambi.filter(Boolean); if (!cambi.length) { toast('Prezzi aggiornati'); return; }
-  openModal(`${mhead('Cambia anche in cassa')}
-    <p class="muted small">Il prezzo di vendita di questi prodotti è cambiato nell'app. Cambialo anche sul registratore di cassa, altrimenti la chiusura non torna.</p>
-    <div class="list">${cambi.map(c => `<div class="item"><div class="main"><div class="name">${esc(c.p.nome)}</div><div class="sub">${fmtEuro(perUnita(c.p, c.prima))} → <b>${fmtEuro(perUnita(c.p, c.dopo))}</b>${alKg(c.p)}</div></div></div>`).join('')}</div>
-    <button class="btn primary block" type="button" data-act="close-modal">Ho capito</button>`);
-}
-async function collegaFornitoreFattura(fa, fid) {
-  const f = fornitore(fid); if (!f) return;
-  if (fa.fornitore.piva && !f.piva) await save('fornitori', { ...f, piva: fa.fornitore.piva });
-  const stesse = [...S.fatture.values()].filter(x => !x.fornitoreId && (x.id === fa.id || (fa.fornitore.piva && x.fornitore.piva === fa.fornitore.piva)));
-  await saveMany('fatture', stesse.map(x => ({ ...x, fornitoreId: fid })));
-  await imparaDaEan(stesse.map(x => S.fatture.get(x.id)).sort((a, b) => a.data.localeCompare(b.data)));
-}
-async function importaFatture(files) {
-  toast('Leggo le fatture…', { ms: 15000 });
-  let r;
-  try { r = await caricaFatture(files); } catch (e) { toast('Non riesco a leggere i file: ' + e.message, { err: true }); return; }
-  const parti = [];
-  if (r.nuove) parti.push(r.nuove === 1 ? '1 fattura caricata' : r.nuove + ' fatture caricate');
-  if (r.doppie) parti.push(r.doppie === 1 ? '1 era già caricata' : r.doppie + ' erano già caricate');
-  if (r.saltati.length) parti.push(`${r.saltati.length} file saltati (non sono fatture)`);
-  const msg = parti.join(' · ') || 'Nessuna fattura trovata nei file scelti';
-  FAT.vista = 'fatture';
-  if (current.name === 'fatture') render(); else location.hash = '#fatture';
-  setTimeout(() => toast(msg, { err: !r.nuove && !r.doppie, ms: 6000 }), 150);
-}
-
-/* =========================================================
    SINCRONIZZAZIONE tra i dispositivi del negozio (Firebase)
    - ogni modifica entra in una coda salvata sul dispositivo e parte appena c'è internet
    - sul server ogni record è un documento; si mandano solo i campi cambiati
@@ -2364,7 +1963,7 @@ async function importaFatture(files) {
    - si scarica solo quello che è cambiato dall'ultima volta (più 15 secondi di margine)
    ========================================================= */
 const SYNC_CONF = { apiKey: 'AIzaSyBj_vigsG7m3jQg3MaRSBTwoKkXcPB3HKk', projectId: 'magazzino-spesa-sfusa-69c90', email: 'laspesasfusa@gmail.com' };   // dati pubblici del progetto Firebase: a proteggere i dati sono password e regole
-const SYNC_STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'fatture'];
+const SYNC_STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure'];
 const SYNC_META = ['settings', 'etiPosizione', 'riordinoTolti'];
 const syncConf = () => ({ ...SYNC_CONF, ...(S.meta.syncConf || {}) });
 const syncPronta = () => !!(syncConf().apiKey && syncConf().projectId);
@@ -2683,11 +2282,8 @@ function scaricaFile(testo, nome) {
 }
 let fileMode = null;
 $('#fileInput').addEventListener('change', async e => {
-  const files = [...(e.target.files || [])]; e.target.value = '';
-  e.target.multiple = false; e.target.accept = '.txt,.json,text/plain,application/json';
-  if (!files.length) return;
-  if (fileMode === 'fatture') { await importaFatture(files); return; }
-  const f = files[0];
+  const f = e.target.files && e.target.files[0]; e.target.value = '';
+  if (!f) return;
   let data;
   try { data = JSON.parse(await f.text()); } catch (err) { toast('Il file non è leggibile', { err: true }); return; }
   try {
@@ -2715,61 +2311,6 @@ $('#fileInput').addEventListener('change', async e => {
    Azioni (pulsanti)
    ========================================================= */
 const A = {};
-/* fatture */
-A['fatture-carica'] = () => { const i = $('#fileInput'); i.accept = '.xml,.p7m,.zip,application/xml,text/xml,application/zip,application/pkcs7-mime'; i.multiple = true; fileMode = 'fatture'; i.click(); };
-A['fatture-tutte'] = () => { FAT.tutte = true; render(); };
-A['pag-segna'] = async el => {
-  const fa = S.fatture.get(el.dataset.f); if (!fa) return;
-  const i = +el.dataset.i;
-  await save('fatture', { ...fa, pagamenti: fa.pagamenti.map((p, k) => k === i ? { ...p, pagata: p.pagata ? null : todayISO() } : p) });
-  render();
-};
-A['fa-stato'] = async el => {
-  const fa = S.fatture.get(el.dataset.id); if (!fa) return;
-  const ok = fa.stato !== 'controllata';
-  await save('fatture', { ...fa, stato: ok ? 'controllata' : 'nuova', controllata: ok ? todayISO() : null });
-  if (ok) { location.hash = '#fatture'; setTimeout(() => toast('Fattura controllata'), 150); } else render();
-};
-A['fa-elimina'] = async el => {
-  const fa = S.fatture.get(el.dataset.id); if (!fa) return;
-  if (!(await confirmBox(`Elimino la fattura n. ${fa.numero} di ${nomeFornFattura(fa)}? Se serve, si ricarica dal file.`, { ok: 'Elimina', danger: true }))) return;
-  await remove('fatture', fa.id); location.hash = '#fatture';
-};
-A['fa-forn'] = async el => {
-  const fa = S.fatture.get(el.dataset.id), fid = $('#faForn').value; if (!fa) return;
-  if (!fid) { toast('Scegli il fornitore', { err: true }); return; }
-  await collegaFornitoreFattura(fa, fid); render();
-};
-A['fa-forn-nuovo'] = async el => {
-  const fa = S.fatture.get(el.dataset.id); if (!fa) return;
-  const f = { id: uid('f'), nome: fa.fornitore.nome, daNominare: false, metodo: '', telefono: '', email: '', sito: '', note: '', piva: fa.fornitore.piva };
-  await save('fornitori', f); await collegaFornitoreFattura(fa, f.id); toast('Fornitore creato: ' + f.nome); render();
-};
-const rigaDa = el => { const fa = S.fatture.get(el.dataset.f); return fa ? { fa, r: fa.righe[+el.dataset.i] } : {}; };
-const serveFornitore = fa => { if (fa.fornitoreId) return true; toast('Prima scegli di quale fornitore è la fattura (in alto)', { err: true }); return false; };
-A['fr-si'] = async el => { const { fa, r } = rigaDa(el); if (!r || !serveFornitore(fa)) return; await ricordaRiga(fa, r, el.dataset.p); render(); };
-A['fr-no'] = async el => { const { fa, r } = rigaDa(el); if (!r || !serveFornitore(fa)) return; await ricordaRiga(fa, r, '-'); render(); };
-A['fr-collega'] = el => {
-  const { fa, r } = rigaDa(el); if (!r || !serveFornitore(fa)) return;
-  const q0 = norm(r.descrizione).split(' ').filter(w => w.length > 2).slice(0, 2).join(' ');
-  pickerModal({
-    title: 'Quale prodotto è?', q0, fornitoreId: fa.fornitoreId, nomeNuovo: r.descrizione,
-    intro: `<div class="faint">Riga della fattura: <b>${esc(r.descrizione)}</b>. Lo ricordo per le prossime fatture di questo fornitore.</div>`,
-    onPick: async p => { await ricordaRiga(fa, r, p.id); render(); }
-  });
-};
-A['fr-prezzo'] = async el => {
-  const { fa, r } = rigaDa(el); if (!r) return;
-  const e = esameRiga(fa, r); if (!e.p || e.prezzo == null) return;
-  if (e.strano && !(await confirmBox(`Il nuovo prezzo (${fmtEuro(e.prezzo)}) è molto diverso da quello di prima (${fmtEuro(e.prima)}): forse in fattura c'è il prezzo di una confezione da più pezzi. Lo aggiorno lo stesso?`, { ok: 'Aggiorna' }))) return;
-  const c = await aggiornaPrezzoRiga(fa, e); render(); avvisoCassa([c]);
-};
-A['fa-prezzi'] = async el => {
-  const fa = S.fatture.get(el.dataset.id); if (!fa) return;
-  const cambi = [];
-  for (const e of statoFattura(fa).es) if (e.cambia && !e.strano) cambi.push(await aggiornaPrezzoRiga(fa, e));
-  render(); avvisoCassa(cambi);
-};
 /* sincronizzazione */
 A['sync-collega'] = async el => {
   const email = $('#syEmail').value.trim().toLowerCase(), pw = $('#syPw').value, nome = ($('#syNome').value || '').trim() || 'Dispositivo';
@@ -3159,8 +2700,7 @@ A['nuovo-fornitore'] = async () => {
 A['f-salva'] = async el => {
   const f = fornitore(el.dataset.id); if (!f) return;
   const nome = $('#fNome').value.trim(); if (!nome) { toast('Il nome non può essere vuoto', { err: true }); return; }
-  let piva = $('#fPiva').value.replace(/\s/g, '').toUpperCase(); if (/^\d{11}$/.test(piva)) piva = 'IT' + piva;
-  await save('fornitori', { ...f, nome, piva, daNominare: f.daNominare && /^da nominare/i.test(nome), metodo: $('#fMet').value, telefono: $('#fTel').value.trim(), email: $('#fMail').value.trim(), sito: $('#fSito').value.trim(), note: $('#fNote').value.trim() });
+  await save('fornitori', { ...f, nome, daNominare: f.daNominare && /^da nominare/i.test(nome), metodo: $('#fMet').value, telefono: $('#fTel').value.trim(), email: $('#fMail').value.trim(), sito: $('#fSito').value.trim(), note: $('#fNote').value.trim() });
   toast('Salvato'); render();
 };
 A['f-elimina'] = async el => {

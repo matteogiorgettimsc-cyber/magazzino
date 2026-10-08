@@ -380,11 +380,3 @@ button.notice{width:100%;font:inherit;color:inherit;text-align:left;cursor:point
 .sel-barra{position:sticky;bottom:calc(80px + env(safe-area-inset-bottom,0px));z-index:5;display:grid;grid-template-columns:1fr 2fr;gap:10px;
   background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:10px;box-shadow:0 6px 20px rgba(32,38,31,.18)}
 .sel-barra .btn{margin:0}
-/* fatture */
-.fr .main{gap:4px}
-.fr-riga{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:.92rem;margin-top:4px}
-.fr-riga.fr-prezzo{justify-content:space-between;background:var(--surface-alt);border-radius:10px;padding:8px 10px;align-items:center}
-.fr-riga a{color:inherit}
-button.link{border:0;background:none;color:var(--accent);text-decoration:underline;padding:0;font:inherit;cursor:pointer}
-.arancio{color:var(--orange)}
-.verde{color:var(--green)}
