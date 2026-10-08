@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.10.0';
+const VERSIONE = '1.10.1';
 
 /* =========================================================
    Utilità
@@ -1398,7 +1398,8 @@ routes.chiusura = () => {
     <div class="section-title"><h2>Da controllare</h2></div>
     ${controlli.length ? `<div class="list">${controlli.join('')}</div>` : '<div class="notice green"><span>Niente da controllare.</span></div>'}
     <button class="btn primary block" type="button" data-act="ch-chiudi">Chiudi la giornata e fai il backup</button>
-    <div class="faint small" style="text-align:center">Il backup va sul Google Drive del negozio.</div>`;
+    <div class="faint small" style="text-align:center">Il backup va sul Google Drive del negozio.</div>
+    <a class="btn ghost block" href="#cassa">Storico di cassa: correggi i giorni passati</a>`;
   return {
     title: 'Chiusura di oggi', html, back: '#banco', tab: 'banco',
     mount: b => {
@@ -2552,11 +2553,11 @@ routes.cruscotto = () => {
   const diff = r2(n.incassi - n.acquisti - n.altreSpese);
   let html = `<div class="chips">${PERIODI_CRU.map(([k, l]) => `<button class="chip ${CRU === k ? 'on' : ''}" type="button" data-act="cru-periodo" data-f="${k}">${l}</button>`).join('')}</div>`;
   html += `<div class="section-title"><h2>Da fare</h2></div>` + (fare.length
-    ? `<div class="list">${fare.map(([h, t, v, c]) => `<a class="item" href="${h}"><span class="dot ${c}" aria-hidden="true"></span><div class="main"><div class="name">${t}</div></div>${v ? `<span class="prezzo">${v}</span>` : ''}<span class="chev">›</span></a>`).join('')}</div>`
+    ? `<div class="list dafare">${fare.map(([h, t, v, c]) => `<a class="item" href="${h}"><span class="dot ${c}" aria-hidden="true"></span><div class="main"><div class="name">${t}</div></div>${v ? `<span class="prezzo">${v}</span>` : ''}<span class="chev">›</span></a>`).join('')}</div>`
     : '<div class="notice green"><span>Niente di urgente. Tutto in ordine.</span></div>');
   html += `<div class="section-title"><h2>Entrate e uscite</h2><span class="count">${fmtDate(n.da)} – ${fmtDate(n.a)}</span></div>
     <div class="stats cru">
-      <a class="stat green" href="#riepilogo"><b class="euro">${fmtEuro(n.incassi)}</b><span>Incassi (dalla cassa) · ${n.chiusure.length} ${n.chiusure.length === 1 ? 'giorno' : 'giorni'}</span></a>
+      <a class="stat green" href="#cassa"><b class="euro">${fmtEuro(n.incassi)}</b><span>Incassi (dalla cassa) · ${n.chiusure.length} ${n.chiusure.length === 1 ? 'giorno' : 'giorni'}</span></a>
       <a class="stat" href="#fatture"><b class="euro">${fmtEuro(n.acquisti)}</b><span>Fatture dei fornitori · ${n.fatture.length}</span></a>
       <a class="stat" href="#pagamenti"><b class="euro">${fmtEuro(n.altreSpese)}</b><span>Altre spese · ${n.spese.length}</span></a>
       <div class="stat ${diff < 0 ? 'red' : ''}"><b class="euro">${fmtEuro(diff)}</b><span>Incassi meno uscite</span></div></div>
@@ -2568,12 +2569,12 @@ routes.cruscotto = () => {
       <dl class="kv"><dt>Venduto (con IVA)</dt><dd>${fmtEuro(n.scansionato)}</dd><dt>Venduto senza IVA</dt><dd>${fmtEuro(n.ricavo)}</dd><dt>Costo della merce venduta</dt><dd>${fmtEuro(n.costo)}</dd></dl>` : '<p class="muted small" style="margin:0">Nessuna vendita scansionata in questo periodo.</p>'}
       ${n.senzaCosto ? `<div class="faint small">${n.senzaCosto === 1 ? '1 prodotto venduto non ha' : n.senzaCosto + ' prodotti venduti non hanno'} prezzo d'acquisto o IVA: non ${n.senzaCosto === 1 ? 'è contato' : 'sono contati'} nel margine.</div>` : ''}
       <div class="faint small">Con il ricarico del 50% il margine è circa il 33%; con il 40%, circa il 29%. Frutta e verdura non sono contate.</div></div>`;
-  if (n.piuVenduti.length) html += `<div class="section-title"><h2>Più venduti</h2></div><div class="list">${n.piuVenduti.map(([pid, e]) => { const p = prodotto(pid); return `<a class="item" href="#prodotto/${encodeURIComponent(pid)}"><div class="main"><div class="name">${esc(p ? p.nome : '?')}</div><div class="sub">${fq(p, r3(e.qta))}</div></div><span class="prezzo">${fmtEuro(r2(e.imp))}</span></a>`; }).join('')}</div>`;
+  if (n.piuVenduti.length) html += `<div class="section-title"><h2>Più venduti</h2></div><div class="list venduti">${n.piuVenduti.map(([pid, e]) => { const p = prodotto(pid); return `<a class="item" href="#prodotto/${encodeURIComponent(pid)}"><div class="main"><div class="name">${esc(p ? p.nome : '?')}</div><div class="sub">${fq(p, r3(e.qta))}</div></div><span class="prezzo">${fmtEuro(r2(e.imp))}</span></a>`; }).join('')}</div>`;
   html += `<div class="section-title"><h2>Merce</h2></div><div class="stats" style="grid-template-columns:1fr 1fr">
       <div class="stat"><b class="euro">${fmtEuro(m.valore)}</b><span>In negozio, al prezzo d'acquisto</span></div>
       <a class="stat ${n.sprechi ? 'red' : ''}" href="#sprechi"><b class="euro">${fmtEuro(n.sprechi)}</b><span>Buttati nel periodo · ${n.nSprechi}</span></a></div>`;
   if (m.fermi.length) html += `<div class="section-title"><h2>Ferma da più di 60 giorni</h2><span class="count">${m.fermi.length} · ${fmtEuro(m.valoreFermi)}</span></div>
-    <div class="list">${m.fermi.slice(0, 6).map(x => `<a class="item" href="#prodotto/${encodeURIComponent(x.p.id)}"><div class="main"><div class="name">${esc(x.p.nome)}</div><div class="sub">${fq(x.p, r3(x.q))} · ${x.ultima ? 'ultima vendita ' + fmtDate(x.ultima) : 'mai venduto nell\'app'}</div></div><span class="prezzo">${x.val ? fmtEuro(r2(x.val)) : ''}</span></a>`).join('')}</div>
+    <div class="list fermi">${m.fermi.slice(0, 6).map(x => `<a class="item" href="#prodotto/${encodeURIComponent(x.p.id)}"><div class="main"><div class="name">${esc(x.p.nome)}</div><div class="sub">${fq(x.p, r3(x.q))} · ${x.ultima ? 'ultima vendita ' + fmtDate(x.ultima) : 'mai venduto nell\'app'}</div></div><span class="prezzo">${x.val ? fmtEuro(r2(x.val)) : ''}</span></a>`).join('')}</div>
     <div class="faint small">Da valutare: metterli in vista, in sconto, o non riordinarli.</div>`;
   html += `<a class="btn primary block" href="#riepilogo">Riepilogo del mese per la contabilità</a>`;
   return { title: 'Cruscotto', html, back: '#home', tab: 'home' };
@@ -2630,7 +2631,8 @@ routes.riepilogo = arg => {
       <button class="btn primary block" type="button" data-act="riep-excel" data-m="${mese}">Scarica in Excel</button></div>`;
   html += `<div class="section-title"><h2>Incassi</h2><span class="count">${fmtEuro(d.totIncassi)}</span></div>`;
   html += d.incassi.length ? t(d.incassi.map(c => `<tr><td>${fmtDate(c.data)}</td><td class="n">${fmtEuro(c.incasso)}</td><td class="n faint">${c.frutta ? fmtEuro(c.frutta) : ''}</td></tr>`).join(''), ['Giorno', 'Incasso', 'Frutta e verdura']) : '<div class="empty">Nessuna chiusura di cassa in questo mese.</div>';
-  if (d.mancano.length) html += `<div class="notice"><span>Manca la chiusura: ${d.mancano.map(x => `${fmtDate(x.data)} (scansionati ${fmtEuro(x.scansionato)})`).join(', ')}. Scrivi l'incasso dalla cassa nel foglio Excel.</span></div>`;
+  if (d.mancano.length) html += `<div class="notice"><span>Manca la chiusura: ${d.mancano.map(x => `${fmtDate(x.data)} (scansionati ${fmtEuro(x.scansionato)})`).join(', ')}. Scrivi l'incasso nello storico di cassa.</span></div>`;
+  html += `<a class="btn ghost block" href="#cassa/${mese}">Correggi gli incassi: storico di cassa</a>`;
   html += `<div class="section-title"><h2>Fatture dei fornitori</h2><span class="count">${d.fatture.length}</span></div>`;
   html += d.fatture.length ? t(d.fatture.map(fa => { const sg = segnoFattura(fa); const imp = (fa.riepilogo || []).reduce((x, r) => x + (+r.imponibile || 0), 0) * sg; return `<tr><td>${fmtDate(fa.data)}</td><td><a href="#fattura/${encodeURIComponent(fa.id)}">${esc(nomeFornFattura(fa))}</a><div class="faint">${fa.tipo === 'TD04' ? 'nota di credito ' : 'n. '}${esc(fa.numero)}</div></td><td class="n">${fmtEuro(fa.totale * sg)}<div class="faint">impon. ${fmtEuro(r2(imp))}</div></td></tr>`; }).join(''), ['Data', 'Fornitore', 'Totale']) : '<div class="empty">Nessuna fattura in questo mese.</div>';
   if (d.iva.length) html += `<div class="section-title"><h2>IVA sugli acquisti</h2></div>` + t(d.iva.map(([k, e]) => `<tr><td>${k}</td><td class="n">${fmtEuro(r2(e.imponibile))}</td><td class="n">${fmtEuro(r2(e.imposta))}</td></tr>`).join('') + `<tr class="tot"><td>Totale</td><td class="n">${fmtEuro(d.imponibile)}</td><td class="n">${fmtEuro(d.imposta)}</td></tr>`, ['Aliquota', 'Imponibile', 'IVA']);
@@ -2767,6 +2769,59 @@ async function riepilogoExcel(mese) {
     <p class="muted small">Si apre con Excel o Fogli Google. Per metterlo su Drive: app <b>Drive</b> → account del negozio → <b>+</b> → <b>Carica</b> → Download → il file.</p>
     <button class="btn primary block" type="button" data-act="close-modal">Ho capito</button>`);
   else if (r === 'annullato') toast('Excel non salvato', { err: true });
+}
+
+/* =========================================================
+   STORICO DI CASSA: gli incassi giorno per giorno, da correggere o cancellare (per esempio le prove)
+   ========================================================= */
+const GIORNI_SETT = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
+const nomeGiorno = iso => { const d = isoToDate(iso), s = GIORNI_SETT[d.getDay()]; return `${s[0].toUpperCase() + s.slice(1)} ${d.getDate()} ${MESI[d.getMonth()]}`; };
+const scansionatoDel = data => r2(venditeDel(data).reduce((t, v) => t + (importo(v) || 0), 0));
+routes.cassa = arg => {
+  const oggiM = todayISO().slice(0, 7), mese = /^\d{4}-\d{2}$/.test(arg || '') && arg <= oggiM ? arg : oggiM;
+  const giorni = new Set([...S.chiusure.values()].filter(c => (c.data || '').slice(0, 7) === mese).map(c => c.data));
+  for (const v of S.vendite.values()) if ((v.data || '').slice(0, 7) === mese) giorni.add(v.data);
+  const lista = [...giorni].sort().reverse(), chiuse = lista.map(d => S.chiusure.get('c' + d)).filter(Boolean);
+  const tot = r2(chiuse.reduce((t, c) => t + (+c.incasso || 0), 0));
+  let html = `<div class="mese-nav"><a class="btn small" href="#cassa/${meseVicino(mese, -1)}" aria-label="Mese prima">‹</a><h2>${nomeMese(mese)}</h2>${mese < oggiM ? `<a class="btn small" href="#cassa/${meseVicino(mese, 1)}" aria-label="Mese dopo">›</a>` : '<span class="btn small" style="visibility:hidden">›</span>'}</div>
+    <div class="stats" style="grid-template-columns:1fr 1fr"><div class="stat green"><b class="euro">${fmtEuro(tot)}</b><span>Incassi del mese</span></div>
+      <div class="stat"><b class="euro">${chiuse.length ? fmtEuro(r2(tot / chiuse.length)) : '–'}</b><span>Media al giorno · ${chiuse.length} ${chiuse.length === 1 ? 'giorno' : 'giorni'}</span></div></div>
+    <button class="btn block" type="button" data-act="cassa-nuova" data-m="${mese}">+ Scrivi l'incasso di un giorno</button>`;
+  html += lista.length ? `<div class="list">${lista.map(d => {
+    const c = S.chiusure.get('c' + d), sc = scansionatoDel(d);
+    const sotto = c ? [c.frutta ? 'frutta e verdura ' + fmtEuro(c.frutta) : '', sc ? 'scansionato ' + fmtEuro(sc) : ''].filter(Boolean).join(' · ') : `manca la chiusura · scansionati ${fmtEuro(sc)}`;
+    return `<button class="item" type="button" data-act="cassa-mod" data-d="${d}"><div class="main"><div class="name">${nomeGiorno(d)}</div><div class="sub ${c ? '' : 'arancio'}">${sotto}</div></div><span class="prezzo">${c ? fmtEuro(c.incasso) : '–'}</span><span class="chev">›</span></button>`;
+  }).join('')}</div>` : '<div class="empty">Nessun incasso in questo mese.</div>';
+  html += `<div class="faint small" style="text-align:center">Tocca un giorno per correggere l'incasso o cancellarlo, per esempio una prova.</div>`;
+  return { title: 'Storico di cassa', html, back: '#cruscotto', tab: 'banco' };
+};
+function cassaModal(data, mese) {
+  const c = data ? S.chiusure.get('c' + data) : null, oggi = todayISO();
+  const proposta = mese && mese < oggi.slice(0, 7) ? `${mese}-01` : oggi;
+  openModal(`${mhead(data ? nomeGiorno(data) : 'Incasso di un giorno')}
+    ${data ? '' : `<label class="field">Giorno<input type="date" id="caData" max="${oggi}" value="${proposta}"></label>`}
+    <label class="field">Incasso totale €<input type="text" inputmode="decimal" id="caInc" value="${c ? fmtImporto(c.incasso) : ''}" autocomplete="off" placeholder="es. 612,40"></label>
+    <label class="field">Di cui frutta e verdura € <span class="hint">se la cassa non lo separa, lascia vuoto</span><input type="text" inputmode="decimal" id="caFr" value="${c && c.frutta != null ? fmtImporto(c.frutta) : ''}" autocomplete="off"></label>
+    ${data ? `<div class="faint small">Scansionato nell'app quel giorno: ${fmtEuro(scansionatoDel(data))}</div>` : ''}
+    <button class="btn primary block" type="button" data-x="ok">Salva</button>
+    ${c ? `<button class="btn danger block" type="button" data-x="del">Cancella l'incasso di questo giorno</button>` : ''}`, b => {
+    b.querySelector('[data-x=ok]').onclick = async () => {
+      const d = data || b.querySelector('#caData').value;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d > oggi) { toast('Scegli un giorno, al massimo oggi', { err: true }); return; }
+      const inc = parseNum(b.querySelector('#caInc').value), fr = parseNum(b.querySelector('#caFr').value);
+      if (inc == null || inc < 0) { toast('Scrivi l\'incasso della cassa', { err: true }); return; }
+      const prima = S.chiusure.get('c' + d), sc = scansionatoDel(d);
+      await save('chiusure', { ...(prima || {}), id: 'c' + d, data: d, incasso: r2(inc), frutta: fr == null ? null : r2(fr), scansionato: sc, differenza: r2(sc - (inc - (fr || 0))), creato: prima ? prima.creato : Date.now(), modificato: Date.now() });
+      CH = null; closeModal(); render();
+      setTimeout(() => toast(`Incasso del ${fmtDate(d)} salvato`), 120);
+    };
+    const del = b.querySelector('[data-x=del]');
+    if (del) del.onclick = async () => {
+      const prima = { ...c };
+      await remove('chiusure', c.id); CH = null; closeModal(); render();
+      setTimeout(() => toast(`Incasso del ${fmtDate(data)} cancellato`, { action: { label: 'Annulla', run: async () => { await save('chiusure', prima); CH = null; render(); } } }), 120);
+    };
+  });
 }
 
 /* =========================================================
@@ -3146,6 +3201,8 @@ A['fa-pag-fatto'] = async el => {
   render();
 };
 A['cru-periodo'] = el => { CRU = el.dataset.f; render(); };
+A['cassa-nuova'] = el => cassaModal(null, el.dataset.m);
+A['cassa-mod'] = el => cassaModal(el.dataset.d);
 A['riep-excel'] = el => riepilogoExcel(el.dataset.m).catch(e => toast('Non riesco a preparare il file: ' + e.message, { err: true }));
 A['pag-segna'] = async el => {
   if (el.dataset.s) { await segnaSpesa(el.dataset.s); return; }

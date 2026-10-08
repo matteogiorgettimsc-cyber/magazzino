@@ -115,7 +115,7 @@ h3{font-size:.95rem;margin:0;font-weight:700}
 /* campi */
 label.field{display:flex;flex-direction:column;gap:6px;font-weight:600;font-size:.92rem}
 label.field .hint{font-weight:400;color:var(--ink-faint);font-size:.82rem}
-input[type=text],input[type=search],input[type=tel],input[type=email],input[type=password],input[type=url],input[type=number],select,textarea{
+input[type=text],input[type=search],input[type=tel],input[type=email],input[type=password],input[type=url],input[type=number],input[type=date],select,textarea{
   width:100%;min-height:var(--tap);border:1px solid #C9CFBE;border-radius:12px;background:#fff;padding:10px 14px;font-size:1rem;
 }
 textarea{min-height:120px;resize:vertical;line-height:1.45}
