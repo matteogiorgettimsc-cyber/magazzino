@@ -380,3 +380,8 @@ button.notice{width:100%;font:inherit;color:inherit;text-align:left;cursor:point
 .sel-barra{position:sticky;bottom:calc(80px + env(safe-area-inset-bottom,0px));z-index:5;display:grid;grid-template-columns:1fr 2fr;gap:10px;
   background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:10px;box-shadow:0 6px 20px rgba(32,38,31,.18)}
 .sel-barra .btn{margin:0}
+/* prezzi nella scheda e nel catalogo */
+.prezzo-vale{background:var(--surface-alt);border-radius:10px;padding:10px 12px;font-size:1rem}
+.cat-prezzo{display:flex;flex-direction:column;align-items:flex-end;line-height:1.15}
+.cat-prezzo small{font-size:.7rem;font-weight:600;color:var(--ink-faint)}
+.arancio{color:var(--orange)}

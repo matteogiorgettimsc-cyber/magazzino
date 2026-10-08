@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.8.1';
+const VERSIONE = '1.8.2';
 
 /* =========================================================
    Utilità
@@ -1018,7 +1018,8 @@ const MODI_BANCO = [['vendita', 'Vendita'], ['reso', 'Reso'], ['spreco', 'Spreco
 const RAGGRUPPA_MS = 3 * 60 * 1000;   // lo stesso prodotto scansionato di nuovo entro 3 minuti va sulla stessa riga
 let BANCO = { modo: 'vendita', tutte: false };
 
-const prezzoVendita = p => p ? (p.prezzoManuale ?? prezzoCalcolato(p) ?? p.prezzoVendita ?? null) : null;
+/* prezzo di vendita: quello scritto a mano comanda; se non c'è, il calcolato (il prezzo del listino non si usa più) */
+const prezzoVendita = p => p ? (p.prezzoManuale ?? prezzoCalcolato(p) ?? null) : null;
 const prezzoRiga = v => v.prezzo ?? (v.prodottoId ? prezzoVendita(prodotto(v.prodottoId)) : null);
 /* arrotonda ai centesimi come la cassa (0,525 → 0,53), senza gli errori dei decimali del computer */
 const centesimi = x => Math.sign(x) * Math.round(Math.abs(x) * 100 + 1e-6) / 100;
@@ -1600,9 +1601,11 @@ function catListHTML() {
     : `<div class="row"><span class="faint spacer">${res.total} prodotti</span><button class="btn small" type="button" data-act="cat-sel">Seleziona</button></div>`;
   return `${testa}<div class="list">${res.items.map(p => {
     const g = giacenza(p.id), s = prima.get(p.id);
+    const pv = prezzoVendita(p);
     const corpo = `<div class="main"><div class="name">${esc(p.nome)}</div>
       <div class="sub">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${g ? ' · in negozio ' + fq(p, g) : ''}${s ? ' · scade ' + fmtDate(s) : ''}</div></div>
-      ${p.sfuso ? '<span class="tag sfuso">sfuso</span>' : ''}${(p.codici || []).length ? '<span class="tag ok">codice</span>' : ''}`;
+      ${p.sfuso ? '<span class="tag sfuso">sfuso</span>' : ''}${(p.codici || []).length ? '<span class="tag ok">codice</span>' : ''}
+      ${pv == null ? '<span class="tag warn">senza prezzo</span>' : `<span class="prezzo cat-prezzo">${prezzoBreve(p)}${p.prezzoManuale != null ? '<small>a mano</small>' : ''}</span>`}`;
     return sel ? `<label class="item sel-riga"><input type="checkbox" data-sel="${esc(p.id)}" ${sel.has(p.id) ? 'checked' : ''}>${corpo}</label>`
       : `<a class="item" href="#prodotto/${encodeURIComponent(p.id)}">${corpo}<span class="chev">›</span></a>`;
   }).join('')}</div>${res.total > res.items.length ? `<button class="btn block" type="button" data-act="cat-altri">Mostra altri (${res.total - res.items.length})</button>` : ''}`;
@@ -1646,6 +1649,12 @@ routes.catalogo = arg => {
     onScan: code => { const p = byCode(code); if (p) location.hash = '#prodotto/' + encodeURIComponent(p.id); else collegaCodice(code, p2 => { location.hash = '#prodotto/' + encodeURIComponent(p2.id); }); }
   };
 };
+/* il prezzo che vale davvero: a mano se c'è, altrimenti calcolato */
+function valeHtml(p, calc, man) {
+  if (man != null && !isNaN(man)) return `Prezzo di vendita: <b>${fmtEuro(perUnita(p, man))}</b>${alKg(p)} <span class="tag">scritto a mano</span>`;
+  if (calc != null) return `Prezzo di vendita: <b>${fmtEuro(perUnita(p, calc))}</b>${alKg(p)} <span class="tag ok">calcolato</span>`;
+  return `<span class="arancio">Senza prezzo di vendita: scrivi acquisto e IVA, oppure il prezzo a mano.</span>`;
+}
 /* scorta minima nella scheda: pezzi per i prodotti normali, kg (o litri) per lo sfuso */
 const unitaScorta = p => isSfuso(p) ? nomeBase(p) : 'pezzi';
 const segnapostoScorta = p => isSfuso(p) ? 'nessuna' : String(settings().scortaMin);
@@ -1706,8 +1715,9 @@ routes.prodotto = id => {
         <label class="field">IVA<select id="pIva"><option value="">—</option>${[4, 10, 22].map(v => `<option value="${v}" ${p.iva === v ? 'selected' : ''}>${v}%</option>`).join('')}</select></label>
         <label class="field">Ricarico<select id="pRic"><option value="50" ${p.ricarico !== 40 ? 'selected' : ''}>50%</option><option value="40" ${p.ricarico === 40 ? 'selected' : ''}>40% (eccezione)</option></select></label>
         <label class="field"><span>Prezzo a mano €<span class="u-kg">${alKg(p)}</span></span><input type="text" inputmode="decimal" id="pMan" value="${p.prezzoManuale != null ? fmtNum(Math.round(p.prezzoManuale * (isSfuso(p) ? UNITA[unitaDi(p)].f : 1) * 1000) / 1000) : ''}" placeholder="vuoto = calcolato"></label></div>
-      <dl class="kv"><dt>Prezzo calcolato</dt><dd id="pCalc">${fmtEuro(perUnita(p, calc))}<span class="u-kg">${alKg(p)}</span></dd><dt>Prezzo nel listino</dt><dd>${fmtEuro(p.prezzoVendita)}</dd></dl>
-      <div class="faint small">Calcolato: acquisto + ricarico + IVA, arrotondato ai 10 centesimi superiori.</div></div>
+      <dl class="kv"><dt>Prezzo calcolato</dt><dd id="pCalc">${fmtEuro(perUnita(p, calc))}<span class="u-kg">${alKg(p)}</span></dd></dl>
+      <div class="prezzo-vale" id="pVale">${valeHtml(p, calc, p.prezzoManuale)}</div>
+      <div class="faint small">Calcolato: acquisto + ricarico + IVA, arrotondato ai 10 centesimi superiori. Se scrivi un prezzo a mano, vale quello.</div></div>
     <div class="card"><label class="field">Note<textarea id="pNote" style="min-height:80px">${esc(p.note)}</textarea></label>
       ${p.origine ? `<div class="faint small">Origine: ${esc(p.origine)}</div>` : ''}</div>
     <button class="btn primary block" type="button" data-act="p-salva" data-id="${esc(p.id)}">Salva modifiche</button>
@@ -1719,7 +1729,9 @@ routes.prodotto = id => {
       const forma = () => ({ sfuso: b.querySelector('#pSfuso').checked, unita: b.querySelector('#pUnita').value });
       const upd = () => {
         const tmp = { prezzoAcquisto: parseNum(b.querySelector('#pAcq').value), iva: parseNum(b.querySelector('#pIva').value), ricarico: +b.querySelector('#pRic').value };
-        b.querySelector('#pCalc').innerHTML = fmtEuro(perUnita(forma(), prezzoCalcolato(tmp))) + `<span class="u-kg">${alKg(forma())}</span>`;
+        const cc = prezzoCalcolato(tmp), mt = b.querySelector('#pMan').value.trim(), mv = mt ? parseNum(mt) : null;
+        b.querySelector('#pCalc').innerHTML = fmtEuro(perUnita(forma(), cc)) + `<span class="u-kg">${alKg(forma())}</span>`;
+        b.querySelector('#pVale').innerHTML = valeHtml(forma(), cc, mv != null ? mv / (isSfuso(forma()) ? UNITA[unitaDi(forma())].f : 1) : null);
       };
       const unitaTesti = () => {
         const fp = forma();
@@ -1731,7 +1743,7 @@ routes.prodotto = id => {
         b.querySelector('#pScorta').placeholder = segnapostoScorta(fp);
         upd();
       };
-      ['#pAcq', '#pIva', '#pRic'].forEach(s => b.querySelector(s).addEventListener('input', upd));
+      ['#pAcq', '#pIva', '#pRic', '#pMan'].forEach(s => b.querySelector(s).addEventListener('input', upd));
       b.querySelector('#pSfuso').addEventListener('change', e => {
         b.querySelector('#pSfusoBox').hidden = !e.target.checked;
         unitaTesti();
