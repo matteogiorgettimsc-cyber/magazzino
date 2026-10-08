@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.7.0';
+const VERSIONE = '1.8.0';
 
 /* =========================================================
    Utilità
@@ -138,6 +138,7 @@ async function save(store, obj) {
   const q = codaPer(store, [[prev, obj]]);
   await txConCoda(store, s => s.put(obj), q);
   if (store === 'prodotti') rebuildCodeIndex();
+  if (store === 'lotti') dopoLotti([[prev, obj]]);
 }
 async function saveMany(store, arr) {
   const coppie = arr.map(o => [S[store].get(o.id), o]);
@@ -145,6 +146,7 @@ async function saveMany(store, arr) {
   const q = codaPer(store, coppie);
   await txConCoda(store, s => arr.forEach(o => s.put(o)), q);
   if (store === 'prodotti') rebuildCodeIndex();
+  if (store === 'lotti') dopoLotti(coppie);
 }
 async function remove(store, id) {
   const prev = S[store].get(id);
@@ -152,6 +154,17 @@ async function remove(store, id) {
   const q = prev && syncAttiva() && SYNC_STORES.includes(store) ? [voceCoda({ st: store, id, del: true })] : [];
   await txConCoda(store, s => s.delete(id), q);
   if (store === 'prodotti') rebuildCodeIndex();
+  if (store === 'lotti' && prev) dopoLotti([[prev, undefined]]);
+}
+/* scorta minima: quando la merce di un prodotto SCENDE fino alla soglia (vendita, spreco, esaurito…),
+   il prodotto va da solo nell'ordine da preparare. Solo nel momento in cui la soglia si passa:
+   un prodotto mai contato (0 in negozio) non fa scattare niente, e le modifiche ricevute
+   dagli altri dispositivi non passano da qui (così non si ordina due volte). */
+function dopoLotti(coppie) {
+  const c = l => l && l.stato === 'attivo' ? (+l.quantita || 0) : 0;
+  const delta = new Map();
+  for (const [prev, obj] of coppie) { const pid = (obj || prev).prodottoId; delta.set(pid, (delta.get(pid) || 0) + c(obj) - c(prev)); }
+  for (const [pid, d] of delta) if (d < 0) { const dopo = giacenza(pid); controllaScorta(pid, r3(dopo - d), dopo); }
 }
 async function removeMany(store, ids) {
   const prev = ids.map(id => S[store].get(id)).filter(Boolean);
@@ -197,10 +210,10 @@ function codaPer(store, coppie) {
   return out;
 }
 
-const DEFAULT_SETTINGS = { soglie: { preferibilmente: [7, 15, 30], entro: [2, 5, 10] }, negozio: 'La Spesa Sfusa', avanzoSfuso: 5 };
+const DEFAULT_SETTINGS = { soglie: { preferibilmente: [7, 15, 30], entro: [2, 5, 10] }, negozio: 'La Spesa Sfusa', avanzoSfuso: 5, scortaMin: 3 };
 function settings() {
   const s = S.meta.settings || {};
-  return { negozio: s.negozio || DEFAULT_SETTINGS.negozio, soglie: Object.assign({}, DEFAULT_SETTINGS.soglie, s.soglie || {}), avanzoSfuso: s.avanzoSfuso ?? DEFAULT_SETTINGS.avanzoSfuso };
+  return { negozio: s.negozio || DEFAULT_SETTINGS.negozio, soglie: Object.assign({}, DEFAULT_SETTINGS.soglie, s.soglie || {}), avanzoSfuso: s.avanzoSfuso ?? DEFAULT_SETTINGS.avanzoSfuso, scortaMin: s.scortaMin ?? DEFAULT_SETTINGS.scortaMin };
 }
 /* sfuso: quanto può restare in un sacco (polvere, pesate) prima di considerarlo finito */
 function tolleranza(p) { return isSfuso(p) && p.pesoSacco ? r3(p.pesoSacco * settings().avanzoSfuso / 100) : 0; }
@@ -1388,14 +1401,51 @@ routes.chiusura = () => {
    ORDINI
    ========================================================= */
 const METODI ={ whatsapp: 'WhatsApp', email: 'Email', sito: 'Sito', telefono: 'Telefono', interno: 'Produzione interna', '': 'Da impostare' };
-async function aggiungiOrdine(pid, qta = 1, { silent = false } = {}) {
+/* soglia: pezzi (di base quella delle impostazioni, 3) oppure kg/litri per lo sfuso (solo se scritta nella scheda) */
+function sogliaScorta(p) {
+  if (!p) return null;
+  if (isSfuso(p)) return p.scortaMin > 0 ? p.scortaMin : null;
+  const v = p.scortaMin ?? settings().scortaMin;
+  return v > 0 ? v : null;
+}
+function controllaScorta(pid, prima, dopo) {
+  const s = sogliaScorta(prodotto(pid));
+  if (s == null || !(prima > s) || dopo > s) return;
+  setTimeout(() => riordina(pid, dopo).catch(e => console.error(e)), 0);
+}
+const inArrivo = pid => ordiniInviati().some(o => o.righe.some(r => r.prodottoId === pid && (r.ricevuto || 0) < r.qta));
+const riordinoInCorso = new Set();   // due vendite ravvicinate non devono aggiungere il prodotto due volte
+async function riordina(pid, resto) {
+  if (riordinoInCorso.has(pid)) return;
+  riordinoInCorso.add(pid);
+  try { await riordinaOra(pid, resto); } finally { riordinoInCorso.delete(pid); }
+}
+async function riordinaOra(pid, resto) {
+  const p = prodotto(pid); if (!p) return;
+  const quanto = fq(p, resto);
+  if (!p.fornitoreId) { toast(`Sta finendo ${p.nome} (restano ${quanto}), ma non ha un fornitore: aggiungilo nella scheda`, { err: true, ms: 6000 }); return; }
+  const o = ordineAperto(p.fornitoreId);
+  if (o && o.righe.some(r => r.prodottoId === pid)) return;     // c'è già in Da ordinare
+  if (inArrivo(pid)) return;                                      // già ordinato, sta arrivando
+  const u = ultimoOrdine(pid);
+  await aggiungiOrdine(pid, u && u.qta > 0 ? u.qta : 1, { silent: true, auto: true });
+  aggiornaBadge();
+  toast(`Sta finendo ${p.nome} (restano ${quanto}): messo in Da ordinare`, { action: { label: 'Togli', run: () => togliDaOrdine(pid) } });
+}
+async function togliDaOrdine(pid) {
+  const p = prodotto(pid), o = p && ordineAperto(p.fornitoreId);
+  if (!o) return;
+  await save('ordini', { ...o, righe: o.righe.filter(r => r.prodottoId !== pid) });
+  toast(`Tolto da Da ordinare: ${p.nome}`); render();
+}
+async function aggiungiOrdine(pid, qta = 1, { silent = false, auto = false } = {}) {
   const p = prodotto(pid); if (!p) return;
   if (!p.fornitoreId) { toast(`${p.nome} non ha un fornitore: aggiungilo nella scheda prodotto`, { err: true }); return; }
   let o = ordineAperto(p.fornitoreId);
   if (!o) o = { id: uid('o'), fornitoreId: p.fornitoreId, stato: 'aperto', righe: [], creato: Date.now(), inviato: null, chiuso: null };
   const righe = o.righe.map(r => ({ ...r }));
   const r = righe.find(r => r.prodottoId === pid);
-  if (r) r.qta += qta; else righe.push({ prodottoId: pid, qta, ricevuto: 0 });
+  if (r) r.qta += qta; else righe.push(auto ? { prodottoId: pid, qta, ricevuto: 0, auto: true } : { prodottoId: pid, qta, ricevuto: 0 });
   await save('ordini', { ...o, righe });
   if (!silent) {
     const u = ultimoOrdine(pid);
@@ -1425,7 +1475,7 @@ function ordiniHTML() {
       <a class="btn small ghost" href="#fornitore/${encodeURIComponent(o.fornitoreId)}">Contatti</a></header>
       ${o.righe.map(r => {
       const p = prodotto(r.prodottoId), u = ultimoOrdine(r.prodottoId);
-      return `<div class="item ord-row"><div class="main"><div class="name">${esc(p ? p.nome : '?')}${p && p.sfuso ? ` <span class="tag sfuso">${nomeSacco(p, 2)}${p.pesoSacco ? ' da ' + fmtSf(p, p.pesoSacco) : ''}</span>` : ''}</div><div class="sub">${u ? `ultima volta ${p && p.sfuso ? fmtSacchi(u.qta, p) : fmtNum(u.qta)} il ${fmtDate(u.data)}` : 'mai ordinato nell\'app'}${p ? ' · in negozio ' + fq(p, giacenza(p.id)) : ''}</div></div>
+      return `<div class="item ord-row"><div class="main"><div class="name">${esc(p ? p.nome : '?')}${p && p.sfuso ? ` <span class="tag sfuso">${nomeSacco(p, 2)}${p.pesoSacco ? ' da ' + fmtSf(p, p.pesoSacco) : ''}</span>` : ''}${r.auto ? ' <span class="tag warn">sta finendo</span>' : ''}</div><div class="sub">${u ? `ultima volta ${p && p.sfuso ? fmtSacchi(u.qta, p) : fmtNum(u.qta)} il ${fmtDate(u.data)}` : 'mai ordinato nell\'app'}${p ? ' · in negozio ' + fq(p, giacenza(p.id)) : ''}</div></div>
         <div class="mini-stepper"><button type="button" data-act="riga-" data-o="${esc(o.id)}" data-p="${esc(r.prodottoId)}" aria-label="Meno">−</button><input type="number" inputmode="numeric" min="0" value="${r.qta}" data-riga="${esc(o.id)}|${esc(r.prodottoId)}" aria-label="Quantità"><button type="button" data-act="riga+" data-o="${esc(o.id)}" data-p="${esc(r.prodottoId)}" aria-label="Più">+</button></div>
         <button class="btn small ghost" type="button" data-act="riga-del" data-o="${esc(o.id)}" data-p="${esc(r.prodottoId)}" aria-label="Togli">×</button></div>`;
     }).join('')}
@@ -1546,6 +1596,12 @@ routes.catalogo = arg => {
     onScan: code => { const p = byCode(code); if (p) location.hash = '#prodotto/' + encodeURIComponent(p.id); else collegaCodice(code, p2 => { location.hash = '#prodotto/' + encodeURIComponent(p2.id); }); }
   };
 };
+/* scorta minima nella scheda: pezzi per i prodotti normali, kg (o litri) per lo sfuso */
+const unitaScorta = p => isSfuso(p) ? nomeBase(p) : 'pezzi';
+const segnapostoScorta = p => isSfuso(p) ? 'nessuna' : String(settings().scortaMin);
+const aiutoScorta = p => isSfuso(p)
+  ? `Scrivi i ${nomeBase(p)}: quando in negozio ne restano così pochi, va in «Da ordinare» (${inLitri(p) ? 'una tanica' : 'un sacco'}, o quanti l'ultima volta). Vuoto = mai da solo.`
+  : `Vuoto = ${settings().scortaMin}, come tutti gli altri prodotti. 0 = mai da solo. Si ordina la quantità dell'ultimo ordine (o 1).`;
 /* scheda prodotto: codici e etichetta si aggiornano senza perdere quello che si sta scrivendo */
 const codiciHtml = p => (p.codici || []).map(c => `<span class="tag" style="font-size:.9rem;padding:6px 10px">${esc(c)} <button type="button" data-act="p-codice-del" data-c="${esc(c)}" style="border:0;background:none;font-size:1rem;cursor:pointer" aria-label="Togli codice">×</button></span>`).join('') || '<span class="faint">Nessun codice: scansiona ora il prodotto per collegarlo.</span>';
 const infoSfuso = u => u === 'l' ? 'Magazzino in litri, prezzo al litro. Al banco si scansiona l\'etichetta e si scrivono i ml.'
@@ -1590,6 +1646,10 @@ routes.prodotto = id => {
         <div class="faint small" id="pSfInfo">${infoSfuso(unitaDi(p))}</div>
         <div class="stack" id="pEtiBox">${boxEtichetta(p)}</div>
       </div></div>
+    <div class="card"><h3>Riordino</h3>
+      <label class="field"><span>Va da solo in «Da ordinare» quando ne restano</span>
+        <span class="row" style="gap:10px"><input type="text" inputmode="decimal" id="pScorta" value="${p.scortaMin != null ? fmtNum(p.scortaMin) : ''}" placeholder="${esc(segnapostoScorta(p))}" style="flex:1"><span class="faint" data-scorta-u>${unitaScorta(p)}</span></span></label>
+      <div class="faint small" data-scorta-hint>${aiutoScorta(p)}</div></div>
     <div class="card"><h3>Prezzi</h3>
       <div class="btn-grid" style="grid-template-columns:1fr 1fr">
         <label class="field"><span>Acquisto €<span class="u-base">${alBase(p)}</span></span><input type="text" inputmode="decimal" id="pAcq" value="${p.prezzoAcquisto != null ? fmtNum(p.prezzoAcquisto) : ''}"></label>
@@ -1616,6 +1676,9 @@ routes.prodotto = id => {
         $$('.u-kg', b).forEach(x => { x.textContent = alKg(fp); });
         $$('.u-base', b).forEach(x => { x.textContent = alBase(fp); });
         aggiornaTestiSacco(b, fp.unita); b.querySelector('#pSfInfo').textContent = infoSfuso(fp.unita);
+        b.querySelector('[data-scorta-u]').textContent = unitaScorta(fp);
+        b.querySelector('[data-scorta-hint]').textContent = aiutoScorta(fp);
+        b.querySelector('#pScorta').placeholder = segnapostoScorta(fp);
         upd();
       };
       ['#pAcq', '#pIva', '#pRic'].forEach(s => b.querySelector(s).addEventListener('input', upd));
@@ -2114,6 +2177,8 @@ routes.impostazioni = () => {
       ${['preferibilmente', 'entro'].map(t => `<div class="field" style="font-weight:600">${t === 'entro' ? 'Freschi (da consumarsi entro)' : 'Secchi e conserve (preferibilmente entro)'}
         <div class="btn-grid" style="grid-template-columns:repeat(3,1fr)">${s.soglie[t].map((v, i) => `<label class="field"><span class="hint">${['rosso', 'arancione', 'giallo'][i]}</span><input type="number" inputmode="numeric" min="0" data-soglia="${t}|${i}" value="${v}"></label>`).join('')}</div></div>`).join('')}
       <label class="field">Nome del negozio nei messaggi<input type="text" id="sNeg" value="${esc(s.negozio)}"></label>
+      <label class="field">Va da solo in «Da ordinare» quando ne restano (pezzi)<input type="number" inputmode="numeric" min="0" id="sScorta" value="${s.scortaMin}"></label>
+      <div class="faint small">Vale per tutti i prodotti a pezzi; nella scheda di un prodotto si può scrivere un numero diverso. 0 = mai da solo.</div>
       <button class="btn primary block" type="button" data-act="s-salva">Salva impostazioni</button></div>
     <div class="card"><h2>Sfuso</h2>
       <p class="muted small">Quando al sacco più vecchio resta meno di questa parte (polvere, pesate), l'app lo considera finito e passa al sacco dopo.</p>
@@ -2463,6 +2528,9 @@ A['p-salva'] = async el => {
     prezzoAcquisto: parseNum($('#pAcq').value), iva: parseNum($('#pIva').value), ricarico: +$('#pRic').value,
     prezzoManuale: manRaw != null ? Math.round(manRaw / f * 10000) / 10000 : null, note: $('#pNote').value.trim()
   };
+  const scTxt = $('#pScorta').value.trim(), sc = scTxt ? parseNum(scTxt) : null;
+  if (scTxt && !(sc >= 0)) { toast('La scorta minima non è un numero valido', { err: true }); return; }
+  dati.scortaMin = sc == null ? null : (sfuso ? r3(sc) : Math.round(sc));
   if (sfuso && $('#pSacco').value.trim() && !(sacco > 0)) { toast(`${inLitri(fp) ? 'I litri della tanica non sono' : 'Il peso del sacco non è'} un numero valido`, { err: true }); return; }
   dati.sfuso = sfuso; dati.unita = unita; dati.pesoSacco = sfuso && sacco > 0 ? sacco : (sfuso ? null : p.pesoSacco ?? null);
   let confezioni = [];
@@ -2597,8 +2665,8 @@ A['s-salva'] = async () => {
   const s = settings(); const soglie = JSON.parse(JSON.stringify(s.soglie));
   $$('[data-soglia]').forEach(i => { const [t, k] = i.dataset.soglia.split('|'); soglie[t][+k] = Math.max(0, parseInt(i.value, 10) || 0); });
   for (const t in soglie) soglie[t].sort((a, b) => a - b);
-  const av = parseInt($('#sAvanzo').value, 10);
-  await setMeta('settings', { soglie, negozio: $('#sNeg').value.trim() || DEFAULT_SETTINGS.negozio, avanzoSfuso: isNaN(av) ? DEFAULT_SETTINGS.avanzoSfuso : Math.min(30, Math.max(0, av)) });
+  const av = parseInt($('#sAvanzo').value, 10), sc = parseInt($('#sScorta').value, 10);
+  await setMeta('settings', { soglie, negozio: $('#sNeg').value.trim() || DEFAULT_SETTINGS.negozio, avanzoSfuso: isNaN(av) ? DEFAULT_SETTINGS.avanzoSfuso : Math.min(30, Math.max(0, av)), scortaMin: isNaN(sc) ? s.scortaMin : Math.max(0, sc) });
   toast('Impostazioni salvate'); render();
 };
 /* banco */
