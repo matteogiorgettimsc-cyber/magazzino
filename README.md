@@ -15,5 +15,6 @@ App per il negozio: vendita al banco, scadenze e ordini, funziona anche senza in
 - Riepilogo del mese (dalla 1.10.0): dal Cruscotto. Incassi giorno per giorno, fatture con IVA per aliquota, spese e pagamenti; "Scarica in Excel" prepara un file .xlsx con un foglio per ogni parte.
 - Storico di cassa (dalla 1.10.1): dal Cruscotto o da Chiusura di oggi; gli incassi giorno per giorno, da correggere o cancellare.
 - Categorie e grafici (dalla 1.11.0): Cruscotto → "Vendite per categoria e grafici": andamento degli incassi (colonne), vendite per categoria dalla più alla meno venduta, e per ogni categoria i prodotti più e meno venduti. "Proponi dal nome" scrive la categoria ai prodotti che non ce l'hanno; dal Catalogo, Seleziona → Categoria… per più prodotti insieme.
+- Categorie del catalogo (dalla 1.12.0): `categorie_catalogo.js` contiene, per ogni prodotto del catalogo iniziale, la categoria scelta guardando fornitore, nome e appunti dei listini (solo id, numero di categoria e un'impronta dell'appunto: niente nomi né prezzi). L'app le scrive una volta sola nei prodotti senza categoria o con ancora l'appunto del listino; quelle scritte in negozio restano. 24 categorie di base, ma il campo resta libero.
 - Backup: dall'app, pulsante "Fai backup", poi salva il file su Drive. Dalla versione 1.3.0 il backup contiene anche le vendite.
 

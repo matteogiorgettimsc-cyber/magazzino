@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.11.2';
+const VERSIONE = '1.12.0';
 
 /* =========================================================
    Utilità
@@ -2855,32 +2855,59 @@ function cassaModal(data, mese) {
    - la categoria è un campo libero del prodotto; c'è un elenco di base
    - "Proponi dal nome" la scrive per i prodotti che non ce l'hanno (si può annullare)
    ========================================================= */
-const CATEGORIE_BASE = ['Pasta', 'Riso e cereali', 'Farine', 'Legumi', 'Frutta secca e semi', 'Biscotti, snack e dolci', 'Pane e forno', 'Latte, formaggi e freschi', 'Olio, aceto e condimenti', 'Conserve e sughi', 'Spezie e sale', 'Caffè, tè e tisane', 'Miele, marmellate e creme', 'Zucchero e dolcificanti', 'Bevande', 'Detersivi e casa', 'Cura della persona', 'Frutta e verdura', 'Altro'];
+const CATEGORIE_BASE = ['Frutta e verdura', 'Pasta', 'Riso e cereali', 'Farine, lieviti e preparati', 'Legumi', 'Frutta secca e semi',
+  'Pane, crackers e snack salati', 'Biscotti e dolci', 'Cioccolato e caramelle', 'Miele, confetture e creme', 'Latte, formaggi e uova',
+  'Salumi e carne', 'Pesce', 'Gastronomia e pasta fresca', 'Sughi, conserve e sottoli', 'Olio, aceto e condimenti', 'Spezie, sale e brodi',
+  'Caffè, tè e tisane', 'Bevande e succhi', 'Vino, birra e liquori', 'Zucchero e dolcificanti', 'Detersivi e casa', 'Cura della persona', 'Altro'];
 const SENZA_CAT = 'Senza categoria';
 const catDi = p => (p && p.categoria || '').trim();
 const categorieUsate = () => [...new Set([...CATEGORIE_BASE, ...[...S.prodotti.values()].map(catDi).filter(Boolean)])].sort((a, b) => a.localeCompare(b, 'it'));
-/* l'ordine conta: «farina di ceci» è una farina, «biscotti di farro» sono biscotti, «latte di avena» è una bevanda */
+/* per i prodotti nuovi: la categoria dal nome. L'ordine conta: «farina di ceci» è una farina, «latte di avena» una bevanda */
+const [C_FV, C_PA, C_RI, C_FA, C_LE, C_FS, C_PN, C_BD, C_CC, C_MI, C_LA, C_SA, C_PE, C_GA, C_SU, C_OL, C_SP, C_CT, C_BE, C_VI, C_ZU, C_DE, C_CU] = CATEGORIE_BASE;
 const REGOLE_CAT = [
-  ['Detersivi e casa', /\b(detersiv|detergent|ammorbident|bucato|lavatrice|lavastoviglie|sgrassat|anticalcare|candeggin|percarbonat|acido citrico|bicarbonato|sapone (di )?marsiglia|spugn|pavimenti|vetri|igienizz|piatti a mano)/],
-  ['Cura della persona', /\b(shampoo|balsamo capelli|bagnoschiuma|docciaschiuma|dentifric|deodorant|crema (viso|corpo|mani)|saponett|sapone liquido|struccant|spazzolin|assorbent|burrocacao|cosmet)/],
-  ['Farine', /\b(farina|farine|semola|amido|fecola|lievito|crusca)/],
-  ['Bevande', /\b(succo|succhi|bevanda|drink|latte (di |d )?(avena|soia|riso|mandorl|cocco|nocciol|farro|anacard)|acqua|vino|birra|kombucha|spremut|nettare)/],
-  ['Caffè, tè e tisane', /\b(caffe|orzo solubile|cicoria solubile|te (verde|nero|bianco|rosso)|the\b|tisan|infuso|camomill|rooibos|matcha|cacao)/],
-  ['Pasta', /\b(pasta|spaghett|penne|fusill|maccheron|rigaton|tagliatell|lasagn|linguin|farfall|orecchiett|gnocch|couscous|cous cous|bulgur|tortellin|raviol|noodle|vermicell|ditalin|mezze maniche|paccher|trofie|strozzapret|bucatin|sedanin|conchigli|tagliolin|pappardell|casarecc|mafald|stellin)/],
-  ['Biscotti, snack e dolci', /\b(biscott|cracker|gallett|grissin|taralli|fette biscottate|wafer|cioccolat|barrett|snack|chips|merendin|torta|crostat|plumcake|frollin|amaretti|cantucci|torrone|caramell|pop ?corn|merenda|pasticcin|panettone|pandoro|colomba)/],
-  ['Pane e forno', /\b(pane|panin|focacc|pizza|piadin|pancarre|schiacciat|frisell)/],
-  ['Miele, marmellate e creme', /\b(miele|marmellat|confettur|composta|spalmabil|crema (di|al|alla) (nocciol|mandorl|pistacch|arachid|cacao)|burro di (arachidi|mandorl|nocciol|anacard|cacao)|tahin|sciroppo d acero|malto)/],
-  ['Zucchero e dolcificanti', /\b(zucchero|dolcificant|stevia|eritritolo|sciroppo d agave|fruttosio)/],
-  ['Olio, aceto e condimenti', /\b(olio|aceto|salsa di soia|tamari|shoyu|senape|maionese|ketchup|condiment|glassa|gomasio|miso)\b/],
-  ['Conserve e sughi', /\b(passata|pelati|polpa di pomodoro|pomodor|sugo|sughi|pesto|ragu|conserv|sottolio|sott olio|sottaceto|olive|capperi|carciofin|zuppa|minestr|vellutat|brodo|dado|crema di (verdur|carciof|zucca|funghi))/],
-  ['Latte, formaggi e freschi', /\b(latte|yogurt|yoghurt|kefir|formagg|mozzarell|ricott|burro|panna|stracchin|parmigian|pecorin|grana|uova|uovo|affettat|prosciutt|salam|bresaola|stracciatell|scamorz|caciott|feta|tofu|tempeh|seitan)/],
-  ['Riso e cereali', /\b(riso|quinoa|miglio|grano saraceno|orzo|farro|avena|fiocchi|muesli|granola|amaranto|sorgo|polenta|mais|corn ?flakes|cereali|teff|kamut|segale)/],
-  ['Legumi', /\b(ceci|lenticch|fagiol|piselli|lupin|soia|cicerchi|fave|azuki|edamame|hummus|legumi)/],
-  ['Frutta secca e semi', /\b(mandorl|noci|nocciol|anacard|pistacch|arachid|pinoli|semi|uvetta|uva sultanina|datter|fichi secchi|albicocche secche|prugne|goji|mirtilli rossi|cranberr|frutta secca|disidratat|essiccat|cocco|candit|scorze|bacche)/],
-  ['Spezie e sale', /\b(sale|spezi|pepe|curcuma|paprika|cannella|zenzero|origano|rosmarino|basilico|timo|curry|noce moscata|chiodi di garofano|cumino|peperoncino|erbe|vaniglia|alloro|salvia)\b/],
-  ['Frutta e verdura', /\b(mele|pere|banan|aranc|limon|mandarin|kiwi|patate|zucchin|carot|insalat|lattuga|cipoll|aglio|melanzan|peperon|spinac|cavol|broccol|finocch|sedano|verdur|frutta fresca)/],
+  [C_CU, /\b(dentifric|shampoo|shampo|bagnodoccia|bagnoschiuma|balsamo (labbra|solido|capelli)|deo\b|deodorant|crema (viso|corpo|mani)|bb cream|sapone|saponett|struccant|collutorio|colluttorio)/],
+  [C_DE, /\b(detersiv|detergent|ammorbident|bucato|lavatrice|lavastoviglie|stoviglie|sgrass|anticalcare|candeggin|percarbonat|acido citrico|bicarbonato|pavimenti|vetri|igieniz|carta igienica|pannocarta|tovaglio|sacchett|shopper|spugn)/],
+  [C_VI, /\b(vino|rosso conero|verdicchio|prosecco|moscato|igt|doc|docg|(?<!lievito di )birra|liquore|grappa|spumante|gin)\b/],
+  [C_CT, /\b(caffe|espresso|cialde|capsule|chicchi|miscela|orzo (solubile|anice|classico)|te verde|te nero|tisan|infuso|camomilla|rooibos|matcha|earl grey|bancha|sencha|chai)/],
+  [C_CC, /\b(cioccolat|tavolett|cacao|caramell|liquirizi|gianduiott|praline|cremino|uovo di pasqua)/],
+  [C_MI, /\b(miele|millefiori|composta|confettur|marmellat|crema (di |nocciol|pistacch|mandorl|arachid)|spalmabil|nocciolata|polline|propoli|pappa reale|burro di (arachidi|mandorl|nocciol))/],
+  [C_PE, /\b(tonno|acciugh|alici|sgombro|salmone|baccala|trota|branzino|orata|sardin|pesce|merluzz|polpo|gamber|cozze|vongol|bottarga|insalata di mare)/],
+  [C_SA, /\b(prosciutt|salam(?!oia)|salsicc|ciauscol|bresaola|speck|mortadell|porchetta|coppa|lonza|guanciale|pancett|lardo|wurstel|tacchino|pollo|manzo|vitell|maiale|suino|agnello|coniglio|hamburger|scottona|arista|spezzatino|roastbeef|carne|cotechino|zampone|nduja)/],
+  [C_BE, /\blatte (di |d )?(avena|soia|riso|mandorl|cocco|nocciol|farro|anacard)/],
+  [C_LA, /\b(latte|yogurt|yoghurt|kefir|formagg|caciott|mozzarell|ricott|burro|panna|stracchin|parmigian|pecorin|grana|robiola|tomino|primo sale|scamorz|provola|fontina|asiago|gorgonzola|taleggio|stracciatell|bocconcin|uova|uovo|feta|mascarpone|emmental|camembert)/],
+  [C_GA, /\b(lasagn(?!e senza uova)|tortellin|raviol|gnocchi di patate|insalata russa|piatti pronti|polpett|crocchett|arancin|frittat|parmigiana|pulled|torta salata|sformat|olive ascolane|burger)/],
+  [C_SU, /\b(passata|pelati|polpa di pomodoro|sugo|sughi|pesto|ragu|conserv|sottolio|sott olio|in olio|carciof|olive|capperi|giardiniera|semiconcentrato|cipolline|borettane|caponata|pate|zuppa|vellutat|minestron|hummus|humus|funghi secchi|porcini secchi|pomodori secchi|pomodori essiccati)/],
+  [C_OL, /\b(olio|aceto|balsamic|salsa di soia|tamari|shoyu|senape|maionese|ketchup|condiment|gomasio|miso\b|aglio nero)/],
+  [C_SP, /\b(sale\b|spezi|pepe\b|curcuma|paprika|cannella|zenzero|origano|rosmarino|timo\b|curry|noce moscata|chiodi di garofano|cumino|peperoncino|erbe\b|vaniglia|alloro|anice stellato|coriandolo|zafferano|brodo|dado\b|lievito alimentare|ginepro)/],
+  [C_ZU, /\b(zucchero|dolcificant|stevia|eritritolo|sciroppo d agave|sciroppo d acero|malto|panela|fruttosio|xilitolo)/],
+  [C_BE, /\b(succo|succhi|bevanda|drink|acqua (natur|frizz|di cocco)|kombucha|spremut|nettare|aranciata|limonata|chinotto|gassosa|sciroppo)/],
+  [C_FA, /\b(farina|semola|amido|fecola|lievit|crusca|preparato|mix (per|pane|pizza|dolci)|pasta madre|colorante|pan di spagna|frolla)/],
+  [C_PA, /\b(pasta|spaghett|penne|fusill|maccheron|rigaton|tagliatell|fettuccin|lasagne|linguin|farfall|orecchiett|gnocchett|vermicell|ditalin|mezze maniche|paccher|trofie|strozzapret|bucatin|sedanin|conchigli|tagliolin|pappardell|casarecc|mafald|stellin|calamarata|maltagliati|filini|cannelloni|tortiglion|anellini|risoni|grano duro)/],
+  [C_BD, /\b(biscott|cantucci|torta|crostat|plumcake|frollin|amaretti|torrone|panettone|pandoro|colomba|wafer|merendin|macarons|pasticcin|muffin|ciambell|savoiardi|tozzetti|maritozz|dolc)/],
+  [C_PN, /\b(pane|panin|focacc|piadin|cracker|gallett|grissin|taralli|fette biscottate|pizzett|chips|patatin|snack|bretzel|frisell|crostin|schiacciat|sfoglie)/],
+  [C_RI, /\b(riso|carnaroli|arborio|basmati|venere|quinoa|miglio|grano saraceno|orzo|farro|avena|fiocchi|muesli|granola|amaranto|sorgo|polenta|mais|corn ?flakes|cereali|teff|kamut|segale|couscous|cous cous|bulgur)/],
+  [C_LE, /\b(ceci|lenticch|fagiol|piselli|lupin|soia|cicerchi|fave|azuki|edamame|legumi|borlotti|cannellini)/],
+  [C_FS, /\b(mandorl|noci|noce|gherigli|nocciol|anacard|pistacch|arachid|pinoli|semi|uvetta|uva sultanina|datter|fichi secchi|albicocche secche|prugne secche|goji|cranberry|frutta secca|disidratat|essiccat|cocco|candit|granella)/],
+  [C_FV, /\b(mele|mela|pere|pera|banan|aranc|limon|mandarin|clementin|kiwi|patate|batata|zucchin|carot|insalat|lattuga|cipoll|aglio|melanzan|peperon|spinac|cavol|broccol|finocch|sedan|verdur|frutta|albicocch|ananas|anguria|avocado|bieta|cetriol|ciliegi|fragol|lampon|mirtill|pesche|pesca|prugne|susin|uva|melone|cocomer|pomodor|radicchi|rucola|scarola|zucca|zucche|funghi|asparag|porri|rape|ravanell|fagiolini|melograno|cachi|castagne|cicoria|basilico|prezzemolo)/],
 ];
 function categoriaDalNome(nome) { const n = norm(nome); for (const [c, re] of REGOLE_CAT) if (re.test(n)) return c; return ''; }
+/* le categorie preparate per il catalogo iniziale (file categorie_catalogo.js): si scrivono una volta sola,
+   solo nei prodotti che non ne hanno una o che hanno ancora l'appunto del listino in quel campo */
+const impronta = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
+async function categorieDalCatalogo() {
+  const cc = window.CATEGORIE_CATALOGO;
+  if (!cc || !S.prodotti.size || (S.meta.categorieCatalogo || 0) >= cc.versione) return 0;
+  const nuovi = [];
+  for (const riga of cc.prodotti.split(';')) {
+    const [id, i, h] = riga.split(','), p = S.prodotti.get(id), c = cc.nomi[+i];
+    if (!p || !c || catDi(p) === c) continue;
+    if (catDi(p) && !(h && impronta(norm(p.categoria)) === h)) continue;    // scritta in negozio: resta
+    nuovi.push({ ...p, categoria: c });
+  }
+  if (nuovi.length) await saveMany('prodotti', nuovi);
+  await setMeta('categorieCatalogo', cc.versione);
+  return nuovi.length;
+}
 function proponiCategorie() {
   const prop = [...S.prodotti.values()].filter(p => !catDi(p)).map(p => [p, categoriaDalNome(p.nome)]);
   const si = prop.filter(x => x[1]), conta = new Map();
@@ -3947,7 +3974,8 @@ async function init() {
   avviaSync();
   setTimeout(function primoControllo() {
     if (syncAttiva() && !SYNC.ultimo && SYNC.stato !== 'offline' && SYNC.stato !== 'errore' && SYNC.stato !== 'accesso' && (primoControllo.n = (primoControllo.n || 0) + 1) < 30) { setTimeout(primoControllo, 1000); return; }
-    controlloScorte().catch(e => console.error(e));
+    categorieDalCatalogo().then(n => { if (n) { if (['categorie', 'categoria', 'catalogo', 'cruscotto'].includes(current.name)) render(); } }).catch(e => console.error(e))
+      .finally(() => controlloScorte().catch(e => console.error(e)));
   }, 1200);
   if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => { persistito = p; if (!p) navigator.storage.persist().then(v => { persistito = v; }); });
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
@@ -3966,7 +3994,7 @@ async function init() {
       });
     }).catch(() => { });
   }
-  window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta };
+  window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta, categorieDalCatalogo };
 }
 init();
 })();
