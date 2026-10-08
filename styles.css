@@ -385,3 +385,10 @@ button.notice{width:100%;font:inherit;color:inherit;text-align:left;cursor:point
 .cat-prezzo{display:flex;flex-direction:column;align-items:flex-end;line-height:1.15}
 .cat-prezzo small{font-size:.7rem;font-weight:600;color:var(--ink-faint)}
 .arancio{color:var(--orange)}
+/* fatture */
+.fr .main{gap:4px}
+.fr-riga{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:.92rem;margin-top:4px}
+.fr-riga.fr-prezzo{justify-content:space-between;background:var(--surface-alt);border-radius:10px;padding:8px 10px;align-items:center}
+.fr-riga a{color:inherit}
+button.link{border:0;background:none;color:var(--accent);text-decoration:underline;padding:0;font:inherit;cursor:pointer}
+.verde{color:var(--green)}
