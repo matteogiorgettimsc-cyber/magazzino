@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.12.0';
+const VERSIONE = '1.12.1';
 
 /* =========================================================
    Utilità
@@ -2902,7 +2902,9 @@ async function categorieDalCatalogo() {
     const [id, i, h] = riga.split(','), p = S.prodotti.get(id), c = cc.nomi[+i];
     if (!p || !c || catDi(p) === c) continue;
     if (catDi(p) && !(h && impronta(norm(p.categoria)) === h)) continue;    // scritta in negozio: resta
-    nuovi.push({ ...p, categoria: c });
+    // l'appunto del listino che stava nel campo categoria non si perde: va nelle note
+    const vecchio = catDi(p), nota = vecchio && !(p.note || '').includes(vecchio) ? [p.note, 'Dal listino: ' + vecchio].filter(Boolean).join(' · ') : p.note;
+    nuovi.push({ ...p, categoria: c, note: nota });
   }
   if (nuovi.length) await saveMany('prodotti', nuovi);
   await setMeta('categorieCatalogo', cc.versione);
