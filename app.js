@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.14.0';
+const VERSIONE = '1.14.1';
 
 /* =========================================================
    Utilità
@@ -70,6 +70,9 @@ function fmtLitri(q) {
 }
 const fmtSf = (p, q) => inLitri(p) ? fmtLitri(q) : fmtKg(q);
 const fq = (p, q) => isSfuso(p) ? fmtSf(p, q) : `${fmtNum(q)} pz`;
+/* nome da mostrare per una vendita: se il prodotto è stato tolto dal catalogo, quello scritto nella vendita (dalla 1.14.1) */
+const nomeVendita = v => !v.prodottoId ? (v.codice || '?') : prodotto(v.prodottoId) ? prodotto(v.prodottoId).nome : v.nome ? `${v.nome} (eliminato)` : 'Prodotto eliminato';
+const ELIMINATI = 'Prodotti eliminati';
 const alKg = p => isSfuso(p) ? ' ' + UNITA[unitaDi(p)].al : '';             // prezzo di vendita
 const prezzoBreve = p => { const pr = prezzoVendita(p); return pr == null ? '–' : fmtEuro(perUnita(p, pr)) + (isSfuso(p) ? UNITA[unitaDi(p)].corto : ''); };
 const alBase = p => isSfuso(p) ? (inLitri(p) ? ' al litro' : ' al kg') : ''; // prezzo d'acquisto
@@ -1126,7 +1129,8 @@ async function muovi(prelievi, segno) {
   const mod = new Map();
   for (const pr of prelievi || []) {
     const l = mod.get(pr.lottoId) || S.lotti.get(pr.lottoId);
-    if (!l || !pr.qta) continue;
+    // confezione cancellata, o di un prodotto tolto dal catalogo: resta com'è (non torna in negozio)
+    if (!l || !pr.qta || l.stato === 'eliminato' || !S.prodotti.has(l.prodottoId)) continue;
     let n;
     if (segno > 0) n = l.stato === 'attivo' ? { ...l, quantita: r3((+l.quantita || 0) + pr.qta) } : { ...l, stato: 'attivo', chiuso: null, esauritoDaVendita: false, quantita: r3((l.avanzo || 0) + pr.qta), avanzo: 0 };
     else {
@@ -1162,7 +1166,7 @@ async function chiudiAvanzi(pid, tol) {
 }
 async function vendiPeso(p, kg, { origine = 'scansione' } = {}) {
   const ora = Date.now(), r = await preleva(p.id, kg);
-  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, codice: null, qta: r3(kg), prezzo: prezzoVendita(p), sfuso: true, prelievi: r.prelievi, mancanti: r.mancanti, origine });
+  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta: r3(kg), prezzo: prezzoVendita(p), sfuso: true, prelievi: r.prelievi, mancanti: r.mancanti, origine });
   render();
 }
 
@@ -1170,7 +1174,7 @@ async function vendi(p, { origine = 'scansione' } = {}) {
   const u = ultimaRiga(), ora = Date.now();
   if (u && u.tipo === 'vendita' && u.prodottoId === p.id && ora - (u.aggiornato || u.creato) < RAGGRUPPA_MS) return cambiaQta(u.id, 1);
   const r = await preleva(p.id, 1);
-  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, codice: null, qta: 1, prezzo: prezzoVendita(p), prelievi: r.prelievi, mancanti: r.mancanti, origine });
+  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta: 1, prezzo: prezzoVendita(p), prelievi: r.prelievi, mancanti: r.mancanti, origine });
   render();
 }
 async function vendiSconosciuto(code) {
@@ -1215,7 +1219,7 @@ async function rendi(p, qta = 1) {
     await save('lotti', l); lottoId = l.id; nuovo = true;
   }
   const ora = Date.now();
-  await save('vendite', { id: uid('v'), tipo: 'reso', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, codice: null, qta, prezzo: prezzoVendita(p), sfuso: isSfuso(p) || undefined, prelievi: [{ lottoId, qta }], mancanti: 0, lottoNuovo: nuovo, origine: 'scansione' });
+  await save('vendite', { id: uid('v'), tipo: 'reso', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta, prezzo: prezzoVendita(p), sfuso: isSfuso(p) || undefined, prelievi: [{ lottoId, qta }], mancanti: 0, lottoNuovo: nuovo, origine: 'scansione' });
   toast(`Reso: ${isSfuso(p) ? fmtSf(p, qta) + ' di ' : ''}${p.nome} torna in negozio`);
   render();
 }
@@ -1229,7 +1233,7 @@ async function annullaRiga(id, { silenzioso = false } = {}) {
   await remove('vendite', id);
   if (silenzioso) return;
   const p = prodotto(v.prodottoId);
-  toast(`Annullato: ${p && v.sfuso ? fmtSf(p, v.qta) + ' di' : fmtNum(v.qta) + ' ×'} ${p ? p.nome : v.codice || '?'}`);
+  toast(`Annullato: ${p && v.sfuso ? fmtSf(p, v.qta) + ' di' : fmtNum(v.qta) + ' ×'} ${nomeVendita(v)}`);
   render();
 }
 /* vendite con codice sconosciuto: quando il codice viene collegato, i pezzi escono dal magazzino */
@@ -1239,11 +1243,11 @@ async function sistemaCodici() {
     const p = byCode(v0.codice); if (!p) continue;
     const v = S.vendite.get(v0.id); if (!v || v.prodottoId) continue;
     if (isSfuso(p)) {   // il peso non si conosce: si collega il prodotto ma il magazzino non cambia
-      await save('vendite', { ...v, prodottoId: p.id, prezzo: prezzoVendita(p), sfuso: true, qta: 0, pesoMancante: v.qta, prelievi: [], mancanti: 0, sistemato: Date.now() });
+      await save('vendite', { ...v, prodottoId: p.id, nome: p.nome, prezzo: prezzoVendita(p), sfuso: true, qta: 0, pesoMancante: v.qta, prelievi: [], mancanti: 0, sistemato: Date.now() });
       n++; continue;
     }
     const r = await preleva(p.id, v.qta);
-    await save('vendite', { ...v, prodottoId: p.id, prezzo: prezzoVendita(p), prelievi: r.prelievi, mancanti: r.mancanti, sistemato: Date.now() });
+    await save('vendite', { ...v, prodottoId: p.id, nome: p.nome, prezzo: prezzoVendita(p), prelievi: r.prelievi, mancanti: r.mancanti, sistemato: Date.now() });
     n++;
   }
   return n;
@@ -1349,14 +1353,14 @@ function cartaUltima(v) {
   const sotto = sf ? (v.pesoMancante ? `<small>${lt ? 'Quantità non scritta' : 'Peso non scritto'}</small>` : `<small>${fmtSf(p, v.qta)} × ${fmtEuro(perUnita(p, prezzoRiga(v)))}${alKg(p)}</small>`) : (imp != null && v.qta > 1 ? `<small>${fmtNum(v.qta)} × ${fmtEuro(prezzoRiga(v))}</small>` : '');
   return `<section class="vcard ${reso ? 'reso' : ''} ${sf ? 'peso' : ''}" aria-label="Ultima registrazione">
     <div class="lab"><span>${reso ? 'Reso del cliente' : sf ? (lt ? 'Venduto alla spina' : 'Venduto a peso') : 'Venduto'}</span><time>${fmtOra(v.creato)}</time></div>
-    <div class="nome">${esc(p ? p.nome : 'Prodotto eliminato')}</div>
+    <div class="nome">${esc(nomeVendita(v))}</div>
     <div class="info">${[infoLotti(v), 'in negozio ' + fq(p, giacenza(v.prodottoId))].filter(Boolean).join(' · ')}</div>
     ${manca}
     <div class="bottom"><div class="tot">${imp == null ? '<small>Prezzo non impostato</small>' : fmtEuro(imp)}${sotto}</div>${destra}</div></section>`;
 }
 function rigaVendita(v) {
   const p = prodotto(v.prodottoId), imp = importo(v);
-  const nome = v.prodottoId ? (p ? p.nome : 'Prodotto eliminato') : v.codice;
+  const nome = nomeVendita(v);
   const sub = [v.tipo === 'reso' ? 'reso' : '', v.sfuso ? 'sfuso · ' + fmtSf(p, v.qta) : fmtNum(v.qta) + ' pz', mancaVisibile(v) ? 'non risultava in negozio' : ''].filter(Boolean).join(' · ');
   return `<button class="item vrow" type="button" data-act="vendita-apri" data-id="${esc(v.id)}"><div class="main"><div class="name ${v.prodottoId ? '' : 'mono'}">${esc(nome)}</div><div class="sub">${esc(sub)}${v.prodottoId ? '' : ' <span class="tag warn">da sistemare</span>'}</div></div>
     <span class="prezzo">${imp == null ? '–' : fmtEuro(imp)}</span><time>${fmtOra(v.creato)}</time></button>`;
@@ -2583,14 +2587,15 @@ function numeriPeriodo(f) {
     const imp = importo(v); if (imp == null) continue;
     scansionato += imp;
     if (!v.prodottoId) continue;
-    const e = perProd.get(v.prodottoId) || { imp: 0, qta: 0 }; e.imp += imp; e.qta += v.qta * segnoVendita(v); perProd.set(v.prodottoId, e);
+    const e = perProd.get(v.prodottoId) || { imp: 0, qta: 0, v }; e.imp += imp; e.qta += v.qta * segnoVendita(v); perProd.set(v.prodottoId, e);
     const p = prodotto(v.prodottoId);
-    if (!p || p.prezzoAcquisto == null || p.iva == null) { senzaCosto.add(v.prodottoId); continue; }
+    if (!p) continue;   // prodotto eliminato: fuori dal margine
+    if (p.prezzoAcquisto == null || p.iva == null) { senzaCosto.add(v.prodottoId); continue; }
     ricavo += imp / (1 + p.iva / 100); costo += p.prezzoAcquisto * v.qta * segnoVendita(v);
   }
   const sprechi = sprechiPeriodo(f).filter(perso);
   return {
-    da, a, chiusure, incassi, senzaChiusura, fatture, acquisti, spese, altreSpese,
+    da, a, chiusure, incassi, senzaChiusura, vendite, fatture, acquisti, spese, altreSpese,
     scansionato: r2(scansionato), ricavo: r2(ricavo), costo: r2(costo), margine: r2(ricavo - costo),
     perc: ricavo > 0 ? Math.round((ricavo - costo) / ricavo * 1000) / 10 : null, senzaCosto: senzaCosto.size,
     piuVenduti: [...perProd.entries()].filter(([, e]) => e.imp > 0).sort((x, y) => y[1].imp - x[1].imp).slice(0, 5),
@@ -2653,7 +2658,11 @@ routes.cruscotto = () => {
       <dl class="kv"><dt>Venduto (con IVA)</dt><dd>${fmtEuro(n.scansionato)}</dd><dt>Venduto senza IVA</dt><dd>${fmtEuro(n.ricavo)}</dd><dt>Costo della merce venduta</dt><dd>${fmtEuro(n.costo)}</dd></dl>` : '<p class="muted small" style="margin:0">Nessuna vendita scansionata in questo periodo.</p>'}
       ${n.senzaCosto ? `<div class="faint small">${n.senzaCosto === 1 ? '1 prodotto venduto non ha' : n.senzaCosto + ' prodotti venduti non hanno'} prezzo d'acquisto o IVA: non ${n.senzaCosto === 1 ? 'è contato' : 'sono contati'} nel margine.</div>` : ''}
       <div class="faint small">Con il ricarico del 50% il margine è circa il 33%; con il 40%, circa il 29%. Frutta e verdura non sono contate.</div></div>`;
-  if (n.piuVenduti.length) html += `<div class="section-title"><h2>Più venduti</h2></div><div class="faint small">Dalle vendite scansionate al Banco. Erano prove? Cancellale nello <a href="#cassa">storico di cassa</a>.</div><div class="list venduti">${n.piuVenduti.map(([pid, e]) => { const p = prodotto(pid); return `<a class="item" href="#prodotto/${encodeURIComponent(pid)}"><div class="main"><div class="name">${esc(p ? p.nome : '?')}</div><div class="sub">${fq(p, r3(e.qta))}</div></div><span class="prezzo">${fmtEuro(r2(e.imp))}</span></a>`; }).join('')}</div>`;
+  if (n.piuVenduti.length) html += `<div class="section-title"><h2>Più venduti</h2></div><div class="list venduti">${n.piuVenduti.map(([pid, e]) => {
+    const p = prodotto(pid), dentro = `<div class="main"><div class="name">${esc(nomeVendita(e.v))}</div><div class="sub">${p ? fq(p, r3(e.qta)) : `${e.v.sfuso ? fmtKg(r3(e.qta)) : fmtNum(r3(e.qta)) + ' pz'} · non è più nel catalogo`}</div></div><span class="prezzo">${fmtEuro(r2(e.imp))}</span>`;
+    return p ? `<a class="item" href="#prodotto/${encodeURIComponent(pid)}">${dentro}</a>` : `<div class="item">${dentro}</div>`;
+  }).join('')}</div>`;
+  if (n.vendite.length) html += `<button class="btn ghost block" type="button" data-act="cru-prove">Erano prove? Cancella le vendite scansionate (${n.vendite.length})</button>`;
   const vc = venditeCategorie(CRU);
   if (vc.lista.some(e => e.imp > 0)) html += `<div class="section-title"><h2>Per categoria</h2></div>${barreHTML(vc.lista.filter(e => e.imp > 0).slice(0, 5).map(e => ({ nome: e.nome, valore: e.imp, href: '#categoria/' + encodeURIComponent(e.nome), sotto: Math.round(e.quota) + '% del venduto' + (e.perc != null ? ' · margine ' + fmtNum(e.perc) + '%' : '') })), vc.lista[0].imp)}`;
   html += `<a class="btn block" href="#categorie">Vendite per categoria e grafici</a>`;
@@ -3048,19 +3057,21 @@ function venditeCategorie(f) {
   for (const v of S.vendite.values()) {
     if (!v.prodottoId || v.data < da || v.data > a) continue;
     const imp = importo(v); if (imp == null) continue;
-    const p = prodotto(v.prodottoId), e = voce(catDi(p) || SENZA_CAT), q = v.qta * segnoVendita(v);
+    const p = prodotto(v.prodottoId), e = voce(p ? catDi(p) || SENZA_CAT : ELIMINATI), q = v.qta * segnoVendita(v);
     e.imp += imp; totale += imp;
-    if (!isSfuso(p)) e.pz += q; else if (inLitri(p)) e.l += q; else e.kg += q;
+    if (p ? !isSfuso(p) : !v.sfuso) e.pz += q; else if (p && inLitri(p)) e.l += q; else e.kg += q;
     if (p && p.prezzoAcquisto != null && p.iva != null) { e.ricavo += imp / (1 + p.iva / 100); e.costo += p.prezzoAcquisto * q; }
-    const x = e.prodotti.get(v.prodottoId) || { imp: 0, qta: 0 }; x.imp += imp; x.qta += q; e.prodotti.set(v.prodottoId, x);
+    const x = e.prodotti.get(v.prodottoId) || { imp: 0, qta: 0, v }; x.imp += imp; x.qta += q; e.prodotti.set(v.prodottoId, x);
   }
   for (const l of lottiAttivi()) { const p = prodotto(l.prodottoId); if (p && p.prezzoAcquisto != null && l.quantita > 0) voce(catDi(p) || SENZA_CAT).merce += p.prezzoAcquisto * l.quantita; }
-  for (const r of S.sprechi.values()) if (r.data >= da && r.data <= a && perso(r)) voce(catDi(prodotto(r.prodottoId)) || SENZA_CAT).sprechi += valoreSpreco(r) || 0;
+  for (const r of S.sprechi.values()) if (r.data >= da && r.data <= a && perso(r)) voce(prodotto(r.prodottoId) ? catDi(prodotto(r.prodottoId)) || SENZA_CAT : ELIMINATI).sprechi += valoreSpreco(r) || 0;
   const lista = [...per.entries()].map(([nome, e]) => ({ nome, ...e, imp: r2(e.imp), perc: e.ricavo > 0 ? Math.round((e.ricavo - e.costo) / e.ricavo * 1000) / 10 : null, quota: totale ? e.imp / totale * 100 : 0 }))
     .sort((x, y) => y.imp - x.imp || y.merce - x.merce);
   return { da, a, lista, totale: r2(totale) };
 }
 const venditeMese = mese => venditeCategorie([`${mese}-01`, `${mese}-31`]);
+/* vendite di prodotti che non sono più nel catalogo (di solito prove) */
+const venditeEliminati = (da, a) => [...S.vendite.values()].filter(v => v.prodottoId && !S.prodotti.has(v.prodottoId) && v.data >= da && v.data <= a);
 const qtaCat = e => [e.pz ? `${fmtNum(r3(e.pz))} pz` : '', e.kg ? fmtKg(e.kg) : '', e.l ? fmtLitri(e.l) : ''].filter(Boolean).join(' + ');
 /* barre orizzontali: una riga per voce (nome e valore sopra, barra sotto), dal più al meno */
 function barreHTML(voci, max) {
@@ -3132,6 +3143,14 @@ routes.categorie = () => {
 };
 routes.categoria = arg => {
   const nome = arg || SENZA_CAT, d = venditeCategorie(VC.periodo), e = d.lista.find(x => x.nome === nome);
+  if (nome === ELIMINATI) {
+    const [da, a] = periodo(VC.periodo), voci = e ? [...e.prodotti.values()].filter(x => x.imp > 0).sort((x, y) => y.imp - x.imp) : [], tutte = venditeEliminati(da, a);
+    let html = `<div class="chips">${PERIODI_CRU.map(([k, l]) => `<button class="chip ${VC.periodo === k ? 'on' : ''}" type="button" data-act="vc-periodo" data-f="${k}">${l}</button>`).join('')}</div>
+      <div class="notice"><span>Vendite scansionate di prodotti che poi sono stati eliminati dal catalogo. Di solito sono prove: se è così, cancellale.</span></div>`;
+    html += voci.length ? `<div class="list">${voci.map(x => `<div class="item"><div class="main"><div class="name">${esc(nomeVendita(x.v))}</div><div class="sub">${x.v.sfuso ? fmtKg(r3(x.qta)) : fmtNum(r3(x.qta)) + ' pz'}</div></div><span class="prezzo">${fmtEuro(r2(x.imp))}</span></div>`).join('')}</div>` : '<div class="empty">Nessuna vendita in questo periodo.</div>';
+    if (tutte.length) html += `<button class="btn danger block" type="button" data-act="elim-prove" data-f="${VC.periodo}">Erano prove: cancellale (${tutte.length})</button>`;
+    return { title: nome, html, back: '#categorie', tab: 'home' };
+  }
   const prodotti = [...S.prodotti.values()].filter(p => (catDi(p) || SENZA_CAT) === nome);
   const venduti = e ? [...e.prodotti.entries()].map(([pid, x]) => ({ p: prodotto(pid), ...x })).filter(x => x.p && x.imp > 0).sort((a, b) => b.imp - a.imp) : [];
   const conVendite = new Set(venduti.map(x => x.p.id));
@@ -3578,9 +3597,11 @@ A['fa-pag-fatto'] = async el => {
   await save('fatture', { ...fa, pagamenti: [{ modalita: '', scadenza: fa.data, importo: fa.totale, pagata: todayISO() }] });
   render();
 };
-A['cru-periodo'] = el => { CRU = el.dataset.f; render(); };
+A['cru-periodo'] = el => { CRU = VC.periodo = el.dataset.f; render(); };
+A['cru-prove'] = () => { const n = numeriPeriodo(CRU); cancellaVendite(n.vendite, n.da === n.a ? `del ${fmtDate(n.da)}` : `dal ${fmtDate(n.da)} al ${fmtDate(n.a)}`); };
+A['elim-prove'] = el => { const [da, a] = periodo(el.dataset.f); cancellaVendite(venditeEliminati(da, a), 'dei prodotti eliminati'); };
 A['cassa-nuova'] = el => cassaModal(null, el.dataset.m);
-A['vc-periodo'] = el => { VC.periodo = el.dataset.f; render(); };
+A['vc-periodo'] = el => { VC.periodo = CRU = el.dataset.f; render(); };
 A['vc-serie'] = el => { VC.serie = el.dataset.s; render(); };
 A['cat-proponi'] = () => proponiCategorie();
 A['cat-vedi'] = el => { CAT = { ...CAT, q: '', forn: '', cat: el.dataset.c, senzaCodice: false, sfuso: false, limite: 60, sel: null }; location.hash = '#catalogo'; };
@@ -4108,7 +4129,7 @@ A['vendita-apri'] = el => {
   const v = S.vendite.get(el.dataset.id); if (!v) return;
   const p = prodotto(v.prodottoId), imp = importo(v);
   openModal(`${mhead(v.tipo === 'reso' ? 'Reso del cliente' : 'Vendita')}
-    <div><b>${esc(v.prodottoId ? (p ? p.nome : 'Prodotto eliminato') : v.codice)}</b><div class="faint">${fmtDate(v.data)} alle ${fmtOra(v.creato)} · ${v.sfuso ? fmtKg(v.qta) : fmtNum(v.qta) + ' pz'}${imp != null ? ' · ' + fmtEuro(imp) : ''}</div></div>
+    <div><b>${esc(nomeVendita(v))}</b><div class="faint">${fmtDate(v.data)} alle ${fmtOra(v.creato)} · ${v.sfuso ? fmtKg(v.qta) : fmtNum(v.qta) + ' pz'}${imp != null ? ' · ' + fmtEuro(imp) : ''}</div></div>
     ${v.prodottoId ? `<div class="faint small">${esc(infoLotti(v) || 'Nessuna confezione toccata')}${mancaVisibile(v) ? ` · ${fq(p, v.mancanti)} non risultavano in negozio` : ''}</div>` : '<div class="notice orange"><span>Codice da sistemare: collegalo a un prodotto e il magazzino si aggiorna.</span></div>'}
     <div class="stack">
       ${v.prodottoId ? '' : `<button class="btn primary block" type="button" data-act="ds-collega" data-c="${esc(v.codice)}">Collega a un prodotto</button>`}
