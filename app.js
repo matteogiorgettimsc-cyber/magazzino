@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.9.0';
+const VERSIONE = '1.10.0';
 
 /* =========================================================
    Utilità
@@ -92,14 +92,14 @@ function beep() {
    Dati (IndexedDB) – tutto in memoria, scrittura immediata
    ========================================================= */
 const DB_NAME = 'spesasfusa-magazzino';
-const STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'fatture', 'meta'];
-const DATI = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'fatture'];   // archivi salvati nel backup
+const STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'fatture', 'spese', 'meta'];
+const DATI = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'fatture', 'spese'];   // archivi salvati nel backup
 let db;
-const S = { fornitori: new Map(), prodotti: new Map(), lotti: new Map(), ordini: new Map(), sprechi: new Map(), vendite: new Map(), chiusure: new Map(), fatture: new Map(), meta: {}, coda: new Map() };
+const S = { fornitori: new Map(), prodotti: new Map(), lotti: new Map(), ordini: new Map(), sprechi: new Map(), vendite: new Map(), chiusure: new Map(), fatture: new Map(), spese: new Map(), meta: {}, coda: new Map() };
 
 function openDB() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, 5);
+    const r = indexedDB.open(DB_NAME, 6);
     r.onupgradeneeded = () => {
       const d = r.result;
       for (const s of STORES) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: s === 'meta' ? 'key' : 'id' });
@@ -659,10 +659,11 @@ routes.home = () => {
   if (rv.length) html += `<a class="card tight" href="#banco" style="text-decoration:none"><div class="row"><div class="spacer"><b>Banco di oggi</b><div class="faint small">${totaleQta(rv, v => v.tipo === 'reso' ? -1 : 1)} · ${fmtEuro(rv.reduce((t, v) => t + (importo(v) || 0), 0))}</div></div><span class="chev">›</span></div></a>`;
   {
     const fat = [...S.fatture.values()], daC = fat.filter(f => f.stato !== 'controllata').length;
-    const tra7 = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
-    const pag = scadenzePagamento().filter(x => !x.p.pagata && x.data <= tra7).length;
-    const sub = fat.length ? [daC ? `${daC} da controllare` : 'tutte controllate', pag ? `${pag} ${pag === 1 ? 'pagamento' : 'pagamenti'} entro 7 giorni` : ''].filter(Boolean).join(' · ') : 'Carica le fatture dei fornitori';
+    const pag = tuttiPagamenti().filter(x => !x.pagata && x.data <= piuGiorni(7)).length;
+    const sub = fat.length || pag ? [fat.length ? (daC ? `${daC} da controllare` : 'tutte controllate') : '', pag ? `${pag} ${pag === 1 ? 'pagamento' : 'pagamenti'} entro 7 giorni` : ''].filter(Boolean).join(' · ') : 'Carica le fatture dei fornitori';
     html += `<a class="card tight" href="#fatture" style="text-decoration:none"><div class="row"><div class="spacer"><b>Fatture e pagamenti</b><div class="faint small ${pag ? 'arancio' : ''}">${sub}</div></div><span class="chev">›</span></div></a>`;
+    const n = numeriPeriodo('mese');
+    html += `<a class="card tight" href="#cruscotto" style="text-decoration:none"><div class="row"><div class="spacer"><b>Cruscotto</b><div class="faint small">${n.chiusure.length || n.ricavo ? [n.chiusure.length ? `Incassi del mese ${fmtEuro(n.incassi)}` : '', n.perc != null ? `margine ${fmtNum(n.perc)}%` : ''].filter(Boolean).join(' · ') : 'Incassi, spese, margini, riepilogo per la contabilità'}</div></div><span class="chev">›</span></div></a>`;
   }
   const spm = sprechiPeriodo('mese').filter(perso);
   if (spm.length) html += `<a class="card tight" href="#sprechi" style="text-decoration:none"><div class="row"><div class="spacer"><b>Sprechi di questo mese</b><div class="faint small">${totaleQta(spm)} · ${fmtEuro(spm.reduce((t, r) => t + (valoreSpreco(r) || 0), 0))}</div></div><span class="chev">›</span></div></a>`;
@@ -2222,11 +2223,14 @@ function statoFattura(fa) {
 const NOMI_TIPO = { TD01: 'Fattura', TD02: 'Acconto', TD04: 'Nota di credito', TD05: 'Nota di debito', TD06: 'Parcella', TD24: 'Fattura differita', TD25: 'Fattura differita' };
 const NOMI_PAGAMENTO = { MP01: 'contanti', MP02: 'assegno', MP05: 'bonifico', MP08: 'carta', MP12: 'RiBa', MP19: 'addebito SEPA', MP20: 'addebito SEPA', MP21: 'addebito SEPA', MP23: 'PagoPA' };
 const segnoFattura = fa => fa.tipo === 'TD04' ? -1 : 1;
-/* pagamenti: ogni scadenza di ogni fattura */
-function scadenzePagamento() {
+/* pagamenti: ogni scadenza di ogni fattura, più le altre spese (affitto, bollette…) */
+const voceFattura = (fa, p, i) => ({ k: 'f', fa, i, p, data: p.scadenza || fa.data, importo: r2((p.importo ?? fa.totale) * segnoFattura(fa)), nome: nomeFornFattura(fa), pagata: p.pagata || null });
+const voceSpesa = sp => ({ k: 's', s: sp, data: sp.scadenza, importo: r2(sp.importo), nome: sp.descrizione, pagata: sp.pagata || null });
+function tuttiPagamenti() {
   const out = [];
-  for (const fa of S.fatture.values()) (fa.pagamenti || []).forEach((p, i) => out.push({ fa, i, p, data: p.scadenza || fa.data, importo: r2((p.importo ?? fa.totale) * segnoFattura(fa)) }));
-  return out.sort((a, b) => a.data.localeCompare(b.data));
+  for (const fa of S.fatture.values()) (fa.pagamenti || []).forEach((p, i) => out.push(voceFattura(fa, p, i)));
+  for (const sp of S.spese.values()) out.push(voceSpesa(sp));
+  return out.sort((a, b) => a.data.localeCompare(b.data) || a.nome.localeCompare(b.nome, 'it'));
 }
 const nomeFornFattura = fa => fa.fornitoreId && fornitore(fa.fornitoreId) ? fornitore(fa.fornitoreId).nome : fa.fornitore.nome;
 function rigaFattura(fa) {
@@ -2240,42 +2244,37 @@ function rigaFattura(fa) {
     <div class="sub">${NOMI_TIPO[fa.tipo] && fa.tipo !== 'TD01' ? esc(NOMI_TIPO[fa.tipo]) + ' ' : ''}n. ${esc(fa.numero)} del ${fmtDate(fa.data)}${tag.length ? '<br>' + tag.join(' ') : ''}</div></div>
     <span class="prezzo">${fmtEuro(fa.totale * segnoFattura(fa))}</span><span class="chev">›</span></a>`;
 }
-let FAT = { vista: 'fatture', tutte: false };
+let FAT = { tutte: false };
+const segFatture = on => `<div class="segmented"><a href="#fatture" class="${on === 'f' ? 'on' : ''}">Fatture</a><a href="#pagamenti" class="${on === 'p' ? 'on' : ''}">Pagamenti</a></div>`;
 routes.fatture = arg => {
-  if (arg === 'pagamenti' || arg === 'fatture') FAT.vista = arg;
+  if (arg === 'pagamenti') return routes.pagamenti();
   const tutte = [...S.fatture.values()].sort((a, b) => b.data.localeCompare(a.data) || b.importata - a.importata);
   const nuove = tutte.filter(f => f.stato !== 'controllata'), vecchie = tutte.filter(f => f.stato === 'controllata');
-  let html = `<button class="btn primary block" type="button" data-act="fatture-carica">Carica fatture</button>
-    <div class="faint small">Scaricale da <b>Fatture e Corrispettivi</b> (Agenzia delle Entrate, con SPID): fatture ricevute. Puoi scegliere più file insieme: .xml, .p7m o un .zip.</div>
-    <div class="segmented"><a href="#fatture/fatture" class="${FAT.vista === 'fatture' ? 'on' : ''}">Fatture</a><a href="#fatture/pagamenti" class="${FAT.vista === 'pagamenti' ? 'on' : ''}">Pagamenti</a></div>`;
-  if (FAT.vista === 'fatture') {
-    html += `<div class="section-title"><h2>Da controllare</h2><span class="count">${nuove.length}</span></div>`;
-    html += nuove.length ? `<div class="list">${nuove.map(rigaFattura).join('')}</div>` : '<div class="empty">Nessuna fattura da controllare.</div>';
-    if (vecchie.length) {
-      const mostra = FAT.tutte ? vecchie : vecchie.slice(0, 20);
-      html += `<div class="section-title"><h2>Controllate</h2><span class="count">${vecchie.length}</span></div><div class="list">${mostra.map(rigaFattura).join('')}</div>`;
-      if (mostra.length < vecchie.length) html += `<button class="btn block" type="button" data-act="fatture-tutte">Mostra tutte (${vecchie.length})</button>`;
-    }
-  } else {
-    const oggi = todayISO(), tra30 = (() => { const d = new Date(); d.setDate(d.getDate() + 30); return d.toISOString().slice(0, 10); })();
-    const aperte = scadenzePagamento().filter(x => !x.p.pagata);
-    const gruppi = [['Scaduti', aperte.filter(x => x.data < oggi), 'red'], ['Nei prossimi 30 giorni', aperte.filter(x => x.data >= oggi && x.data <= tra30), ''], ['Più avanti', aperte.filter(x => x.data > tra30), '']];
-    for (const [tit, l, cls] of gruppi) {
-      if (!l.length && tit !== 'Nei prossimi 30 giorni') continue;
-      html += `<div class="section-title"><h2>${tit}</h2><span class="count">${l.length ? fmtEuro(r2(l.reduce((t, x) => t + x.importo, 0))) : ''}</span></div>`;
-      html += l.length ? `<div class="list">${l.map(x => rigaPagamento(x, cls)).join('')}</div>` : '<div class="empty">Niente da pagare.</div>';
-    }
-    const fatti = scadenzePagamento().filter(x => x.p.pagata).sort((a, b) => b.p.pagata.localeCompare(a.p.pagata)).slice(0, 10);
-    if (fatti.length) html += `<div class="section-title"><h2>Pagati di recente</h2></div><div class="list">${fatti.map(x => rigaPagamento(x, '')).join('')}</div>`;
+  let html = segFatture('f') + `<button class="btn primary block" type="button" data-act="fatture-carica">Carica fatture</button>
+    <div class="faint small">Scaricale da <b>Fatture e Corrispettivi</b> (Agenzia delle Entrate, con SPID): fatture ricevute. Puoi scegliere più file insieme: .xml, .p7m o un .zip.</div>`;
+  html += `<div class="section-title"><h2>Da controllare</h2><span class="count">${nuove.length}</span></div>`;
+  html += nuove.length ? `<div class="list">${nuove.map(rigaFattura).join('')}</div>` : '<div class="empty">Nessuna fattura da controllare.</div>';
+  if (vecchie.length) {
+    const mostra = FAT.tutte ? vecchie : vecchie.slice(0, 20);
+    html += `<div class="section-title"><h2>Controllate</h2><span class="count">${vecchie.length}</span></div><div class="list">${mostra.map(rigaFattura).join('')}</div>`;
+    if (mostra.length < vecchie.length) html += `<button class="btn block" type="button" data-act="fatture-tutte">Mostra tutte (${vecchie.length})</button>`;
   }
+  html += `<a class="btn ghost block" href="#riepilogo">Riepilogo del mese per la contabilità</a>`;
   return { title: 'Fatture e pagamenti', html, back: '#home', tab: 'home' };
 };
+/* una riga di pagamento: scadenza di una fattura o spesa */
 function rigaPagamento(x, cls) {
-  const pag = x.p.pagata;
-  return `<div class="item" style="flex-wrap:wrap"><a class="main" href="#fattura/${encodeURIComponent(x.fa.id)}" style="color:inherit;text-decoration:none"><div class="name">${esc(nomeFornFattura(x.fa))}</div>
-    <div class="sub ${cls === 'red' && !pag ? 'arancio' : ''}">${pag ? 'pagata il ' + fmtDate(pag) : 'scade ' + fmtDate(x.data)} · ${esc(NOMI_PAGAMENTO[x.p.modalita] || x.p.modalita || '')} · fattura ${esc(x.fa.numero)}</div></a>
-    <span class="prezzo">${fmtEuro(x.importo)}</span>
-    <button class="btn small ${pag ? 'ghost' : ''}" type="button" data-act="pag-segna" data-f="${esc(x.fa.id)}" data-i="${x.i}">${pag ? 'Non pagata' : 'Pagata'}</button></div>`;
+  const pag = x.pagata, rossa = cls === 'red' && !pag;
+  const dett = x.k === 'f'
+    ? [NOMI_PAGAMENTO[x.p.modalita] || x.p.modalita || '', 'fattura ' + x.fa.numero]
+    : [x.s.modalita || '', nomeRipeti(x.s.ripeti), x.s.note || ''];
+  const testa = `<div class="name">${esc(x.nome)}</div><div class="sub ${rossa ? 'arancio' : ''}">${[pag ? 'pagata il ' + fmtDate(pag) : 'scade ' + fmtDate(x.data), ...dett].filter(Boolean).map(esc).join(' · ')}</div>`;
+  const main = x.k === 'f'
+    ? `<a class="main" href="#fattura/${encodeURIComponent(x.fa.id)}" style="color:inherit;text-decoration:none">${testa}</a>`
+    : `<button class="main pag-apri" type="button" data-act="spesa-mod" data-id="${esc(x.s.id)}">${testa}</button>`;
+  const dati = x.k === 'f' ? `data-f="${esc(x.fa.id)}" data-i="${x.i}"` : `data-s="${esc(x.s.id)}"`;
+  return `<div class="item pag" style="flex-wrap:wrap">${main}<span class="prezzo">${fmtEuro(x.importo)}</span>
+    <button class="btn small ${pag ? 'ghost' : ''}" type="button" data-act="pag-segna" ${dati}>${pag ? 'Non pagata' : 'Pagata'}</button></div>`;
 }
 routes.fattura = id => {
   const fa = S.fatture.get(id);
@@ -2298,7 +2297,9 @@ routes.fattura = id => {
   if (nota) html += `<div class="notice"><span>È una <b>nota di credito</b>: un rimborso o uno sconto del fornitore. Non cambia i prezzi.</span></div>`;
   if (st.prezzi > 1) html += `<button class="btn block" type="button" data-act="fa-prezzi" data-id="${esc(fa.id)}">Aggiorna tutti i prezzi cambiati (${st.prezzi})</button>`;
   html += `<div class="section-title"><h2>Righe</h2><span class="count">${fa.righe.length}</span></div><div class="list">${st.es.map((e, i) => rigaFatturaRiga(fa, e, i)).join('')}</div>`;
-  if ((fa.pagamenti || []).length) html += `<div class="section-title"><h2>Pagamento</h2></div><div class="list">${fa.pagamenti.map((p, i) => rigaPagamento({ fa, i, p, data: p.scadenza || fa.data, importo: r2((p.importo ?? fa.totale) * segnoFattura(fa)) }, p.scadenza && p.scadenza < todayISO() ? 'red' : '')).join('')}</div>`;
+  if ((fa.pagamenti || []).length) html += `<div class="section-title"><h2>Pagamento</h2></div><div class="list">${fa.pagamenti.map((p, i) => rigaPagamento(voceFattura(fa, p, i), p.scadenza && p.scadenza < todayISO() ? 'red' : '')).join('')}</div>`;
+  else if (!nota) html += `<div class="section-title"><h2>Pagamento</h2></div><div class="card"><p class="muted small" style="margin:0">La fattura non dice quando pagarla.</p>
+      <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="fa-pag-scad" data-id="${esc(fa.id)}">Scrivi la scadenza</button><button class="btn" type="button" data-act="fa-pag-fatto" data-id="${esc(fa.id)}">Già pagata</button></div></div>`;
   html += fa.stato === 'controllata'
     ? `<div class="faint small" style="text-align:center">Controllata${fa.controllata ? ' il ' + fmtDate(fa.controllata) : ''}.</div><button class="btn ghost block" type="button" data-act="fa-stato" data-id="${esc(fa.id)}">Rimetti da controllare</button>`
     : `<button class="btn primary block" type="button" data-act="fa-stato" data-id="${esc(fa.id)}">Fatto: segna come controllata</button>`;
@@ -2367,9 +2368,405 @@ async function importaFatture(files) {
   if (r.doppie) parti.push(r.doppie === 1 ? '1 era già caricata' : r.doppie + ' erano già caricate');
   if (r.saltati.length) parti.push(`${r.saltati.length} file saltati (non sono fatture)`);
   const msg = parti.join(' · ') || 'Nessuna fattura trovata nei file scelti';
-  FAT.vista = 'fatture';
   if (current.name === 'fatture') render(); else location.hash = '#fatture';
   setTimeout(() => toast(msg, { err: !r.nuove && !r.doppie, ms: 6000 }), 150);
+}
+
+/* =========================================================
+   PAGAMENTI: scadenze delle fatture e altre spese (affitto, bollette…)
+   - una spesa che si ripete, quando è pagata, prepara da sola la prossima
+   ========================================================= */
+const RIPETI = [[0, 'Una volta'], [1, 'Ogni mese'], [2, 'Ogni 2 mesi'], [3, 'Ogni 3 mesi'], [6, 'Ogni 6 mesi'], [12, 'Ogni anno']];
+const nomeRipeti = n => n ? (RIPETI.find(r => r[0] === +n) || [0, ''])[1].toLowerCase() : '';
+const MODI_SPESA = ['', 'bonifico', 'addebito SEPA', 'contanti', 'carta', 'F24'];
+const SPESE_SUGG = ['Affitto', 'Luce', 'Gas', 'Acqua', 'Telefono e internet', 'Rifiuti (TARI)', 'Assicurazione', 'F24 tasse e contributi', 'Commissioni POS e banca', 'Pulizie'];
+function piuGiorni(n) { const d = new Date(); d.setDate(d.getDate() + n); return todayISO(d); }
+/* stessa data tra n mesi (il 31 diventa l'ultimo del mese, poi torna al 31 quando c'è) */
+function piuMesi(iso, n, giorno) {
+  const [y, m, d] = iso.split('-').map(Number), g = giorno || d;
+  const ultimo = new Date(y, m - 1 + n + 1, 0).getDate();
+  return todayISO(new Date(y, m - 1 + n, Math.min(g, ultimo)));
+}
+const totale = l => r2(l.reduce((t, x) => t + (x.importo || 0), 0));
+routes.pagamenti = () => {
+  const oggi = todayISO(), tra30 = piuGiorni(30);
+  const tutti = tuttiPagamenti(), aperti = tutti.filter(x => !x.pagata);
+  const scaduti = aperti.filter(x => x.data < oggi), prossimi = aperti.filter(x => x.data >= oggi && x.data <= tra30), dopo = aperti.filter(x => x.data > tra30);
+  let html = segFatture('p') + `<div class="stats" style="grid-template-columns:1fr 1fr">
+      <div class="stat ${scaduti.length ? 'red' : ''}"><b class="euro">${fmtEuro(totale(scaduti))}</b><span>Scaduti${scaduti.length ? ' · ' + scaduti.length : ''}</span></div>
+      <div class="stat ${prossimi.length ? 'orange' : ''}"><b class="euro">${fmtEuro(totale(prossimi))}</b><span>Nei prossimi 30 giorni${prossimi.length ? ' · ' + prossimi.length : ''}</span></div></div>
+    <button class="btn block" type="button" data-act="spesa-nuova">+ Aggiungi una spesa: affitto, bollette…</button>`;
+  for (const [tit, l, cls] of [['Scaduti', scaduti, 'red'], ['Nei prossimi 30 giorni', prossimi, ''], ['Più avanti', dopo, '']]) {
+    if (!l.length && tit !== 'Nei prossimi 30 giorni') continue;
+    html += `<div class="section-title"><h2>${tit}</h2><span class="count">${l.length ? fmtEuro(totale(l)) : ''}</span></div>`;
+    html += l.length ? `<div class="list">${l.map(x => rigaPagamento(x, cls)).join('')}</div>` : '<div class="empty">Niente da pagare.</div>';
+  }
+  const perF = new Map();
+  for (const x of aperti.filter(x => x.k === 'f')) perF.set(x.nome, r2((perF.get(x.nome) || 0) + x.importo));
+  if (perF.size > 1) html += `<div class="section-title"><h2>Da pagare per fornitore</h2></div><div class="list">${[...perF.entries()].sort((a, b) => b[1] - a[1]).map(([n, v]) => `<div class="item"><div class="main"><div class="name">${esc(n)}</div></div><span class="prezzo">${fmtEuro(v)}</span></div>`).join('')}</div>`;
+  const fatti = tutti.filter(x => x.pagata && x.pagata >= piuGiorni(-45)).sort((a, b) => b.pagata.localeCompare(a.pagata)).slice(0, 15);
+  if (fatti.length) html += `<div class="section-title"><h2>Pagati di recente</h2></div><div class="list">${fatti.map(x => rigaPagamento(x, '')).join('')}</div>`;
+  html += `<div class="faint small" style="text-align:center">Le scadenze delle fatture arrivano da sole quando carichi le fatture. Qui aggiungi le altre spese del negozio.</div>`;
+  return { title: 'Fatture e pagamenti', html, back: '#home', tab: 'home' };
+};
+function spesaModal(id) {
+  const sp = id ? S.spese.get(id) : null;
+  const rip = sp ? +sp.ripeti || 0 : 1;
+  openModal(`${mhead(sp ? 'Spesa' : 'Nuova spesa')}
+    <label class="field">Che spesa è<input type="text" id="spDesc" list="spSugg" value="${esc(sp ? sp.descrizione : '')}" placeholder="es. Affitto" autocomplete="off"></label>
+    <datalist id="spSugg">${SPESE_SUGG.map(x => `<option value="${esc(x)}">`).join('')}</datalist>
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr">
+      <label class="field">Importo €<input type="text" inputmode="decimal" id="spImp" value="${sp ? fmtImporto(sp.importo) : ''}" autocomplete="off"></label>
+      <label class="field">Scadenza<input type="date" id="spScad" value="${sp ? sp.scadenza : todayISO()}"></label></div>
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr">
+      <label class="field">Si ripete<select id="spRip">${RIPETI.map(([v, l]) => `<option value="${v}" ${rip === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="field">Come si paga<select id="spMod">${MODI_SPESA.map(m => `<option value="${esc(m)}" ${(sp ? sp.modalita || '' : '') === m ? 'selected' : ''}>${m || '—'}</option>`).join('')}</select></label></div>
+    <label class="field">Note<input type="text" id="spNote" value="${esc(sp ? sp.note || '' : '')}" autocomplete="off"></label>
+    ${sp && sp.pagata ? `<div class="notice green"><span>Pagata il ${fmtDate(sp.pagata)}.</span></div>` : ''}
+    <button class="btn primary block" type="button" data-x="ok">Salva</button>
+    ${sp ? `<button class="btn danger block" type="button" data-x="del">Elimina questa spesa</button>` : ''}
+    <div class="faint small">Se si ripete, quando la segni pagata compare da sola la prossima. Per smettere: «Si ripete» → «Una volta».</div>`, b => {
+    b.querySelector('[data-x=ok]').onclick = async () => {
+      const descrizione = b.querySelector('#spDesc').value.trim(), importo = parseNum(b.querySelector('#spImp').value), scadenza = b.querySelector('#spScad').value;
+      if (!descrizione) { toast('Scrivi che spesa è', { err: true }); return; }
+      if (importo == null || importo <= 0) { toast('Scrivi l\'importo', { err: true }); return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(scadenza)) { toast('Scegli la data di scadenza', { err: true }); return; }
+      const ripeti = +b.querySelector('#spRip').value || 0;
+      const nuovo = { ...(sp || { id: uid('sp'), pagata: null, creato: Date.now() }), descrizione, importo: r2(importo), scadenza, ripeti, giorno: +scadenza.slice(8, 10), modalita: b.querySelector('#spMod').value, note: b.querySelector('#spNote').value.trim() };
+      if (!nuovo.serie) nuovo.serie = nuovo.id;
+      await save('spese', nuovo); closeModal(); render();
+      setTimeout(() => toast(sp ? 'Spesa salvata' : `Spesa aggiunta: scade il ${fmtDate(scadenza)}`), 120);
+    };
+    const del = b.querySelector('[data-x=del]');
+    if (del) del.onclick = async () => {
+      const prima = { ...sp };
+      await remove('spese', sp.id); closeModal(); render();
+      setTimeout(() => toast('Spesa eliminata', { action: { label: 'Annulla', run: async () => { await save('spese', prima); render(); } } }), 120);
+    };
+  });
+}
+async function segnaSpesa(id) {
+  const sp = S.spese.get(id); if (!sp) return;
+  if (sp.pagata) { await save('spese', { ...sp, pagata: null }); render(); return; }
+  await save('spese', { ...sp, pagata: todayISO() });
+  let dopo = null;
+  const serie = sp.serie || sp.id;
+  if (+sp.ripeti > 0 && ![...S.spese.values()].some(x => x.id !== sp.id && (x.serie || x.id) === serie && x.scadenza > sp.scadenza)) {
+    dopo = { ...sp, id: uid('sp'), scadenza: piuMesi(sp.scadenza, +sp.ripeti, sp.giorno), pagata: null, serie, creato: Date.now() };
+    await save('spese', dopo);
+  }
+  render();
+  setTimeout(() => toast(dopo ? `Pagata. La prossima: ${fmtDate(dopo.scadenza)}` : 'Pagata', { action: { label: 'Annulla', run: async () => {
+    if (dopo) await remove('spese', dopo.id);
+    const cur = S.spese.get(id); if (cur) await save('spese', { ...cur, pagata: null });
+    render();
+  } } }), 60);
+}
+function scadenzaFatturaModal(fa) {
+  openModal(`${mhead('Scadenza del pagamento')}
+    <p class="muted small" style="margin:0">${esc(nomeFornFattura(fa))} · fattura ${esc(fa.numero)} · ${fmtEuro(fa.totale)}</p>
+    <label class="field">Da pagare entro il<input type="date" id="fsData" value="${piuMesi(fa.data, 1)}"></label>
+    <label class="field">Come si paga<select id="fsMod">${[['', '—'], ['MP05', 'bonifico'], ['MP12', 'RiBa'], ['MP19', 'addebito SEPA'], ['MP01', 'contanti'], ['MP08', 'carta'], ['MP02', 'assegno']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
+    <button class="btn primary block" type="button" data-x="ok">Salva</button>`, b => {
+    b.querySelector('[data-x=ok]').onclick = async () => {
+      const d = b.querySelector('#fsData').value;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) { toast('Scegli la data', { err: true }); return; }
+      await save('fatture', { ...S.fatture.get(fa.id), pagamenti: [{ modalita: b.querySelector('#fsMod').value, scadenza: d, importo: fa.totale, pagata: null }] });
+      closeModal(); render();
+    };
+  });
+}
+
+/* =========================================================
+   CRUSCOTTO: i numeri del negozio in una pagina
+   - incassi dalle chiusure di cassa, acquisti dalle fatture, altre spese
+   - margine stimato sulle vendite scansionate (prezzo senza IVA meno prezzo d'acquisto di oggi)
+   ========================================================= */
+let CRU = 'mese';
+const PERIODI_CRU = [['mese', 'Questo mese'], ['scorso', 'Mese scorso'], ['anno', 'Ultimi 12 mesi']];
+const segnoVendita = v => v.tipo === 'reso' ? -1 : 1;
+function numeriPeriodo(f) {
+  const [da, a] = periodo(f), dentro = d => !!d && d >= da && d <= a, oggi = todayISO();
+  const chiusure = [...S.chiusure.values()].filter(c => dentro(c.data));
+  const incassi = r2(chiusure.reduce((t, c) => t + (+c.incasso || 0), 0));
+  const vendite = [...S.vendite.values()].filter(v => dentro(v.data));
+  const senzaChiusura = [...new Set(vendite.map(v => v.data))].filter(d => d !== oggi && !S.chiusure.has('c' + d)).sort();
+  const fatture = [...S.fatture.values()].filter(fa => dentro(fa.data));
+  const acquisti = r2(fatture.reduce((t, fa) => t + (+fa.totale || 0) * segnoFattura(fa), 0));
+  const spese = [...S.spese.values()].filter(sp => dentro(sp.scadenza));
+  const altreSpese = r2(spese.reduce((t, sp) => t + (+sp.importo || 0), 0));
+  let scansionato = 0, ricavo = 0, costo = 0, senzaCosto = new Set();
+  const perProd = new Map();
+  for (const v of vendite) {
+    const imp = importo(v); if (imp == null) continue;
+    scansionato += imp;
+    if (!v.prodottoId) continue;
+    const e = perProd.get(v.prodottoId) || { imp: 0, qta: 0 }; e.imp += imp; e.qta += v.qta * segnoVendita(v); perProd.set(v.prodottoId, e);
+    const p = prodotto(v.prodottoId);
+    if (!p || p.prezzoAcquisto == null || p.iva == null) { senzaCosto.add(v.prodottoId); continue; }
+    ricavo += imp / (1 + p.iva / 100); costo += p.prezzoAcquisto * v.qta * segnoVendita(v);
+  }
+  const sprechi = sprechiPeriodo(f).filter(perso);
+  return {
+    da, a, chiusure, incassi, senzaChiusura, fatture, acquisti, spese, altreSpese,
+    scansionato: r2(scansionato), ricavo: r2(ricavo), costo: r2(costo), margine: r2(ricavo - costo),
+    perc: ricavo > 0 ? Math.round((ricavo - costo) / ricavo * 1000) / 10 : null, senzaCosto: senzaCosto.size,
+    piuVenduti: [...perProd.entries()].filter(([, e]) => e.imp > 0).sort((x, y) => y[1].imp - x[1].imp).slice(0, 5),
+    sprechi: r2(sprechi.reduce((t, r) => t + (valoreSpreco(r) || 0), 0)), nSprechi: sprechi.length
+  };
+}
+/* merce in negozio al prezzo d'acquisto, e merce ferma: niente vendite da 60 giorni */
+function numeriMerce() {
+  const limite = piuGiorni(-60), ultimaVendita = new Map();
+  for (const v of S.vendite.values()) if (v.prodottoId && v.tipo !== 'reso' && (!ultimaVendita.has(v.prodottoId) || v.data > ultimaVendita.get(v.prodottoId))) ultimaVendita.set(v.prodottoId, v.data);
+  let valore = 0, senzaPrezzo = 0; const perProd = new Map();
+  for (const l of lottiAttivi()) {
+    const p = prodotto(l.prodottoId), q = +l.quantita || 0; if (!p || q <= 0) continue;
+    const e = perProd.get(p.id) || { q: 0, val: 0, arrivo: l.arrivo || '' };
+    e.q += q; if (l.arrivo && l.arrivo < e.arrivo) e.arrivo = l.arrivo;
+    if (p.prezzoAcquisto != null) { e.val += p.prezzoAcquisto * q; valore += p.prezzoAcquisto * q; } else senzaPrezzo++;
+    perProd.set(p.id, e);
+  }
+  const fermi = [...perProd.entries()].filter(([pid, e]) => e.arrivo && e.arrivo <= limite && !((ultimaVendita.get(pid) || '') > limite))
+    .map(([pid, e]) => ({ p: prodotto(pid), ...e, ultima: ultimaVendita.get(pid) || null })).sort((x, y) => y.val - x.val);
+  return { valore: r2(valore), senzaPrezzo, fermi, valoreFermi: r2(fermi.reduce((t, x) => t + x.val, 0)) };
+}
+function cosaDaFare() {
+  const oggi = todayISO(), tra7 = piuGiorni(7), out = [];
+  const aperti = tuttiPagamenti().filter(x => !x.pagata);
+  const scad = aperti.filter(x => x.data < oggi), presto = aperti.filter(x => x.data >= oggi && x.data <= tra7);
+  if (scad.length) out.push(['#pagamenti', `${scad.length === 1 ? '1 pagamento scaduto' : scad.length + ' pagamenti scaduti'}`, fmtEuro(totale(scad)), 'red']);
+  if (presto.length) out.push(['#pagamenti', `${presto.length === 1 ? '1 pagamento' : presto.length + ' pagamenti'} entro 7 giorni`, fmtEuro(totale(presto)), 'orange']);
+  const daC = [...S.fatture.values()].filter(f => f.stato !== 'controllata').length;
+  if (daC) out.push(['#fatture', daC === 1 ? '1 fattura da controllare' : `${daC} fatture da controllare`, '', '']);
+  const urg = lottiAttivi().filter(l => !l.gestito && ['scaduto', 'rosso', 'arancio'].includes(fascia(l))).length;
+  if (urg) out.push(['#scadenze/urgenti', urg === 1 ? '1 prodotto in scadenza' : `${urg} prodotti in scadenza o scaduti`, '', '']);
+  const righe = [...S.ordini.values()].filter(o => o.stato === 'aperto').reduce((t, o) => t + o.righe.length, 0);
+  if (righe) out.push(['#ordini', righe === 1 ? '1 prodotto da ordinare' : `${righe} prodotti da ordinare`, '', '']);
+  const lb = S.meta.lastBackup, gg = lb ? -daysUntil(lb.slice(0, 10)) : null;
+  if (gg == null || gg >= 3) out.push(['#impostazioni', gg == null ? 'Nessun backup ancora' : `Ultimo backup ${gg} giorni fa`, '', 'red']);
+  return out;
+}
+routes.cruscotto = () => {
+  const n = numeriPeriodo(CRU), m = numeriMerce(), fare = cosaDaFare();
+  const diff = r2(n.incassi - n.acquisti - n.altreSpese);
+  let html = `<div class="chips">${PERIODI_CRU.map(([k, l]) => `<button class="chip ${CRU === k ? 'on' : ''}" type="button" data-act="cru-periodo" data-f="${k}">${l}</button>`).join('')}</div>`;
+  html += `<div class="section-title"><h2>Da fare</h2></div>` + (fare.length
+    ? `<div class="list">${fare.map(([h, t, v, c]) => `<a class="item" href="${h}"><span class="dot ${c}" aria-hidden="true"></span><div class="main"><div class="name">${t}</div></div>${v ? `<span class="prezzo">${v}</span>` : ''}<span class="chev">›</span></a>`).join('')}</div>`
+    : '<div class="notice green"><span>Niente di urgente. Tutto in ordine.</span></div>');
+  html += `<div class="section-title"><h2>Entrate e uscite</h2><span class="count">${fmtDate(n.da)} – ${fmtDate(n.a)}</span></div>
+    <div class="stats cru">
+      <a class="stat green" href="#riepilogo"><b class="euro">${fmtEuro(n.incassi)}</b><span>Incassi (dalla cassa) · ${n.chiusure.length} ${n.chiusure.length === 1 ? 'giorno' : 'giorni'}</span></a>
+      <a class="stat" href="#fatture"><b class="euro">${fmtEuro(n.acquisti)}</b><span>Fatture dei fornitori · ${n.fatture.length}</span></a>
+      <a class="stat" href="#pagamenti"><b class="euro">${fmtEuro(n.altreSpese)}</b><span>Altre spese · ${n.spese.length}</span></a>
+      <div class="stat ${diff < 0 ? 'red' : ''}"><b class="euro">${fmtEuro(diff)}</b><span>Incassi meno uscite</span></div></div>
+    <div class="faint small">Un'idea, non il bilancio: la merce comprata in questo periodo si vende anche dopo. Fatture e spese con IVA.</div>`;
+  if (n.senzaChiusura.length) html += `<div class="notice"><span>${n.senzaChiusura.length === 1 ? `Il ${fmtDate(n.senzaChiusura[0])} ci sono vendite ma manca la chiusura` : `In ${n.senzaChiusura.length} giorni ci sono vendite ma manca la chiusura`}: l'incasso di ${n.senzaChiusura.length === 1 ? 'quel giorno' : 'quei giorni'} non è contato.</span></div>`;
+  html += `<div class="card"><h3 style="margin:0">Margine sulle vendite scansionate</h3>
+      ${n.ricavo > 0 ? `<div class="margine"><div><b>${fmtEuro(n.margine)}</b><span>guadagno lordo</span></div><div><b>${n.perc != null ? fmtNum(n.perc) + '%' : '–'}</b><span>del venduto senza IVA</span></div></div>
+      <div class="barra-m" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, n.perc || 0))}%"></i></div>
+      <dl class="kv"><dt>Venduto (con IVA)</dt><dd>${fmtEuro(n.scansionato)}</dd><dt>Venduto senza IVA</dt><dd>${fmtEuro(n.ricavo)}</dd><dt>Costo della merce venduta</dt><dd>${fmtEuro(n.costo)}</dd></dl>` : '<p class="muted small" style="margin:0">Nessuna vendita scansionata in questo periodo.</p>'}
+      ${n.senzaCosto ? `<div class="faint small">${n.senzaCosto === 1 ? '1 prodotto venduto non ha' : n.senzaCosto + ' prodotti venduti non hanno'} prezzo d'acquisto o IVA: non ${n.senzaCosto === 1 ? 'è contato' : 'sono contati'} nel margine.</div>` : ''}
+      <div class="faint small">Con il ricarico del 50% il margine è circa il 33%; con il 40%, circa il 29%. Frutta e verdura non sono contate.</div></div>`;
+  if (n.piuVenduti.length) html += `<div class="section-title"><h2>Più venduti</h2></div><div class="list">${n.piuVenduti.map(([pid, e]) => { const p = prodotto(pid); return `<a class="item" href="#prodotto/${encodeURIComponent(pid)}"><div class="main"><div class="name">${esc(p ? p.nome : '?')}</div><div class="sub">${fq(p, r3(e.qta))}</div></div><span class="prezzo">${fmtEuro(r2(e.imp))}</span></a>`; }).join('')}</div>`;
+  html += `<div class="section-title"><h2>Merce</h2></div><div class="stats" style="grid-template-columns:1fr 1fr">
+      <div class="stat"><b class="euro">${fmtEuro(m.valore)}</b><span>In negozio, al prezzo d'acquisto</span></div>
+      <a class="stat ${n.sprechi ? 'red' : ''}" href="#sprechi"><b class="euro">${fmtEuro(n.sprechi)}</b><span>Buttati nel periodo · ${n.nSprechi}</span></a></div>`;
+  if (m.fermi.length) html += `<div class="section-title"><h2>Ferma da più di 60 giorni</h2><span class="count">${m.fermi.length} · ${fmtEuro(m.valoreFermi)}</span></div>
+    <div class="list">${m.fermi.slice(0, 6).map(x => `<a class="item" href="#prodotto/${encodeURIComponent(x.p.id)}"><div class="main"><div class="name">${esc(x.p.nome)}</div><div class="sub">${fq(x.p, r3(x.q))} · ${x.ultima ? 'ultima vendita ' + fmtDate(x.ultima) : 'mai venduto nell\'app'}</div></div><span class="prezzo">${x.val ? fmtEuro(r2(x.val)) : ''}</span></a>`).join('')}</div>
+    <div class="faint small">Da valutare: metterli in vista, in sconto, o non riordinarli.</div>`;
+  html += `<a class="btn primary block" href="#riepilogo">Riepilogo del mese per la contabilità</a>`;
+  return { title: 'Cruscotto', html, back: '#home', tab: 'home' };
+};
+
+/* =========================================================
+   RIEPILOGO DEL MESE per la contabilità (anche in Excel)
+   ========================================================= */
+const nomeMese = ym => { const [y, m] = ym.split('-').map(Number); const n = MESI[m - 1]; return n[0].toUpperCase() + n.slice(1) + ' ' + y; };
+const meseVicino = (ym, d) => { const [y, m] = ym.split('-').map(Number); const x = new Date(y, m - 1 + d, 1); return `${x.getFullYear()}-${pad(x.getMonth() + 1)}`; };
+function datiRiepilogo(mese) {
+  const dentro = d => !!d && d.slice(0, 7) === mese;
+  const incassi = [...S.chiusure.values()].filter(c => dentro(c.data)).sort((a, b) => a.data.localeCompare(b.data));
+  const perGiorno = new Map();
+  for (const v of S.vendite.values()) if (dentro(v.data)) { const imp = importo(v); if (imp != null) perGiorno.set(v.data, (perGiorno.get(v.data) || 0) + imp); }
+  const mancano = [...perGiorno.keys()].filter(d => !S.chiusure.has('c' + d)).sort().map(d => ({ data: d, scansionato: r2(perGiorno.get(d)) }));
+  const fatture = [...S.fatture.values()].filter(fa => dentro(fa.data)).sort((a, b) => a.data.localeCompare(b.data) || String(a.numero).localeCompare(String(b.numero)));
+  const iva = new Map();
+  let imponibile = 0, imposta = 0;
+  for (const fa of fatture) for (const r of fa.riepilogo || []) {
+    const k = r.aliquota != null && +r.aliquota > 0 ? fmtNum(+r.aliquota) + '%' : (r.natura ? '0% (' + r.natura + ')' : '0%');
+    const e = iva.get(k) || { imponibile: 0, imposta: 0, al: +r.aliquota || 0 }, sg = segnoFattura(fa);
+    e.imponibile += (+r.imponibile || 0) * sg; e.imposta += (+r.imposta || 0) * sg; iva.set(k, e);
+    imponibile += (+r.imponibile || 0) * sg; imposta += (+r.imposta || 0) * sg;
+  }
+  const spese = [...S.spese.values()].filter(sp => dentro(sp.scadenza)).sort((a, b) => a.scadenza.localeCompare(b.scadenza));
+  const tutti = tuttiPagamenti();
+  const pagati = tutti.filter(x => dentro(x.pagata)).sort((a, b) => a.pagata.localeCompare(b.pagata));
+  const daPagare = tutti.filter(x => !x.pagata && dentro(x.data));
+  const sprechi = [...S.sprechi.values()].filter(r => dentro(r.data) && perso(r)).sort((a, b) => a.data.localeCompare(b.data));
+  return {
+    mese, incassi, mancano, totIncassi: r2(incassi.reduce((t, c) => t + (+c.incasso || 0), 0)), totFrutta: r2(incassi.reduce((t, c) => t + (+c.frutta || 0), 0)),
+    fatture, iva: [...iva.entries()].sort((a, b) => a[1].al - b[1].al), imponibile: r2(imponibile), imposta: r2(imposta),
+    totFatture: r2(fatture.reduce((t, fa) => t + (+fa.totale || 0) * segnoFattura(fa), 0)),
+    spese, totSpese: r2(spese.reduce((t, sp) => t + (+sp.importo || 0), 0)),
+    pagati, totPagati: totale(pagati), daPagare, totDaPagare: totale(daPagare),
+    sprechi, totSprechi: r2(sprechi.reduce((t, r) => t + (valoreSpreco(r) || 0), 0))
+  };
+}
+routes.riepilogo = arg => {
+  const oggiM = todayISO().slice(0, 7), mese = /^\d{4}-\d{2}$/.test(arg || '') && arg <= oggiM ? arg : oggiM;
+  const NUM = ['Incasso', 'Frutta e verdura', 'Totale', 'Imponibile', 'IVA', 'Importo'];
+  const d = datiRiepilogo(mese), t = (l, testa) => `<table class="tab"><thead><tr>${testa.map(h => `<th${NUM.includes(h) ? ' class="n"' : ''}>${h}</th>`).join('')}</tr></thead><tbody>${l}</tbody></table>`;
+  let html = `<div class="mese-nav"><a class="btn small" href="#riepilogo/${meseVicino(mese, -1)}" aria-label="Mese prima">‹</a><h2>${nomeMese(mese)}</h2>${mese < oggiM ? `<a class="btn small" href="#riepilogo/${meseVicino(mese, 1)}" aria-label="Mese dopo">›</a>` : '<span class="btn small" style="visibility:hidden">›</span>'}</div>
+    <div class="card"><dl class="kv riep">
+      <dt>Incassi (dalla cassa)</dt><dd>${fmtEuro(d.totIncassi)}</dd>
+      ${d.totFrutta ? `<dt>di cui frutta e verdura</dt><dd>${fmtEuro(d.totFrutta)}</dd>` : ''}
+      <dt>Fatture dei fornitori</dt><dd>${fmtEuro(d.totFatture)}</dd>
+      <dt>di cui IVA</dt><dd>${fmtEuro(d.imposta)}</dd>
+      <dt>Altre spese</dt><dd>${fmtEuro(d.totSpese)}</dd>
+      <dt>Pagato nel mese</dt><dd>${fmtEuro(d.totPagati)}</dd>
+      <dt>Ancora da pagare (scadenze del mese)</dt><dd class="${d.daPagare.length ? 'arancio' : ''}">${fmtEuro(d.totDaPagare)}</dd>
+      <dt>Merce buttata (al costo)</dt><dd>${fmtEuro(d.totSprechi)}</dd></dl>
+      <button class="btn primary block" type="button" data-act="riep-excel" data-m="${mese}">Scarica in Excel</button></div>`;
+  html += `<div class="section-title"><h2>Incassi</h2><span class="count">${fmtEuro(d.totIncassi)}</span></div>`;
+  html += d.incassi.length ? t(d.incassi.map(c => `<tr><td>${fmtDate(c.data)}</td><td class="n">${fmtEuro(c.incasso)}</td><td class="n faint">${c.frutta ? fmtEuro(c.frutta) : ''}</td></tr>`).join(''), ['Giorno', 'Incasso', 'Frutta e verdura']) : '<div class="empty">Nessuna chiusura di cassa in questo mese.</div>';
+  if (d.mancano.length) html += `<div class="notice"><span>Manca la chiusura: ${d.mancano.map(x => `${fmtDate(x.data)} (scansionati ${fmtEuro(x.scansionato)})`).join(', ')}. Scrivi l'incasso dalla cassa nel foglio Excel.</span></div>`;
+  html += `<div class="section-title"><h2>Fatture dei fornitori</h2><span class="count">${d.fatture.length}</span></div>`;
+  html += d.fatture.length ? t(d.fatture.map(fa => { const sg = segnoFattura(fa); const imp = (fa.riepilogo || []).reduce((x, r) => x + (+r.imponibile || 0), 0) * sg; return `<tr><td>${fmtDate(fa.data)}</td><td><a href="#fattura/${encodeURIComponent(fa.id)}">${esc(nomeFornFattura(fa))}</a><div class="faint">${fa.tipo === 'TD04' ? 'nota di credito ' : 'n. '}${esc(fa.numero)}</div></td><td class="n">${fmtEuro(fa.totale * sg)}<div class="faint">impon. ${fmtEuro(r2(imp))}</div></td></tr>`; }).join(''), ['Data', 'Fornitore', 'Totale']) : '<div class="empty">Nessuna fattura in questo mese.</div>';
+  if (d.iva.length) html += `<div class="section-title"><h2>IVA sugli acquisti</h2></div>` + t(d.iva.map(([k, e]) => `<tr><td>${k}</td><td class="n">${fmtEuro(r2(e.imponibile))}</td><td class="n">${fmtEuro(r2(e.imposta))}</td></tr>`).join('') + `<tr class="tot"><td>Totale</td><td class="n">${fmtEuro(d.imponibile)}</td><td class="n">${fmtEuro(d.imposta)}</td></tr>`, ['Aliquota', 'Imponibile', 'IVA']);
+  html += `<div class="section-title"><h2>Altre spese</h2><span class="count">${fmtEuro(d.totSpese)}</span></div>`;
+  html += d.spese.length ? t(d.spese.map(sp => `<tr><td>${fmtDate(sp.scadenza)}</td><td>${esc(sp.descrizione)}${sp.pagata ? '' : ' <span class="tag warn">da pagare</span>'}</td><td class="n">${fmtEuro(sp.importo)}</td></tr>`).join(''), ['Scadenza', 'Spesa', 'Importo']) : '<div class="empty">Nessuna spesa in questo mese. Si aggiungono in Pagamenti.</div>';
+  html += `<div class="section-title"><h2>Pagamenti fatti</h2><span class="count">${fmtEuro(d.totPagati)}</span></div>`;
+  html += d.pagati.length ? t(d.pagati.map(x => `<tr><td>${fmtDate(x.pagata)}</td><td>${esc(x.nome)}<div class="faint">${x.k === 'f' ? 'fattura ' + esc(x.fa.numero) : 'spesa'}</div></td><td class="n">${fmtEuro(x.importo)}</td></tr>`).join(''), ['Pagato il', 'A chi', 'Importo']) : '<div class="empty">Nessun pagamento segnato in questo mese.</div>';
+  html += `<div class="faint small" style="text-align:center">L'IVA delle vendite è nel riepilogo dei corrispettivi della cassa.</div>`;
+  return { title: 'Riepilogo del mese', html, back: '#cruscotto', tab: 'home' };
+};
+
+/* --- Excel (.xlsx) senza librerie: un archivio zip di file xml --- */
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function creaZip(files, tipo) {
+  const enc = new TextEncoder(), parti = [], centrale = []; let off = 0;
+  for (const f of files) {
+    const nome = enc.encode(f.nome), dati = typeof f.dati === 'string' ? enc.encode(f.dati) : f.dati, crc = crc32(dati), n = dati.length;
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(12, 0x21, true);
+    h.setUint32(14, crc, true); h.setUint32(18, n, true); h.setUint32(22, n, true); h.setUint16(26, nome.length, true);
+    parti.push(new Uint8Array(h.buffer), nome, dati);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true); c.setUint16(14, 0x21, true);
+    c.setUint32(16, crc, true); c.setUint32(20, n, true); c.setUint32(24, n, true); c.setUint16(28, nome.length, true); c.setUint32(42, off, true);
+    centrale.push(new Uint8Array(c.buffer), nome);
+    off += 30 + nome.length + n;
+  }
+  const lenC = centrale.reduce((t, x) => t + x.length, 0), e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, lenC, true); e.setUint32(16, off, true);
+  return new Blob([...parti, ...centrale, new Uint8Array(e.buffer)], { type: tipo || 'application/zip' });
+}
+const xmlEsc = s => String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+const colonna = i => { let s = ''; i++; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = (i - m - 1) / 26; } return s; };
+const serialeData = iso => { const [y, m, d] = iso.split('-').map(Number); return (Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000; };
+/* celle: testo, numero, {e: euro}, {et: euro in grassetto}, {d: data}, {t: titolo in grassetto} */
+function cellaXml(v, ref) {
+  if (v == null || v === '') return '';
+  const testo = (x, st) => `<c r="${ref}"${st ? ` s="${st}"` : ''} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(x)}</t></is></c>`;
+  if (typeof v === 'number') return isFinite(v) ? `<c r="${ref}"><v>${v}</v></c>` : '';
+  if (typeof v === 'string') return testo(v);
+  if ('e' in v) return v.e == null || isNaN(v.e) ? '' : `<c r="${ref}" s="1"><v>${r2(v.e)}</v></c>`;
+  if ('et' in v) return v.et == null || isNaN(v.et) ? '' : `<c r="${ref}" s="4"><v>${r2(v.et)}</v></c>`;
+  if ('d' in v) return v.d ? `<c r="${ref}" s="2"><v>${serialeData(v.d)}</v></c>` : '';
+  if ('t' in v) return testo(v.t, 3);
+  return '';
+}
+const STILI_XLSX = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+  '<numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0.00\\ &quot;€&quot;"/><numFmt numFmtId="165" formatCode="dd/mm/yyyy"/></numFmts>' +
+  '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>' +
+  '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>' +
+  '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+  '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+  '<cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+  '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
+  '<xf numFmtId="164" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/></cellXfs>' +
+  '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+function creaXlsx(fogli) {
+  const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main', NR = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships', TESTA = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  const files = [
+    { nome: '[Content_Types].xml', dati: `${TESTA}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${fogli.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>` },
+    { nome: '_rels/.rels', dati: `${TESTA}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${NR}/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { nome: 'xl/workbook.xml', dati: `${TESTA}<workbook xmlns="${NS}" xmlns:r="${NR}"><sheets>${fogli.map((f, i) => `<sheet name="${xmlEsc(f.nome)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>` },
+    { nome: 'xl/_rels/workbook.xml.rels', dati: `${TESTA}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${fogli.map((_, i) => `<Relationship Id="rId${i + 1}" Type="${NR}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${fogli.length + 1}" Type="${NR}/styles" Target="styles.xml"/></Relationships>` },
+    { nome: 'xl/styles.xml', dati: STILI_XLSX }
+  ];
+  fogli.forEach((f, i) => {
+    const cols = f.larghezze ? `<cols>${f.larghezze.map((w, j) => `<col min="${j + 1}" max="${j + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>` : '';
+    const rows = f.righe.map((r, ri) => `<row r="${ri + 1}">${r.map((v, ci) => cellaXml(v, colonna(ci) + (ri + 1))).join('')}</row>`).join('');
+    files.push({ nome: `xl/worksheets/sheet${i + 1}.xml`, dati: `${TESTA}<worksheet xmlns="${NS}">${cols}<sheetData>${rows}</sheetData></worksheet>` });
+  });
+  return creaZip(files, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+}
+function fogliRiepilogo(mese) {
+  const d = datiRiepilogo(mese), T = x => ({ t: x }), E = x => ({ e: x }), D = x => ({ d: x });
+  const neg = settings().negozio;
+  return [
+    { nome: 'Riepilogo', larghezze: [38, 16], righe: [
+      [T(`${neg} – ${nomeMese(mese)}`)], [],
+      ['Incassi (dalla cassa)', E(d.totIncassi)], ['di cui frutta e verdura', E(d.totFrutta)],
+      ['Fatture dei fornitori (totale)', E(d.totFatture)], ['Fatture: imponibile', E(d.imponibile)], ['Fatture: IVA', E(d.imposta)],
+      ['Altre spese', E(d.totSpese)], ['Pagato nel mese', E(d.totPagati)], ['Ancora da pagare (scadenze del mese)', E(d.totDaPagare)],
+      ['Merce buttata (al costo)', E(d.totSprechi)], [],
+      [d.mancano.length ? `Mancano le chiusure di ${d.mancano.length} giorni: vedi il foglio Incassi.` : ''],
+      [`Preparato dall'app Magazzino il ${fmtDate(todayISO())}.`]] },
+    { nome: 'Incassi', larghezze: [12, 16, 18, 22, 14, 34], righe: [
+      ['Giorno', 'Incasso cassa', 'Frutta e verdura', 'Scansionato nell\'app', 'Differenza', 'Nota'].map(T),
+      ...[...d.incassi.map(c => ({ data: c.data, c })), ...d.mancano.map(x => ({ data: x.data, x }))].sort((a, b) => a.data.localeCompare(b.data)).map(r => r.c
+        ? [D(r.c.data), E(r.c.incasso), E(r.c.frutta), E(r.c.scansionato), E(r.c.differenza), '']
+        : [D(r.x.data), '', '', E(r.x.scansionato), '', 'manca la chiusura: scrivi l\'incasso della cassa']),
+      [T('Totale'), { et: d.totIncassi }, { et: d.totFrutta }]] },
+    { nome: 'Fatture', larghezze: [12, 30, 16, 16, 16, 14, 14, 14, 14, 20], righe: [
+      ['Data', 'Fornitore', 'Partita IVA', 'Numero', 'Tipo', 'Imponibile', 'IVA', 'Totale', 'Scadenza', 'Pagata il'].map(T),
+      ...d.fatture.map(fa => { const sg = segnoFattura(fa), rp = fa.riepilogo || [], p0 = (fa.pagamenti || [])[0] || {};
+        return [D(fa.data), nomeFornFattura(fa), fa.fornitore.piva || '', String(fa.numero), NOMI_TIPO[fa.tipo] || fa.tipo, E(rp.reduce((t, r) => t + (+r.imponibile || 0), 0) * sg), E(rp.reduce((t, r) => t + (+r.imposta || 0), 0) * sg), E(fa.totale * sg), D(p0.scadenza), D(p0.pagata)]; }),
+      [T('Totale'), '', '', '', '', { et: d.imponibile }, { et: d.imposta }, { et: d.totFatture }]] },
+    { nome: 'IVA acquisti', larghezze: [16, 16, 16], righe: [
+      ['Aliquota', 'Imponibile', 'IVA'].map(T), ...d.iva.map(([k, e]) => [k, E(e.imponibile), E(e.imposta)]), [T('Totale'), { et: d.imponibile }, { et: d.imposta }]] },
+    { nome: 'Altre spese', larghezze: [12, 30, 14, 12, 16, 16, 30], righe: [
+      ['Scadenza', 'Spesa', 'Importo', 'Pagata il', 'Come', 'Si ripete', 'Note'].map(T),
+      ...d.spese.map(sp => [D(sp.scadenza), sp.descrizione, E(sp.importo), D(sp.pagata), sp.modalita || '', nomeRipeti(sp.ripeti), sp.note || '']),
+      [T('Totale'), '', { et: d.totSpese }]] },
+    { nome: 'Pagamenti', larghezze: [12, 30, 26, 14, 12], righe: [
+      ['Pagato il', 'A chi', 'Cosa', 'Importo', 'Scadenza'].map(T),
+      ...d.pagati.map(x => [D(x.pagata), x.nome, x.k === 'f' ? 'fattura ' + x.fa.numero : 'spesa', E(x.importo), D(x.data)]),
+      [T('Totale'), '', '', { et: d.totPagati }], [],
+      [T('Ancora da pagare (scadenze del mese)')],
+      ...d.daPagare.map(x => [D(x.data), x.nome, x.k === 'f' ? 'fattura ' + x.fa.numero : 'spesa', E(x.importo)])] },
+    { nome: 'Merce buttata', larghezze: [12, 34, 14, 22, 14], righe: [
+      ['Giorno', 'Prodotto', 'Quantità', 'Motivo', 'Valore (costo)'].map(T),
+      ...d.sprechi.map(r => { const p = prodotto(r.prodottoId); return [D(r.data), p ? p.nome : '?', p && isSfuso(p) ? fmtSf(p, r.qta) : r.qta, r.motivo, E(valoreSpreco(r))]; }),
+      [T('Totale'), '', '', '', { et: d.totSprechi }]] }
+  ];
+}
+/* un file da mettere su Drive o aprire con Excel: si condivide se il telefono lo permette, altrimenti va nei Download */
+async function mandaFile(blob, nome, titolo) {
+  const file = new File([blob], nome, { type: blob.type });
+  let ok = false;
+  try { ok = !!(navigator.canShare && navigator.canShare({ files: [file] })); } catch (e) { }
+  if (ok) {
+    try { await navigator.share({ files: [file], title: titolo }); return 'condiviso'; }
+    catch (e) { if (e && e.name === 'AbortError') return 'annullato'; }
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nome;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  return 'scaricato';
+}
+async function riepilogoExcel(mese) {
+  const blob = creaXlsx(fogliRiepilogo(mese));
+  const nome = `riepilogo-${mese}-${settings().negozio.replace(/[^A-Za-z0-9]+/g, '-')}.xlsx`;
+  const r = await mandaFile(blob, nome, 'Riepilogo ' + nomeMese(mese));
+  if (r === 'scaricato') openModal(`${mhead('Excel salvato nei Download')}
+    <p>Il file <b>${esc(nome)}</b> è nella cartella <b>Download</b>.</p>
+    <p class="muted small">Si apre con Excel o Fogli Google. Per metterlo su Drive: app <b>Drive</b> → account del negozio → <b>+</b> → <b>Carica</b> → Download → il file.</p>
+    <button class="btn primary block" type="button" data-act="close-modal">Ho capito</button>`);
+  else if (r === 'annullato') toast('Excel non salvato', { err: true });
 }
 
 /* =========================================================
@@ -2383,7 +2780,7 @@ async function importaFatture(files) {
    - si scarica solo quello che è cambiato dall'ultima volta (più 15 secondi di margine)
    ========================================================= */
 const SYNC_CONF = { apiKey: 'AIzaSyBj_vigsG7m3jQg3MaRSBTwoKkXcPB3HKk', projectId: 'magazzino-spesa-sfusa-69c90', email: 'laspesasfusa@gmail.com' };   // dati pubblici del progetto Firebase: a proteggere i dati sono password e regole
-const SYNC_STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'fatture'];
+const SYNC_STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'fatture', 'spese'];
 const SYNC_META = ['settings', 'etiPosizione', 'riordinoTolti'];
 const syncConf = () => ({ ...SYNC_CONF, ...(S.meta.syncConf || {}) });
 const syncPronta = () => !!(syncConf().apiKey && syncConf().projectId);
@@ -2527,7 +2924,9 @@ async function applica(recs) {
 }
 async function ricevi() {
   const LIM = 300;
-  const da = S.meta.syncDa ? new Date(tsMs(S.meta.syncDa) - 15000).toISOString() : '1970-01-01T00:00:00Z';
+  // un dispositivo con la versione vecchia salta gli archivi che non conosce: con quelli nuovi si riscarica tutto, una volta
+  const archivi = SYNC_STORES.join(','), tutto = S.meta.syncArchivi !== archivi;
+  const da = S.meta.syncDa && !tutto ? new Date(tsMs(S.meta.syncDa) - 15000).toISOString() : '1970-01-01T00:00:00Z';
   let cursore = null, max = S.meta.syncDa || null, n = 0;
   for (;;) {
     const q = {
@@ -2545,6 +2944,7 @@ async function ricevi() {
     const ul = docs[docs.length - 1]; cursore = { srv: ul.fields.srv.timestampValue, name: ul.name };
   }
   if (max && max !== S.meta.syncDa) await setMeta('syncDa', max);
+  if (tutto) await setMeta('syncArchivi', archivi);
   return n;
 }
 /* --- il giro: prima mando, poi ricevo --- */
@@ -2737,7 +3137,18 @@ const A = {};
 /* fatture */
 A['fatture-carica'] = () => { const i = $('#fileInput'); i.accept = '.xml,.p7m,.zip,application/xml,text/xml,application/zip,application/pkcs7-mime'; i.multiple = true; fileMode = 'fatture'; i.click(); };
 A['fatture-tutte'] = () => { FAT.tutte = true; render(); };
+A['spesa-nuova'] = () => spesaModal(null);
+A['spesa-mod'] = el => spesaModal(el.dataset.id);
+A['fa-pag-scad'] = el => { const fa = S.fatture.get(el.dataset.id); if (fa) scadenzaFatturaModal(fa); };
+A['fa-pag-fatto'] = async el => {
+  const fa = S.fatture.get(el.dataset.id); if (!fa) return;
+  await save('fatture', { ...fa, pagamenti: [{ modalita: '', scadenza: fa.data, importo: fa.totale, pagata: todayISO() }] });
+  render();
+};
+A['cru-periodo'] = el => { CRU = el.dataset.f; render(); };
+A['riep-excel'] = el => riepilogoExcel(el.dataset.m).catch(e => toast('Non riesco a preparare il file: ' + e.message, { err: true }));
 A['pag-segna'] = async el => {
+  if (el.dataset.s) { await segnaSpesa(el.dataset.s); return; }
   const fa = S.fatture.get(el.dataset.f); if (!fa) return;
   const i = +el.dataset.i;
   await save('fatture', { ...fa, pagamenti: fa.pagamenti.map((p, k) => k === i ? { ...p, pagata: p.pagata ? null : todayISO() } : p) });

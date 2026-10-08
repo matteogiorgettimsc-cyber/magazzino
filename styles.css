@@ -392,3 +392,29 @@ button.notice{width:100%;font:inherit;color:inherit;text-align:left;cursor:point
 .fr-riga a{color:inherit}
 button.link{border:0;background:none;color:var(--accent);text-decoration:underline;padding:0;font:inherit;cursor:pointer}
 .verde{color:var(--green)}
+
+/* pagamenti, cruscotto, riepilogo */
+.stat b.euro{font-size:1.35rem}
+.item.pag .main.pag-apri{border:0;background:none;padding:0;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.item .dot.red{background:var(--red)}.item .dot.orange{background:var(--orange)}
+.stats.cru{grid-template-columns:1fr 1fr}
+.margine{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.margine div{display:flex;flex-direction:column}
+.margine b{font-size:1.5rem;font-variant-numeric:tabular-nums}
+.margine span{font-size:.84rem;color:var(--ink-soft);font-weight:600}
+.barra-m{height:10px;border-radius:10px;background:var(--surface-alt);overflow:hidden}
+.barra-m i{display:block;height:100%;background:var(--accent);border-radius:10px}
+.mese-nav{display:flex;align-items:center;gap:10px}
+.mese-nav h2{flex:1;text-align:center;margin:0;font-size:1.15rem}
+.mese-nav .btn{min-width:48px;font-size:1.3rem;text-decoration:none}
+.kv.riep{grid-template-columns:1fr auto}
+.kv.riep dd{text-align:right}
+table.tab{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;font-size:.9rem}
+table.tab th{text-align:left;font-size:.78rem;color:var(--ink-faint);font-weight:650;padding:8px 10px;background:var(--surface-alt)}
+table.tab td{padding:8px 10px;border-top:1px solid var(--line);vertical-align:top}
+table.tab td .faint{font-size:.78rem}
+table.tab td a{color:inherit}
+table.tab .n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+table.tab th.n{text-align:right}
+table.tab tr.tot td{font-weight:700;background:var(--surface-alt)}
+@media (min-width:640px){ .stats.cru{grid-template-columns:repeat(4,1fr)} }
