@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.13.0';
+const VERSIONE = '1.14.0';
 
 /* =========================================================
    Utilità
@@ -130,10 +130,28 @@ async function loadAll() {
   S.coda = new Map((await getAll('coda')).map(e => [e.k, e]));
   for (const k of S.coda.keys()) if (k > ultimoK) ultimoK = k;
 }
+/* ANNULLA L'ULTIMA MODIFICA: ogni azione di chi usa l'app (un tocco, un tasto, una scansione) è un gruppo;
+   per ogni scrittura del gruppo si ricorda com'era prima e com'è dopo, così «Annulla» la rimette com'era
+   (e «Rifai» la ripete). Le scritture fatte all'avvio o ricevute dagli altri dispositivi non contano. */
+const ANN = { pila: [], rifare: null, gruppo: 0, applico: false };
+['pointerdown', 'keydown'].forEach(t => document.addEventListener(t, e => { if (!(e.target.closest && e.target.closest('#undoBtn'))) ANN.gruppo++; }, true));
+const copia = o => o === undefined ? undefined : JSON.parse(JSON.stringify(o));
+function ricorda(store, prima, dopo) {
+  if (ANN.applico || !ANN.gruppo) return;
+  const id = (dopo || prima || {}).id; if (id == null) return;
+  let v = ANN.pila[ANN.pila.length - 1];
+  if (!v || v.gruppo !== ANN.gruppo) { v = { gruppo: ANN.gruppo, voci: new Map() }; ANN.pila.push(v); if (ANN.pila.length > 30) ANN.pila.shift(); }
+  const k = store + '~' + id, x = v.voci.get(k);
+  if (x) x.dopo = copia(dopo); else v.voci.set(k, { store, id, prima: copia(prima), dopo: copia(dopo) });
+  ANN.rifare = null;
+  aggiornaUndo();
+}
+function aggiornaUndo() { const bt = document.getElementById('undoBtn'); if (bt) bt.hidden = !ANN.pila.length; }
 /* ogni scrittura passa da qui: con la sincronizzazione attiva, la modifica entra nella coda
    nella stessa transazione, così non si perde nemmeno se l'app si chiude subito dopo */
 async function save(store, obj) {
   const prev = S[store].get(obj.id);
+  ricorda(store, prev, obj);
   S[store].set(obj.id, obj);
   const q = codaPer(store, [[prev, obj]]);
   await txConCoda(store, s => s.put(obj), q);
@@ -142,6 +160,7 @@ async function save(store, obj) {
 }
 async function saveMany(store, arr) {
   const coppie = arr.map(o => [S[store].get(o.id), o]);
+  coppie.forEach(([a, b]) => ricorda(store, a, b));
   arr.forEach(o => S[store].set(o.id, o));
   const q = codaPer(store, coppie);
   await txConCoda(store, s => arr.forEach(o => s.put(o)), q);
@@ -150,6 +169,7 @@ async function saveMany(store, arr) {
 }
 async function remove(store, id) {
   const prev = S[store].get(id);
+  if (prev) ricorda(store, prev, undefined);
   S[store].delete(id);
   const q = prev && syncAttiva() && SYNC_STORES.includes(store) ? [voceCoda({ st: store, id, del: true })] : [];
   await txConCoda(store, s => s.delete(id), q);
@@ -172,12 +192,14 @@ function dopoLotti(coppie) {
 }
 async function removeMany(store, ids) {
   const prev = ids.map(id => S[store].get(id)).filter(Boolean);
+  prev.forEach(p => ricorda(store, p, undefined));
   ids.forEach(id => S[store].delete(id));
   const q = syncAttiva() && SYNC_STORES.includes(store) ? prev.map(p => voceCoda({ st: store, id: p.id, del: true })) : [];
   await txConCoda(store, s => ids.forEach(id => s.delete(id)), q);
   if (store === 'prodotti') rebuildCodeIndex();
 }
 async function setMeta(key, value) {
+  if (key === 'settings') ricorda('meta', { id: key, value: S.meta[key] }, { id: key, value });
   S.meta[key] = value;
   const q = syncAttiva() && SYNC_META.includes(key) ? [voceCoda({ st: 'meta', id: key, set: { value } })] : [];
   await txConCoda('meta', s => s.put({ key, value }), q);
@@ -1197,7 +1219,7 @@ async function rendi(p, qta = 1) {
   toast(`Reso: ${isSfuso(p) ? fmtSf(p, qta) + ' di ' : ''}${p.nome} torna in negozio`);
   render();
 }
-async function annullaRiga(id) {
+async function annullaRiga(id, { silenzioso = false } = {}) {
   const v = S.vendite.get(id); if (!v) return;
   if (v.tipo === 'reso') {
     const l = v.prelievi[0] && S.lotti.get(v.prelievi[0].lottoId);
@@ -1205,6 +1227,7 @@ async function annullaRiga(id) {
     else await muovi(v.prelievi, -1);
   } else await muovi(v.prelievi, 1);
   await remove('vendite', id);
+  if (silenzioso) return;
   const p = prodotto(v.prodottoId);
   toast(`Annullato: ${p && v.sfuso ? fmtSf(p, v.qta) + ' di' : fmtNum(v.qta) + ' ×'} ${p ? p.nome : v.codice || '?'}`);
   render();
@@ -2630,7 +2653,7 @@ routes.cruscotto = () => {
       <dl class="kv"><dt>Venduto (con IVA)</dt><dd>${fmtEuro(n.scansionato)}</dd><dt>Venduto senza IVA</dt><dd>${fmtEuro(n.ricavo)}</dd><dt>Costo della merce venduta</dt><dd>${fmtEuro(n.costo)}</dd></dl>` : '<p class="muted small" style="margin:0">Nessuna vendita scansionata in questo periodo.</p>'}
       ${n.senzaCosto ? `<div class="faint small">${n.senzaCosto === 1 ? '1 prodotto venduto non ha' : n.senzaCosto + ' prodotti venduti non hanno'} prezzo d'acquisto o IVA: non ${n.senzaCosto === 1 ? 'è contato' : 'sono contati'} nel margine.</div>` : ''}
       <div class="faint small">Con il ricarico del 50% il margine è circa il 33%; con il 40%, circa il 29%. Frutta e verdura non sono contate.</div></div>`;
-  if (n.piuVenduti.length) html += `<div class="section-title"><h2>Più venduti</h2></div><div class="list venduti">${n.piuVenduti.map(([pid, e]) => { const p = prodotto(pid); return `<a class="item" href="#prodotto/${encodeURIComponent(pid)}"><div class="main"><div class="name">${esc(p ? p.nome : '?')}</div><div class="sub">${fq(p, r3(e.qta))}</div></div><span class="prezzo">${fmtEuro(r2(e.imp))}</span></a>`; }).join('')}</div>`;
+  if (n.piuVenduti.length) html += `<div class="section-title"><h2>Più venduti</h2></div><div class="faint small">Dalle vendite scansionate al Banco. Erano prove? Cancellale nello <a href="#cassa">storico di cassa</a>.</div><div class="list venduti">${n.piuVenduti.map(([pid, e]) => { const p = prodotto(pid); return `<a class="item" href="#prodotto/${encodeURIComponent(pid)}"><div class="main"><div class="name">${esc(p ? p.nome : '?')}</div><div class="sub">${fq(p, r3(e.qta))}</div></div><span class="prezzo">${fmtEuro(r2(e.imp))}</span></a>`; }).join('')}</div>`;
   const vc = venditeCategorie(CRU);
   if (vc.lista.some(e => e.imp > 0)) html += `<div class="section-title"><h2>Per categoria</h2></div>${barreHTML(vc.lista.filter(e => e.imp > 0).slice(0, 5).map(e => ({ nome: e.nome, valore: e.imp, href: '#categoria/' + encodeURIComponent(e.nome), sotto: Math.round(e.quota) + '% del venduto' + (e.perc != null ? ' · margine ' + fmtNum(e.perc) + '%' : '') })), vc.lista[0].imp)}`;
   html += `<a class="btn block" href="#categorie">Vendite per categoria e grafici</a>`;
@@ -2865,8 +2888,19 @@ routes.cassa = arg => {
     return `<button class="item" type="button" data-act="cassa-mod" data-d="${d}"><div class="main"><div class="name">${nomeGiorno(d)}</div><div class="sub ${c ? '' : 'arancio'}">${sotto}</div></div><span class="prezzo">${c ? fmtEuro(c.incasso) : '–'}</span><span class="chev">›</span></button>`;
   }).join('')}</div>` : '<div class="empty">Nessun incasso in questo mese.</div>';
   html += `<div class="faint small" style="text-align:center">Tocca un giorno per correggere l'incasso o cancellarlo, per esempio una prova.</div>`;
+  const vm = [...S.vendite.values()].filter(v => (v.data || '').slice(0, 7) === mese);
+  if (vm.length) html += `<button class="btn ghost block" type="button" data-act="vendite-prova" data-m="${mese}">Erano prove: cancella tutte le vendite scansionate di ${nomeMese(mese).toLowerCase()} (${vm.length})</button>`;
   return { title: 'Storico di cassa', html, back: '#cruscotto', tab: 'banco' };
 };
+/* vendite di prova (scansioni fatte per provare): si cancellano rimettendo in magazzino quello che avevano tolto */
+async function cancellaVendite(lista, quando) {
+  if (!lista.length) return;
+  const tot = r2(lista.reduce((t, v) => t + (importo(v) || 0), 0));
+  if (!(await confirmBox(`Cancello ${lista.length === 1 ? 'la vendita' : 'le ' + lista.length + ' vendite'} ${quando} (${fmtEuro(tot)})? Usale solo se erano prove: i pezzi tornano in magazzino e non contano più nel cruscotto.`, { ok: 'Cancella', danger: true, title: 'Vendite di prova' }))) return;
+  for (const v of [...lista].sort((a, b) => b.creato - a.creato)) await annullaRiga(v.id, { silenzioso: true });
+  render();
+  setTimeout(() => toast(`${lista.length === 1 ? 'Cancellata 1 vendita' : 'Cancellate ' + lista.length + ' vendite'}: si può annullare con la freccia in alto`, { ms: 5000 }), 120);
+}
 function cassaModal(data, mese) {
   const c = data ? S.chiusure.get('c' + data) : null, oggi = todayISO();
   const proposta = mese && mese < oggi.slice(0, 7) ? `${mese}-01` : oggi;
@@ -2874,9 +2908,12 @@ function cassaModal(data, mese) {
     ${data ? '' : `<label class="field">Giorno<input type="date" id="caData" max="${oggi}" value="${proposta}"></label>`}
     <label class="field">Incasso totale €<input type="text" inputmode="decimal" id="caInc" value="${c ? fmtImporto(c.incasso) : ''}" autocomplete="off" placeholder="es. 612,40"></label>
     <label class="field">Di cui frutta e verdura € <span class="hint">se la cassa non lo separa, lascia vuoto</span><input type="text" inputmode="decimal" id="caFr" value="${c && c.frutta != null ? fmtImporto(c.frutta) : ''}" autocomplete="off"></label>
-    ${data ? `<div class="faint small">Scansionato nell'app quel giorno: ${fmtEuro(scansionatoDel(data))}</div>` : ''}
+    ${data ? `<div class="faint small">Scansionato nell'app quel giorno: ${fmtEuro(scansionatoDel(data))}${venditeDel(data).length ? ` (${venditeDel(data).length} ${venditeDel(data).length === 1 ? 'vendita' : 'vendite'})` : ''}</div>` : ''}
     <button class="btn primary block" type="button" data-x="ok">Salva</button>
-    ${c ? `<button class="btn danger block" type="button" data-x="del">Cancella l'incasso di questo giorno</button>` : ''}`, b => {
+    ${c ? `<button class="btn danger block" type="button" data-x="del">Cancella l'incasso di questo giorno</button>` : ''}
+    ${data && venditeDel(data).length ? `<button class="btn ghost block" type="button" data-x="vend">Erano prove: cancella le vendite scansionate</button>` : ''}`, b => {
+    const vb = b.querySelector('[data-x=vend]');
+    if (vb) vb.onclick = async () => { const l = venditeDel(data); closeModal(); await cancellaVendite(l, `del ${fmtDate(data)}`); };
     b.querySelector('[data-x=ok]').onclick = async () => {
       const d = data || b.querySelector('#caData').value;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d > oggi) { toast('Scegli un giorno, al massimo oggi', { err: true }); return; }
@@ -3477,9 +3514,59 @@ $('#fileInput').addEventListener('change', async e => {
 });
 
 /* =========================================================
+   Annulla l'ultima modifica / Rifai
+   ========================================================= */
+const valoreAttuale = x => x.store === 'meta' ? { id: x.id, value: S.meta[x.id] } : S[x.store].get(x.id);
+async function applicaVersioni(v, quale) {
+  ANN.applico = true;
+  try {
+    const per = new Map();
+    for (const x of v.voci.values()) { if (!per.has(x.store)) per.set(x.store, { su: [], via: [] }); const g = per.get(x.store), o = x[quale];
+      if (x.store === 'meta') await setMeta(x.id, o ? copia(o.value) : undefined);
+      else if (o) g.su.push(copia(o)); else if (S[x.store].has(x.id)) g.via.push(x.id); }
+    for (const [st, g] of per) { if (st === 'meta') continue; if (g.su.length) await saveMany(st, g.su); if (g.via.length) await removeMany(st, g.via); }
+  } finally { ANN.applico = false; }
+}
+function descriviVoce(v) {
+  const voci = [...v.voci.values()], di = st => voci.find(x => x.store === st), nome = x => {
+    const o = x.dopo || x.prima || {}; if (x.store === 'prodotti' || x.store === 'fornitori') return o.nome || '';
+    const p = o.prodottoId && prodotto(o.prodottoId); return p ? p.nome : ''; };
+  const con = (t, x) => t + (x && nome(x) ? ' · ' + nome(x) : '');
+  if (di('vendite')) { const x = di('vendite'); return con(x.prima && !x.dopo ? 'vendita tolta' : x.prima ? 'vendita cambiata' : x.dopo && x.dopo.tipo === 'reso' ? 'reso' : 'vendita', x); }
+  if (di('sprechi')) return con('spreco', di('sprechi'));
+  if (di('lotti')) { const x = di('lotti'); return con(!x.prima ? 'confezione aggiunta' : !x.dopo ? 'confezione tolta' : 'confezione cambiata', x); }
+  if (di('ordini')) return 'ordine cambiato';
+  if (di('chiusure')) return 'incasso del giorno';
+  if (di('prodotti')) { const n = voci.filter(x => x.store === 'prodotti').length, x = di('prodotti'); return n > 1 ? `${n} prodotti` : con(!x.prima ? 'prodotto nuovo' : !x.dopo ? 'prodotto eliminato' : 'scheda', x); }
+  if (di('fornitori')) return con('fornitore', di('fornitori'));
+  if (di('meta')) return 'impostazioni';
+  return 'ultima modifica';
+}
+async function annullaUltimo() {
+  if (paginaSalva) await paginaSalva();     // quello che si sta scrivendo entra prima nella lista
+  const v = ANN.pila.pop(); aggiornaUndo();
+  if (!v) { toast('Niente da annullare'); return; }
+  const dopoAncora = [...v.voci.values()].some(x => JSON.stringify(valoreAttuale(x) ?? null) !== JSON.stringify(x.dopo ?? null));
+  if (dopoAncora && !(await confirmBox('Dopo questa modifica è cambiato ancora qualcosa (forse dall\'altro dispositivo). Rimetto lo stesso com\'era prima?', { ok: 'Rimetti com\'era', title: 'Annulla' }))) { ANN.pila.push(v); aggiornaUndo(); return; }
+  await applicaVersioni(v, 'prima');
+  ANN.rifare = v;
+  render(); aggiornaUndo();
+  setTimeout(() => toast(`Annullato: ${descriviVoce(v)}`, { action: { label: 'Rifai', run: rifaiUltimo } }), 60);
+}
+async function rifaiUltimo() {
+  const v = ANN.rifare; if (!v) return;
+  ANN.rifare = null;
+  await applicaVersioni(v, 'dopo');
+  ANN.pila.push(v);
+  render(); aggiornaUndo();
+  setTimeout(() => toast(`Rifatto: ${descriviVoce(v)}`), 60);
+}
+
+/* =========================================================
    Azioni (pulsanti)
    ========================================================= */
 const A = {};
+A['annulla-ultimo'] = () => annullaUltimo().catch(e => toast('Non riesco ad annullare: ' + e.message, { err: true }));
 /* fatture */
 A['fatture-carica'] = () => { const i = $('#fileInput'); i.accept = '.xml,.p7m,.zip,application/xml,text/xml,application/zip,application/pkcs7-mime'; i.multiple = true; fileMode = 'fatture'; i.click(); };
 A['fatture-tutte'] = () => { FAT.tutte = true; render(); };
@@ -3499,6 +3586,7 @@ A['cat-proponi'] = () => proponiCategorie();
 A['cat-vedi'] = el => { CAT = { ...CAT, q: '', forn: '', cat: el.dataset.c, senzaCodice: false, sfuso: false, limite: 60, sel: null }; location.hash = '#catalogo'; };
 A['cat-categoria'] = () => { const ids = [...(CAT.sel || [])].filter(id => S.prodotti.has(id)); if (!ids.length) { toast('Scegli prima i prodotti', { err: true }); return; } categoriaModal(ids); };
 A['cassa-mod'] = el => cassaModal(el.dataset.d);
+A['vendite-prova'] = el => cancellaVendite([...S.vendite.values()].filter(v => (v.data || '').slice(0, 7) === el.dataset.m), `di ${nomeMese(el.dataset.m).toLowerCase()}`);
 A['riep-excel'] = el => riepilogoExcel(el.dataset.m).catch(e => toast('Non riesco a preparare il file: ' + e.message, { err: true }));
 A['pag-segna'] = async el => {
   if (el.dataset.s) { await segnaSpesa(el.dataset.s); return; }
@@ -4099,7 +4187,7 @@ async function init() {
       });
     }).catch(() => { });
   }
-  window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta, categorieDalCatalogo, salvaOra: () => paginaSalva ? paginaSalva() : Promise.resolve() };
+  window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta, categorieDalCatalogo, ANN, salvaOra: () => paginaSalva ? paginaSalva() : Promise.resolve() };
 }
 init();
 })();
