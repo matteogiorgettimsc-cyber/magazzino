@@ -432,3 +432,8 @@ svg.grafico{width:100%;height:auto;display:block;touch-action:manipulation}
 .ch-bar.on{fill:var(--accent)}
 .ch-hit{fill:transparent;cursor:pointer}
 .ch-hit:hover + .ch-bar,.ch-bar:hover{fill:var(--accent)}
+
+/* salvataggio automatico */
+.salva-riga{text-align:center}
+.salva-stato{color:var(--ink-faint);font-size:.86rem}
+.salva-stato.err{color:var(--red-dark);font-weight:650}

@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.12.1';
+const VERSIONE = '1.13.0';
 
 /* =========================================================
    Utilità
@@ -586,7 +586,46 @@ function rigaConfezione(l, { arrivo = false, togli = false } = {}) {
    ========================================================= */
 let current = { name: 'home', arg: null, onScan: null, back: null };
 const routes = {};
+/* =========================================================
+   SALVATAGGIO AUTOMATICO delle schede (prodotto, fornitore, impostazioni)
+   - si salva all'uscita da un campo, poco dopo aver smesso di scrivere e lasciando la pagina
+   - i valori si leggono subito (anche mentre la pagina sta cambiando); i salvataggi vanno in fila
+   ========================================================= */
+let paginaSalva = null, autoCtrl = null;   // salva adesso la pagina aperta, se c'è qualcosa di cambiato
+function salvaPagina() {
+  if (paginaSalva) { const f = paginaSalva; paginaSalva = null; try { f(); } catch (e) { console.error(e); } }
+  if (autoCtrl) { autoCtrl.abort(); autoCtrl = null; }
+}
+function autoSalva(b, leggi) {
+  if (autoCtrl) autoCtrl.abort();
+  autoCtrl = new AbortController();
+  const signal = autoCtrl.signal;
+  let timer = null, coda = Promise.resolve(), sporco = false;
+  const mostra = (t, err) => b.querySelectorAll('.salva-stato').forEach(x => { x.textContent = t; x.classList.toggle('err', !!err); });
+  const ora = () => {
+    clearTimeout(timer); timer = null;
+    if (!sporco) return coda;
+    sporco = false;
+    let r;
+    try { r = leggi(); } catch (e) { console.error(e); return coda; }
+    if (!r) return coda;
+    if (r.errore) { mostra(r.errore, true); return coda; }
+    coda = coda.then(() => r.salva()).then(esito => { if (esito !== false) mostra(`Salvato alle ${fmtOra(Date.now())}`); })
+      .catch(e => { console.error(e); mostra('Non salvato: ' + e.message, true); });
+    return coda;
+  };
+  b.addEventListener('input', e => {
+    if (!e.target.closest('[data-auto]')) return;
+    sporco = true; clearTimeout(timer); timer = setTimeout(ora, 900);
+  }, { signal });
+  b.addEventListener('change', e => { if (e.target.closest('[data-auto]')) { sporco = true; ora(); } }, { signal });
+  signal.addEventListener('abort', () => clearTimeout(timer));
+  paginaSalva = ora;
+  return ora;
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden && paginaSalva) paginaSalva(); });
 function route() {
+  salvaPagina();   // prima di cambiare pagina: quello che è stato scritto si salva
   const h = decodeURIComponent((location.hash || '#home').slice(1));
   const i = h.indexOf('/');
   const name = i < 0 ? h : h.slice(0, i), arg = i < 0 ? null : h.slice(i + 1);
@@ -596,6 +635,7 @@ function route() {
   render(true);
 }
 function render(scrollTop = false) {
+  salvaPagina();
   current.fresh = !!scrollTop; SYNC.ridisegna = false;
   const r = routes[current.name](current.arg) || {};
   $('#viewTitle').textContent = r.title || 'Magazzino';
@@ -1680,9 +1720,9 @@ const codiciHtml = p => (p.codici || []).map(c => `<span class="tag" style="font
 const infoSfuso = u => u === 'l' ? 'Magazzino in litri, prezzo al litro. Al banco si scansiona l\'etichetta e si scrivono i ml.'
   : `Magazzino in kg, prezzo ${UNITA[u].al}. Al banco si scansiona l'etichetta del contenitore e si scrivono i grammi.`;
 function boxEtichetta(p) {
-  if (!(p.codici || []).length) return `<label class="check"><input type="checkbox" id="pCrea" checked> Crea il codice a barre e stampa l'etichetta</label>
-    <div class="faint small">Se il sacco ha già il suo codice, togli la spunta e scansionalo adesso: si collega da solo.</div>`;
-  if (!p.sfuso) return `<div class="faint small">L'etichetta userà il codice ${esc(codiceEtichetta(p))}: dopo aver salvato la stampi da qui.</div>`;
+  if (!(p.codici || []).length) return `<button class="btn block" type="button" data-act="p-crea-codice" data-id="${esc(p.id)}" id="pCrea">Crea il codice a barre e stampa l'etichetta</button>
+    <div class="faint small">Se il sacco ha già il suo codice, non serve: scansionalo adesso e si collega da solo.</div>`;
+  if (!p.sfuso) return `<div class="faint small">L'etichetta userà il codice ${esc(codiceEtichetta(p))}.</div>`;
   return `<button class="btn block" type="button" data-act="p-stampa-eti" data-id="${esc(p.id)}">Stampa l'etichetta</button>`;
 }
 function aggiornaCodici() {
@@ -1690,24 +1730,25 @@ function aggiornaCodici() {
   const c = $('#pCodici'); if (c) c.innerHTML = codiciHtml(p);
   const e = $('#pEtiBox'); if (e) e.innerHTML = boxEtichetta(p);
 }
+const lottiScheda = p => { const lotti = lottiAttivi().filter(l => l.prodottoId === p.id).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
+  return lotti.length ? `<div class="faint small">Per cambiare la scadenza o ${p.sfuso ? 'i ' + nomeBase(p) : 'i pezzi'} tocca <b>Modifica</b>.</div><div class="list">${lotti.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>` : '<div class="empty">Nessuna confezione registrata.</div>'; };
 routes.prodotto = id => {
   const p = prodotto(id);
   if (!p) return { title: 'Prodotto', html: '<div class="empty">Prodotto non trovato.</div>', back: '#catalogo', tab: 'catalogo' };
   const forn = [...S.fornitori.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
-  const lotti = lottiAttivi().filter(l => l.prodottoId === p.id).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
   const calc = prezzoCalcolato(p);
-  const html = `<div><h2 style="margin:0">${esc(p.nome)}</h2><div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>
-    <div class="section-title"><h2>In negozio</h2><span class="count">${fq(p, giacenza(p.id))}</span></div>
-    ${lotti.length ? `<div class="faint small">Per cambiare la scadenza o ${p.sfuso ? 'i ' + nomeBase(p) : 'i pezzi'} tocca <b>Modifica</b>.</div><div class="list">${lotti.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>` : '<div class="empty">Nessuna confezione registrata.</div>'}
+  const html = `<div><h2 style="margin:0" id="pTitolo">${esc(p.nome)}</h2><div class="faint" id="pSotto">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>
+    <div class="section-title"><h2>In negozio</h2><span class="count" id="pGiac">${fq(p, giacenza(p.id))}</span></div>
+    <div class="stack" id="pLotti">${lottiScheda(p)}</div>
     <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn" type="button" data-act="sr-inventario" data-id="${esc(p.id)}">Inventario</button><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}" style="grid-column:1/-1">Aggiungi all'ordine</button></div>
     <div class="section-title"><h2>Dati del prodotto</h2></div>
+    <div class="faint small salva-stato">Ogni modifica si salva da sola.</div>
+    <div class="stack" data-auto>
     <div class="card">
       <label class="field">Nome<textarea id="pNome" rows="2" style="min-height:0">${esc(p.nome)}</textarea></label>
       <label class="field">Fornitore<select id="pForn"><option value="">— nessuno —</option>${forn.map(f => `<option value="${esc(f.id)}" ${p.fornitoreId === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></label>
-      <div class="btn-grid" style="grid-template-columns:1fr 1fr">
-        <label class="field">Formato<input type="text" id="pFormato" value="${esc(p.formato)}"></label>
-        <label class="field">Categoria<input type="text" id="pCat" list="pCatLista" value="${esc(p.categoria)}" autocomplete="off"></label></div>
-      <datalist id="pCatLista">${categorieUsate().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+      <label class="field">Categoria${campoCategoria('pCat', p.categoria)}</label>
+      <label class="field">Formato<input type="text" id="pFormato" value="${esc(p.formato)}"></label>
       <label class="field">Tipo di scadenza<select id="pTipo"><option value="preferibilmente" ${p.tipoScadenza !== 'entro' ? 'selected' : ''}>Preferibilmente entro (secchi, conserve)</option><option value="entro" ${p.tipoScadenza === 'entro' ? 'selected' : ''}>Da consumarsi entro (freschi)</option></select></label>
       <div class="field" style="font-weight:600">Codici a barre
         <div class="row wrap" id="pCodici">${codiciHtml(p)}</div></div>
@@ -1735,11 +1776,16 @@ routes.prodotto = id => {
       <div class="faint small">Calcolato: acquisto + ricarico + IVA, arrotondato ai 10 centesimi superiori. Se scrivi un prezzo a mano, vale quello.</div></div>
     <div class="card"><label class="field">Note<textarea id="pNote" style="min-height:80px">${esc(p.note)}</textarea></label>
       ${p.origine ? `<div class="faint small">Origine: ${esc(p.origine)}</div>` : ''}</div>
-    <button class="btn primary block" type="button" data-act="p-salva" data-id="${esc(p.id)}">Salva modifiche</button>
+    </div>
+    <div class="salva-riga"><span class="salva-stato" aria-live="polite">Ogni modifica si salva da sola.</span></div>
     <button class="btn danger block" type="button" data-act="p-elimina" data-id="${esc(p.id)}">Elimina prodotto</button>`;
   return {
     title: 'Scheda prodotto', html, back: '#catalogo', tab: 'catalogo',
     mount: b => {
+      // com'era il prodotto quando si è aperta la scheda (resta uguale anche se la pagina si ridisegna)
+      if (!PSTATO || PSTATO.id !== p.id || current.fresh) PSTATO = { id: p.id, eraSfuso: !!p.sfuso, chiesto: false };
+      const stato = PSTATO;
+      autoSalva(b, () => leggiScheda(p.id, b, stato));
       // la scheda com'è nel modulo, anche prima di salvare
       const forma = () => ({ sfuso: b.querySelector('#pSfuso').checked, unita: b.querySelector('#pUnita').value });
       const upd = () => {
@@ -1816,7 +1862,7 @@ routes.fornitore = id => {
   const f = fornitore(id);
   if (!f) return { title: 'Fornitore', html: '<div class="empty">Fornitore non trovato.</div>', back: '#fornitori', tab: 'catalogo' };
   const n = [...S.prodotti.values()].filter(p => p.fornitoreId === f.id).length;
-  const html = `<div class="card">
+  const html = `<div class="card" data-auto>
       <label class="field">Nome<input type="text" id="fNome" value="${esc(f.nome)}"></label>
       <label class="field">Partita IVA <span class="hint">serve a riconoscere le sue fatture</span><input type="text" id="fPiva" value="${esc(f.piva || '')}" autocomplete="off" placeholder="es. IT01234567890"></label>
       <label class="field">Come si ordina<select id="fMet">${Object.entries(METODI).map(([k, v]) => `<option value="${k}" ${(f.metodo || '') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
@@ -1824,10 +1870,10 @@ routes.fornitore = id => {
       <label class="field">Email<input type="email" id="fMail" value="${esc(f.email)}"></label>
       <label class="field">Sito per gli ordini<input type="url" id="fSito" value="${esc(f.sito)}" placeholder="es. www.fornitore.it"></label>
       <label class="field">Note <span class="hint">giorni di consegna, ordine minimo, trasporto</span><textarea id="fNote" style="min-height:80px">${esc(f.note)}</textarea></label>
-      <button class="btn primary block" type="button" data-act="f-salva" data-id="${esc(f.id)}">Salva</button></div>
+      <div class="faint small salva-stato" aria-live="polite">Ogni modifica si salva da sola.</div></div>
     <a class="btn block" href="#catalogo/${encodeURIComponent(f.id)}">Vedi i ${n} prodotti</a>
     <button class="btn danger block" type="button" data-act="f-elimina" data-id="${esc(f.id)}">Elimina fornitore</button>`;
-  return { title: 'Fornitore', html, back: '#fornitori', tab: 'catalogo' };
+  return { title: 'Fornitore', html, back: '#fornitori', tab: 'catalogo', mount: b => autoSalva(b, () => leggiFornitore(f.id, b)) };
 };
 
 /* =========================================================
@@ -2890,6 +2936,19 @@ const REGOLE_CAT = [
   [C_FS, /\b(mandorl|noci|noce|gherigli|nocciol|anacard|pistacch|arachid|pinoli|semi|uvetta|uva sultanina|datter|fichi secchi|albicocche secche|prugne secche|goji|cranberry|frutta secca|disidratat|essiccat|cocco|candit|granella)/],
   [C_FV, /\b(mele|mela|pere|pera|banan|aranc|limon|mandarin|clementin|kiwi|patate|batata|zucchin|carot|insalat|lattuga|cipoll|aglio|melanzan|peperon|spinac|cavol|broccol|finocch|sedan|verdur|frutta|albicocch|ananas|anguria|avocado|bieta|cetriol|ciliegi|fragol|lampon|mirtill|pesche|pesca|prugne|susin|uva|melone|cocomer|pomodor|radicchi|rucola|scarola|zucca|zucche|funghi|asparag|porri|rape|ravanell|fagiolini|melograno|cachi|castagne|cicoria|basilico|prezzemolo)/],
 ];
+/* menu a tendina delle categorie, con «Scrivine un'altra…» per una categoria nuova */
+function campoCategoria(id, valore) {
+  const v = (valore || '').trim(), lista = categorieUsate();
+  return `<select id="${id}Sel" data-cat-sel="${id}"><option value="">— nessuna —</option>${lista.map(c => `<option value="${esc(c)}" ${c === v ? 'selected' : ''}>${esc(c)}</option>`).join('')}<option value="__altra">✎ Scrivine un'altra…</option></select>
+    <input type="text" id="${id}" value="" placeholder="scrivi la categoria nuova" autocomplete="off" hidden>`;
+}
+const categoriaScelta = (root, id) => { const sel = root.querySelector('#' + id + 'Sel'); if (!sel) return null; return sel.value === '__altra' ? root.querySelector('#' + id).value.replace(/\s+/g, ' ').trim() : sel.value; };
+document.addEventListener('change', e => {
+  const sel = e.target.closest('[data-cat-sel]'); if (!sel) return;
+  const inp = document.getElementById(sel.dataset.catSel); if (!inp) return;
+  inp.hidden = sel.value !== '__altra';
+  if (!inp.hidden) setTimeout(() => inp.focus(), 30);
+}, true);
 function categoriaDalNome(nome) { const n = norm(nome); for (const [c, re] of REGOLE_CAT) if (re.test(n)) return c; return ''; }
 /* le categorie preparate per il catalogo iniziale (file categorie_catalogo.js): si scrivono una volta sola,
    solo nei prodotti che non ne hanno una o che hanno ancora l'appunto del listino in quel campo */
@@ -2933,11 +2992,10 @@ function proponiCategorie() {
 function categoriaModal(ids) {
   openModal(`${mhead('Categoria')}
     <p class="muted small" style="margin:0">${ids.length === 1 ? '1 prodotto scelto' : ids.length + ' prodotti scelti'}.</p>
-    <label class="field">Categoria<input type="text" id="cgNome" list="cgLista" autocomplete="off" placeholder="scegli o scrivi"></label>
-    <datalist id="cgLista">${categorieUsate().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+    <label class="field">Categoria${campoCategoria('cgNome', '')}</label>
     <button class="btn primary block" type="button" data-x="ok">Salva</button>`, b => {
     b.querySelector('[data-x=ok]').onclick = async () => {
-      const c = b.querySelector('#cgNome').value.trim();
+      const c = categoriaScelta(b, 'cgNome');
       const prima = ids.map(id => S.prodotti.get(id)).filter(Boolean).map(p => ({ ...p }));
       await saveMany('prodotti', prima.map(p => ({ ...p, categoria: c })));
       CAT.sel = null; closeModal(); render();
@@ -3327,18 +3385,18 @@ routes.impostazioni = () => {
       <dl class="kv"><dt>Prodotti</dt><dd>${S.prodotti.size}</dd><dt>Fornitori</dt><dd>${S.fornitori.size}</dd><dt>Con codice a barre</dt><dd>${[...S.prodotti.values()].filter(p => (p.codici || []).length).length}</dd><dt>Confezioni in negozio</dt><dd>${lottiAttivi().length}</dd></dl>
       <button class="btn block" type="button" data-act="import-catalogo">Carica catalogo dai listini</button>
       <div class="faint small">Aggiunge solo prodotti e fornitori che non ci sono già.</div></div>
-    <div class="card"><h2>Avvisi di scadenza</h2>
+    <div class="card" data-auto><h2>Avvisi di scadenza</h2>
       <p class="muted small">Giorni prima della scadenza in cui il prodotto diventa rosso, arancione e giallo.</p>
       ${['preferibilmente', 'entro'].map(t => `<div class="field" style="font-weight:600">${t === 'entro' ? 'Freschi (da consumarsi entro)' : 'Secchi e conserve (preferibilmente entro)'}
         <div class="btn-grid" style="grid-template-columns:repeat(3,1fr)">${s.soglie[t].map((v, i) => `<label class="field"><span class="hint">${['rosso', 'arancione', 'giallo'][i]}</span><input type="number" inputmode="numeric" min="0" data-soglia="${t}|${i}" value="${v}"></label>`).join('')}</div></div>`).join('')}
       <label class="field">Nome del negozio nei messaggi<input type="text" id="sNeg" value="${esc(s.negozio)}"></label>
       <label class="field">Va da solo in «Da ordinare» quando ne restano (pezzi)<input type="number" inputmode="numeric" min="0" id="sScorta" value="${s.scortaMin}"></label>
       <div class="faint small">Vale per tutti i prodotti a pezzi; nella scheda di un prodotto si può scrivere un numero diverso. 0 = mai da solo.</div>
-      <button class="btn primary block" type="button" data-act="s-salva">Salva impostazioni</button></div>
-    <div class="card"><h2>Sfuso</h2>
+      <div class="faint small salva-stato" aria-live="polite">Ogni modifica si salva da sola.</div></div>
+    <div class="card" data-auto><h2>Sfuso</h2>
       <p class="muted small">Quando al sacco più vecchio resta meno di questa parte (polvere, pesate), l'app lo considera finito e passa al sacco dopo.</p>
       <label class="field">Avanzo del sacco, in %<input type="number" inputmode="numeric" min="0" max="30" id="sAvanzo" value="${s.avanzoSfuso}"></label>
-      <button class="btn primary block" type="button" data-act="s-salva">Salva impostazioni</button>
+      <div class="faint small salva-stato" aria-live="polite">Ogni modifica si salva da sola.</div>
       <a class="btn block" href="#etichette">Etichette dei contenitori</a></div>
     <div class="card"><h2>Prova del lettore</h2>
       <p class="muted small">Scansiona un codice qualsiasi stando su questa pagina: qui sotto vedi cosa arriva al telefono.</p>
@@ -3351,7 +3409,10 @@ routes.impostazioni = () => {
   return {
     title: 'Impostazioni', html, back: '#home',
     onScan: code => { const el = $('#diagCodice'); if (el) el.textContent = code; toast('Lettura riuscita: ' + code); },
-    mount: () => { if (navigator.storage && navigator.storage.persisted) navigator.storage.persisted().then(v => { persistito = v; const el = $('#persist'); if (el) el.textContent = v ? 'sì' : 'no'; }); }
+    mount: b => {
+      autoSalva(b, () => leggiImpostazioni(b));
+      if (navigator.storage && navigator.storage.persisted) navigator.storage.persisted().then(v => { persistito = v; const el = $('#persist'); if (el) el.textContent = v ? 'sì' : 'no'; });
+    }
   };
 };
 async function faiBackup() {
@@ -3745,53 +3806,89 @@ A['ord-chiudi'] = async el => {
 /* catalogo */
 A['cat-altri'] = () => { CAT.limite += 100; $('#catList').innerHTML = catListHTML(); };
 A['nuovo-prodotto'] = () => nuovoProdottoModal({ fornitoreId: CAT.forn, onDone: p => { location.hash = '#prodotto/' + encodeURIComponent(p.id); } });
-A['p-salva'] = async el => {
-  const p = prodotto(el.dataset.id); if (!p) return;
-  const nome = $('#pNome').value.replace(/\s+/g, ' ').trim(); if (!nome) { toast('Il nome non può essere vuoto', { err: true }); return; }
-  const sfuso = $('#pSfuso').checked, sacco = parseNum($('#pSacco').value);
-  const unita = sfuso ? $('#pUnita').value : p.unita;
-  const fp = { sfuso, unita };                       // il prodotto come sarà dopo il salvataggio
-  const f = sfuso ? UNITA[unitaDi(fp)].f : 1;         // il prezzo a mano è scritto nell'unità di vendita (es. all'etto)
-  const crea = sfuso && !(p.codici || []).length && !!($('#pCrea') && $('#pCrea').checked);
-  const manTxt = $('#pMan').value.trim(), manRaw = manTxt ? parseNum(manTxt) : null;
+let PSTATO = null;
+/* scheda prodotto: legge i campi adesso; il salvataggio vero (con le domande quando diventa sfuso) viene dopo */
+function leggiScheda(id, b, stato) {
+  const p = prodotto(id), q = sel => b.querySelector(sel);
+  if (!p || !q('#pNome') || current.name !== 'prodotto' || current.arg !== id) return null;
+  const v = sel => (q(sel) ? q(sel).value : '');
+  const nome = v('#pNome').replace(/\s+/g, ' ').trim(); if (!nome) return { errore: 'Il nome non può essere vuoto: non salvato' };
+  const sfuso = q('#pSfuso').checked, saccoTxt = v('#pSacco').trim(), sacco = parseNum(saccoTxt);
+  const unita = sfuso ? v('#pUnita') : p.unita, fp = { sfuso, unita }, f = sfuso ? UNITA[unitaDi(fp)].f : 1;
+  const manTxt = v('#pMan').trim(), manRaw = manTxt ? parseNum(manTxt) : null;
+  if (manTxt && manRaw == null) return { errore: 'Il prezzo a mano non è un numero: non salvato' };
+  const acqTxt = v('#pAcq').trim(), acq = acqTxt ? parseNum(acqTxt) : null;
+  if (acqTxt && acq == null) return { errore: 'Il prezzo d\'acquisto non è un numero: non salvato' };
+  const scTxt = v('#pScorta').trim(), sc = scTxt ? parseNum(scTxt) : null;
+  if (scTxt && !(sc >= 0)) return { errore: 'La scorta minima non è un numero valido: non salvato' };
+  if (sfuso && saccoTxt && !(sacco > 0)) return { errore: `${inLitri(fp) ? 'I litri della tanica non sono' : 'Il peso del sacco non è'} un numero valido: non salvato` };
+  const cat = categoriaScelta(b, 'pCat');
   const dati = {
-    nome, fornitoreId: $('#pForn').value, formato: $('#pFormato').value.trim(), categoria: $('#pCat').value.trim(), tipoScadenza: $('#pTipo').value,
-    prezzoAcquisto: parseNum($('#pAcq').value), iva: parseNum($('#pIva').value), ricarico: +$('#pRic').value,
-    prezzoManuale: manRaw != null ? Math.round(manRaw / f * 10000) / 10000 : null, note: $('#pNote').value.trim()
+    nome, fornitoreId: v('#pForn'), formato: v('#pFormato').trim(), categoria: cat == null ? p.categoria : cat, tipoScadenza: v('#pTipo'),
+    prezzoAcquisto: acq, iva: parseNum(v('#pIva')), ricarico: +v('#pRic'),
+    prezzoManuale: manRaw != null ? Math.round(manRaw / f * 10000) / 10000 : null, note: v('#pNote').trim(),
+    scortaMin: sc == null ? null : (sfuso ? r3(sc) : Math.round(sc)),
+    sfuso, unita, pesoSacco: sfuso && sacco > 0 ? sacco : (sfuso ? null : p.pesoSacco ?? null)
   };
-  const scTxt = $('#pScorta').value.trim(), sc = scTxt ? parseNum(scTxt) : null;
-  if (scTxt && !(sc >= 0)) { toast('La scorta minima non è un numero valido', { err: true }); return; }
-  dati.scortaMin = sc == null ? null : (sfuso ? r3(sc) : Math.round(sc));
-  if (sfuso && $('#pSacco').value.trim() && !(sacco > 0)) { toast(`${inLitri(fp) ? 'I litri della tanica non sono' : 'Il peso del sacco non è'} un numero valido`, { err: true }); return; }
-  dati.sfuso = sfuso; dati.unita = unita; dati.pesoSacco = sfuso && sacco > 0 ? sacco : (sfuso ? null : p.pesoSacco ?? null);
+  return { salva: () => salvaScheda(id, dati, { sacco, manRaw, fp, f, stato }) };
+}
+async function salvaScheda(id, dati, { sacco, manRaw, fp, f, stato }) {
+  const p = prodotto(id); if (!p) return false;
+  const quiDentro = () => current.name === 'prodotto' && current.arg === id && $('#pNome');
   let confezioni = [];
-  if (sfuso && !p.sfuso) {
+  if (dati.sfuso && !stato.eraSfuso && !stato.chiesto && sacco > 0) {
     // diventa sfuso: i prezzi del listino possono essere per il sacco intero, le confezioni contate a pezzi
     const intero = inLitri(fp) ? 'la tanica intera' : 'il sacco intero';
-    if (sacco > 0 && (dati.prezzoAcquisto != null || manRaw != null)) {
+    if (dati.prezzoAcquisto != null || manRaw != null) {
       const quali = [dati.prezzoAcquisto != null ? 'acquisto ' + fmtEuro(dati.prezzoAcquisto) : '', manRaw != null ? 'a mano ' + fmtEuro(manRaw) : ''].filter(Boolean).join(', ');
       const perSacco = await sceltaBox(`I prezzi scritti (${quali}) sono per ${intero} da ${fmtSf(fp, sacco)}?`, { si: `Sì: li divido per ${fmtNum(sacco)}`, no: 'No, sono già giusti', title: 'Prezzi' });
-      if (perSacco === null) return;
+      if (perSacco === null) return false;
       if (perSacco) {
         if (dati.prezzoAcquisto != null) dati.prezzoAcquisto = Math.round(dati.prezzoAcquisto / sacco * 10000) / 10000;
         if (manRaw != null) dati.prezzoManuale = Math.round(manRaw / sacco * 100) / 100;
+        if (quiDentro()) {
+          if (dati.prezzoAcquisto != null) $('#pAcq').value = fmtNum(dati.prezzoAcquisto);
+          if (dati.prezzoManuale != null) $('#pMan').value = fmtNum(Math.round(dati.prezzoManuale * f * 100) / 100);
+          $('#pAcq').dispatchEvent(new Event('input', { bubbles: true }));
+        }
       }
     }
-    const att = lottiAttivi().filter(l => l.prodottoId === p.id);
-    if (sacco > 0 && att.length) {
+    const att = lottiAttivi().filter(l => l.prodottoId === id);
+    if (att.length) {
       const n = att.reduce((t, l) => t + (+l.quantita || 0), 0);
       const sacchi = await sceltaBox(`In negozio risultano ${fmtNum(n)} confezioni di questo prodotto. Sono ${nomeSacco(fp, 2)} da ${fmtSf(fp, sacco)}?`, { si: `Sì: diventano ${fmtSf(fp, n * sacco)}`, no: `No, sono già ${nomeBase(fp)}`, title: `Quantità in ${nomeBase(fp)}` });
-      if (sacchi === null) return;
+      if (sacchi === null) return false;
       if (sacchi) confezioni = att.map(l => ({ ...l, quantita: r3(l.quantita * sacco), sacchi: l.quantita }));
     }
+    stato.chiesto = true;
   }
-  if (crea) dati.codici = [...(p.codici || []), await codiceInterno()];
-  await save('prodotti', { ...p, ...dati });
+  const cur = prodotto(id); if (!cur) return false;
+  const cambiato = Object.keys(dati).some(k => JSON.stringify(cur[k] ?? null) !== JSON.stringify(dati[k] ?? null));
+  if (!cambiato && !confezioni.length) return true;
+  await save('prodotti', { ...cur, ...dati });
   if (confezioni.length) await saveMany('lotti', confezioni);
-  if (!sfuso && p.sfuso && lottiAttivi().some(l => l.prodottoId === p.id)) toast(`Salvato. Le quantità erano in ${nomeBase(p)}: controllale nelle confezioni`, { ms: 5000 });
-  else toast(crea ? 'Salvato, codice creato' : 'Salvato');
-  render();
-  if (crea) etichettaPronta(p.id);
+  if (!dati.sfuso && cur.sfuso && lottiAttivi().some(l => l.prodottoId === id)) toast(`Le quantità erano in ${nomeBase(cur)}: controllale nelle confezioni`, { ms: 5000 });
+  if (quiDentro()) {
+    // si aggiorna solo quello che dipende dai dati salvati: i campi restano come li si sta scrivendo
+    const np = prodotto(id), t = $('#pTitolo'), so = $('#pSotto'), g = $('#pGiac'), l = $('#pLotti');
+    if (t) t.textContent = dati.nome;
+    if (so) so.textContent = nomeForn(dati.fornitoreId) + (dati.formato ? ' · ' + dati.formato : '');
+    if (cur.sfuso !== dati.sfuso || cur.unita !== dati.unita || confezioni.length) {
+      if (g) g.textContent = fq(np, giacenza(id));
+      if (l) l.innerHTML = lottiScheda(np);
+      aggiornaCodici();
+    }
+  }
+  return true;
+}
+/* sfuso senza codice: lo crea l'app e apre subito l'etichetta */
+A['p-crea-codice'] = async el => {
+  if (paginaSalva) await paginaSalva();
+  const p = prodotto(el.dataset.id); if (!p) return;
+  if ((p.codici || []).length) { aggiornaCodici(); return; }
+  await save('prodotti', { ...p, codici: [...(p.codici || []), await codiceInterno()] });
+  aggiornaCodici(); toast('Codice creato');
+  etichettaPronta(p.id);
 };
 A['p-stampa-eti'] = el => stampaModal([el.dataset.id]);
 /* etichette */
@@ -3878,13 +3975,18 @@ A['nuovo-fornitore'] = async () => {
   const f = { id: uid('f'), nome: 'Nuovo fornitore', daNominare: false, metodo: '', telefono: '', email: '', sito: '', note: '' };
   await save('fornitori', f); location.hash = '#fornitore/' + encodeURIComponent(f.id);
 };
-A['f-salva'] = async el => {
-  const f = fornitore(el.dataset.id); if (!f) return;
-  const nome = $('#fNome').value.trim(); if (!nome) { toast('Il nome non può essere vuoto', { err: true }); return; }
-  let piva = $('#fPiva').value.replace(/\s/g, '').toUpperCase(); if (/^\d{11}$/.test(piva)) piva = 'IT' + piva;
-  await save('fornitori', { ...f, nome, piva, daNominare: f.daNominare && /^da nominare/i.test(nome), metodo: $('#fMet').value, telefono: $('#fTel').value.trim(), email: $('#fMail').value.trim(), sito: $('#fSito').value.trim(), note: $('#fNote').value.trim() });
-  toast('Salvato'); render();
-};
+function leggiFornitore(id, b) {
+  const q = sel => b.querySelector(sel); if (!q('#fNome') || current.name !== 'fornitore' || current.arg !== id) return null;
+  const nome = q('#fNome').value.trim(); if (!nome) return { errore: 'Il nome non può essere vuoto: non salvato' };
+  let piva = q('#fPiva').value.replace(/\s/g, '').toUpperCase(); if (/^\d{11}$/.test(piva)) piva = 'IT' + piva;
+  const dati = { nome, piva, metodo: q('#fMet').value, telefono: q('#fTel').value.trim(), email: q('#fMail').value.trim(), sito: q('#fSito').value.trim(), note: q('#fNote').value.trim() };
+  return { salva: async () => {
+    const f = fornitore(id); if (!f) return false;
+    const nuovo = { ...f, ...dati, daNominare: f.daNominare && /^da nominare/i.test(nome) };
+    if (JSON.stringify(nuovo) === JSON.stringify(f)) return true;
+    await save('fornitori', nuovo); return true;
+  } };
+}
 A['f-elimina'] = async el => {
   const f = fornitore(el.dataset.id); if (!f) return;
   const con = await chiediFornitori([f.id]); if (con === null) return;
@@ -3893,14 +3995,15 @@ A['f-elimina'] = async el => {
   setTimeout(() => toastAnnulla(`Eliminato: ${f.nome}`, prima), 120);
 };
 /* impostazioni */
-A['s-salva'] = async () => {
-  const s = settings(); const soglie = JSON.parse(JSON.stringify(s.soglie));
-  $$('[data-soglia]').forEach(i => { const [t, k] = i.dataset.soglia.split('|'); soglie[t][+k] = Math.max(0, parseInt(i.value, 10) || 0); });
-  for (const t in soglie) soglie[t].sort((a, b) => a - b);
-  const av = parseInt($('#sAvanzo').value, 10), sc = parseInt($('#sScorta').value, 10);
-  await setMeta('settings', { soglie, negozio: $('#sNeg').value.trim() || DEFAULT_SETTINGS.negozio, avanzoSfuso: isNaN(av) ? DEFAULT_SETTINGS.avanzoSfuso : Math.min(30, Math.max(0, av)), scortaMin: isNaN(sc) ? s.scortaMin : Math.max(0, sc) });
-  toast('Impostazioni salvate'); render();
-};
+function leggiImpostazioni(b) {
+  if (!b.querySelector('#sNeg') || current.name !== 'impostazioni') return null;
+  const s0 = settings(), soglie = JSON.parse(JSON.stringify(s0.soglie));
+  b.querySelectorAll('[data-soglia]').forEach(i => { const [t, k] = i.dataset.soglia.split('|'); soglie[t][+k] = Math.max(0, parseInt(i.value, 10) || 0); });
+  for (const t in soglie) soglie[t].sort((x, y) => x - y);
+  const av = parseInt(b.querySelector('#sAvanzo').value, 10), sc = parseInt(b.querySelector('#sScorta').value, 10);
+  const nuovo = { ...(S.meta.settings || {}), soglie, negozio: b.querySelector('#sNeg').value.trim() || DEFAULT_SETTINGS.negozio, avanzoSfuso: isNaN(av) ? DEFAULT_SETTINGS.avanzoSfuso : Math.min(30, Math.max(0, av)), scortaMin: isNaN(sc) ? s0.scortaMin : Math.max(0, sc) };
+  return { salva: async () => { if (JSON.stringify(nuovo) === JSON.stringify(S.meta.settings || {})) return true; await setMeta('settings', nuovo); aggiornaBadge(); return true; } };
+}
 /* banco */
 A['banco-modo'] = el => { BANCO.modo = el.dataset.m; render(); };
 A['banco-senza'] = () => senzaCodiceModal();
@@ -3996,7 +4099,7 @@ async function init() {
       });
     }).catch(() => { });
   }
-  window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta, categorieDalCatalogo };
+  window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta, categorieDalCatalogo, salvaOra: () => paginaSalva ? paginaSalva() : Promise.resolve() };
 }
 init();
 })();
