@@ -280,6 +280,8 @@ dialog::backdrop{background:rgba(20,26,18,.45)}
 .banco-modi .on.vendita{background:var(--accent);color:#fff}
 .banco-modi .on.reso{background:#2D5877;color:#fff}
 .banco-modi .on.spreco{background:var(--red-dark);color:#fff}
+.banco-modi .on.cucina{background:var(--orange);color:#fff}
+.vcard.cucina{border-color:#EED0B3}.vcard.cucina .lab{color:#9A4E12}
 .notice.blue{background:#E3EEF7;border-color:#B9CDE0}
 .notice.orange{background:var(--orange-soft);border-color:#EED0B3}
 button.notice{width:100%;font:inherit;color:inherit;text-align:left;cursor:pointer}

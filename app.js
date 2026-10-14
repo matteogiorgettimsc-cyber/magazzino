@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.14.1';
+const VERSIONE = '1.15.0';
 
 /* =========================================================
    Utilità
@@ -591,7 +591,7 @@ function schedaRapida(p) {
     ${u ? `<div class="faint">Ultimo ordine: ${p.sfuso ? fmtSacchi(u.qta, p) : fmtNum(u.qta)} il ${fmtDate(u.data)}</div>` : ''}
     <div class="stack">
       <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn primary" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn primary" type="button" data-act="sr-inventario" data-id="${esc(p.id)}">Inventario</button></div>
-      <button class="btn block" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button>
+      <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button><button class="btn" type="button" data-act="sr-cucina" data-id="${esc(p.id)}">Per la cucina</button></div>
       <a class="btn ghost block" href="#prodotto/${encodeURIComponent(p.id)}" data-act="close-modal-link">Apri la scheda</a>
     </div>`);
 }
@@ -843,7 +843,7 @@ routes.carico = arg => {
     return `<div class="item" style="flex-wrap:wrap"><div class="main tappable" style="flex:1 1 60%" data-act="lot-modifica" data-id="${esc(l.id)}" role="button" tabindex="0"><div class="name">${esc(pp ? pp.nome : '?')}</div><div class="sub">${l.sacchi ? fmtSacchi(l.sacchi, pp) + ' = ' : ''}${fq(pp, l.quantita)} · ${l.scadenza ? 'scade ' + fmtDate(l.scadenza) : 'senza scadenza'}</div></div>
       <div class="conf-acts"><button class="btn small" type="button" data-act="lot-modifica" data-id="${esc(l.id)}">${ICO_MATITA} Modifica</button><button class="btn small ghost" type="button" data-act="lotto-annulla" data-id="${esc(l.id)}">Togli</button></div></div>`;
   }).join('')}</div>` : `<div class="empty">Ancora niente oggi.</div>`;
-  return { title: inv ? 'Inventario' : 'Arrivo merce', html, tab: 'carico', onScan: caricoScan };
+  return { title: inv ? 'Inventario' : 'Arrivo merce', html, back: '#home', tab: 'carico', onScan: caricoScan };
 };
 async function caricoScan(code) {
   const p = byCode(code);
@@ -954,7 +954,7 @@ routes.scadenze = arg => {
     <div class="row"><input type="search" id="szQ" placeholder="Cerca un prodotto" value="${esc(SZ.q)}" autocomplete="off"><button class="btn small" type="button" data-act="sz-condividi">Condividi</button></div>
     <div id="szList" class="stack">${listaScadenzeHTML()}</div>`;
   return {
-    title: 'Scadenze', html, tab: 'scadenze',
+    title: 'Scadenze', html, back: '#home', tab: 'scadenze',
     mount: b => { const i = b.querySelector('#szQ'); i.addEventListener('input', () => { SZ.q = i.value; b.querySelector('#szList').innerHTML = listaScadenzeHTML(); }); },
     onScan: code => { const p = byCode(code); if (p) { SZ.q = p.nome; SZ.filtro = 'tutti'; render(); } else collegaCodice(code, p2 => { SZ.q = p2.nome; SZ.filtro = 'tutti'; render(); }); }
   };
@@ -969,7 +969,9 @@ function testoScadenze() {
    SPRECHI
    ========================================================= */
 const MOTIVI = ['Scaduto', 'In scadenza', 'Rovinato', 'Consumo interno', 'Omaggio', 'Reso al fornitore', 'Altro'];
-const perso = r => r.motivo !== 'Reso al fornitore';   // il reso al fornitore esce dal negozio ma non è una perdita
+/* uscite per la cucina (pasti, pane, dolci): stanno con gli sprechi ma non sono una perdita (dalla 1.15.0) */
+const isCucina = r => r.tipo === 'cucina';
+const perso = r => r.motivo !== 'Reso al fornitore' && !isCucina(r);   // il reso al fornitore esce dal negozio ma non è una perdita
 async function migraSprechi() {
   if (S.meta.sprechiMigrati) return;
   const recs = [];
@@ -1045,7 +1047,7 @@ function periodo(f) {
   return ['0000-00-00', '9999-12-31'];
 }
 const valoreSpreco = r => perso(r) && r.prezzoAcquisto != null ? r.prezzoAcquisto * r.qta : null;
-function sprechiPeriodo(f) { const [da, a] = periodo(f); return [...S.sprechi.values()].filter(r => r.data >= da && r.data <= a).sort((x, y) => y.data.localeCompare(x.data) || y.creato - x.creato); }
+function sprechiPeriodo(f) { const [da, a] = periodo(f); return [...S.sprechi.values()].filter(r => !isCucina(r) && r.data >= da && r.data <= a).sort((x, y) => y.data.localeCompare(x.data) || y.creato - x.creato); }
 const segScad = on => `<div class="segmented"><a href="#scadenze" class="${on === 's' ? 'on' : ''}">Scadenze</a><a href="#sprechi" class="${on === 'w' ? 'on' : ''}">Sprechi</a></div>`;
 routes.sprechi = () => {
   const list = sprechiPeriodo(SPF);
@@ -1071,7 +1073,7 @@ routes.sprechi = () => {
       <button class="btn small" type="button" data-act="spreco-mod" data-id="${esc(r.id)}">Modifica</button></div>`;
   }).join('')}</div>` : `<div class="empty">Nessuno spreco in questo periodo.</div>`;
   return {
-    title: 'Archivio sprechi', html, tab: 'scadenze',
+    title: 'Archivio sprechi', html, back: '#scadenze', tab: 'scadenze',
     onScan: code => { const p = byCode(code); if (p) sprecoModal({ prod: p }); else collegaCodice(code, p2 => sprecoModal({ prod: p2 })); }
   };
 };
@@ -1090,7 +1092,7 @@ function testoSprechi() {
    ========================================================= */
 const ICO_ANNULLA = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICO_GRIGLIA = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
-const MODI_BANCO = [['vendita', 'Vendita'], ['reso', 'Reso'], ['spreco', 'Spreco']];
+const MODI_BANCO = [['vendita', 'Vendita'], ['reso', 'Reso'], ['spreco', 'Spreco'], ['cucina', 'Cucina']];
 const RAGGRUPPA_MS = 3 * 60 * 1000;   // lo stesso prodotto scansionato di nuovo entro 3 minuti va sulla stessa riga
 let BANCO = { modo: 'vendita', tutte: false };
 
@@ -1197,14 +1199,19 @@ async function cambiaQta(id, delta) {
     const r = await preleva(v.prodottoId, delta);
     await save('vendite', { ...v, qta: nuova, prelievi: unisci(v.prelievi, r.prelievi), mancanti: r3((v.mancanti || 0) + r.mancanti), pesoMancante: null, aggiornato: ora });
   } else {
-    let togli = -delta, mancanti = v.mancanti || 0;
-    const m = Math.min(mancanti, togli); mancanti = r3(mancanti - m); togli = r3(togli - m);
-    const prel = (v.prelievi || []).map(x => ({ ...x })), indietro = [];
-    for (let i = prel.length - 1; i >= 0 && togli > 0; i--) { const t = r3(Math.min(prel[i].qta, togli)); prel[i].qta = r3(prel[i].qta - t); togli = r3(togli - t); indietro.push({ lottoId: prel[i].lottoId, qta: t }); }
-    await muovi(indietro, 1);
-    await save('vendite', { ...v, qta: nuova, prelievi: prel.filter(x => x.qta > 0), mancanti, aggiornato: ora });
+    const x = await rimettiParte(v, -delta);
+    await save('vendite', { ...v, qta: nuova, ...x, aggiornato: ora });
   }
   render();
+}
+/* ne torna in negozio una parte (vendita o cucina): prima si tolgono i pezzi che non risultavano, poi dalle confezioni, dall'ultima */
+async function rimettiParte(v, togli) {
+  let mancanti = v.mancanti || 0;
+  const m = Math.min(mancanti, togli); mancanti = r3(mancanti - m); togli = r3(togli - m);
+  const prel = (v.prelievi || []).map(x => ({ ...x })), indietro = [];
+  for (let i = prel.length - 1; i >= 0 && togli > 0; i--) { const t = r3(Math.min(prel[i].qta, togli)); prel[i].qta = r3(prel[i].qta - t); togli = r3(togli - t); indietro.push({ lottoId: prel[i].lottoId, qta: t }); }
+  await muovi(indietro, 1);
+  return { prelievi: prel.filter(x => x.qta > 0), mancanti };
 }
 /* reso del cliente: il pezzo torna nella confezione da cui era uscito */
 async function rendi(p, qta = 1) {
@@ -1267,6 +1274,7 @@ function bancoScan(code) {
       return;
     }
     if (BANCO.modo === 'spreco') { if (p) sprecoBanco(p); else collegaCodice(code, sprecoBanco); return; }
+    if (BANCO.modo === 'cucina') { if (p && isSfuso(p)) cucinaPeso(p); else if (p) await usaInCucina(p, 1); else collegaCodice(code, p2 => isSfuso(p2) ? cucinaPeso(p2) : inCoda(() => usaInCucina(p2, 1))); return; }
     if (p && isSfuso(p)) { vendiPesoModal(p); return; }
     if (p) await vendi(p); else await vendiSconosciuto(code);
   });
@@ -1276,6 +1284,7 @@ function resoPeso(p) { pesoModal(p, { titolo: 'Reso: quanto riporta?', ok: 'Rime
 function azioneBanco(p) {
   if (BANCO.modo === 'reso') { if (isSfuso(p)) return resoPeso(p); return inCoda(() => rendi(p)); }
   if (BANCO.modo === 'spreco') return sprecoBanco(p);
+  if (BANCO.modo === 'cucina') return isSfuso(p) ? cucinaPeso(p) : inCoda(() => usaInCucina(p, 1, { origine: 'ricerca' }));
   if (isSfuso(p)) return vendiPesoModal(p, 'ricerca');
   return inCoda(() => vendi(p, { origine: 'ricerca' }));
 }
@@ -1287,9 +1296,9 @@ function sprecoBanco(p) {
 }
 
 /* finestra del peso: i grammi letti sulla bilancia (i ml per i liquidi alla spina) */
-function pesoModal(p, { titolo = null, ok = 'Aggiungi', iniziale = 0, onOk }) {
+function pesoModal(p, { titolo = null, ok = 'Aggiungi', iniziale = 0, perCucina = false, onOk }) {
   let g = iniziale ? String(Math.round(iniziale * 1000)) : '';
-  const pr = prezzoVendita(p), lt = inLitri(p), mu = lt ? 'ml' : 'g';
+  const pr = perCucina ? null : prezzoVendita(p), lt = inLitri(p), mu = lt ? 'ml' : 'g';
   const grammi = () => parseInt(g, 10) || 0;
   const conferma = () => { const gr = grammi(); if (!gr) return false; closeModal(); onOk(r3(gr / 1000)); return true; };
   const draw = b => {
@@ -1301,7 +1310,7 @@ function pesoModal(p, { titolo = null, ok = 'Aggiungi', iniziale = 0, onOk }) {
   };
   const veloci = lt ? [250, 500, 750, 1000] : [100, 250, 500, 1000];
   openModal(`${mhead(titolo || (lt ? 'Quanti ml?' : 'Quanto pesa?'))}
-    <div class="peso-prod"><b>${esc(p.nome)}</b><span>${pr != null ? fmtEuro(perUnita(p, pr)) + alKg(p) : 'Prezzo' + alKg(p) + ' non impostato'} · in negozio ${fmtSf(p, giacenza(p.id))}</span></div>
+    <div class="peso-prod"><b>${esc(p.nome)}</b><span>${perCucina ? 'Per la cucina' : pr != null ? fmtEuro(perUnita(p, pr)) + alKg(p) : 'Prezzo' + alKg(p) + ' non impostato'} · in negozio ${fmtSf(p, giacenza(p.id))}</span></div>
     <div class="peso-display" aria-live="polite"><span id="pgVal">0</span><small>${mu}</small></div>
     <div class="peso-info"><span id="pgKg"></span><b id="pgEuro"></b></div>
     <div class="peso-veloci">${veloci.map(x => `<button type="button" class="chip" data-g="${x}">${x === 1000 ? (lt ? '1 litro' : '1 kg') : x + ' ' + mu}</button>`).join('')}</div>
@@ -1366,6 +1375,8 @@ function rigaVendita(v) {
     <span class="prezzo">${imp == null ? '–' : fmtEuro(imp)}</span><time>${fmtOra(v.creato)}</time></button>`;
 }
 routes.banco = () => {
+  if (BANCO.modo === 'cucina' && current.fresh && Date.now() - (BANCO.toccato || 0) > 10 * 60000) BANCO.modo = 'vendita';   // tornando al banco dopo un po' si riparte da Vendita
+  if (BANCO.modo === 'cucina') return bancoCucina();
   const righe = venditeDel(todayISO());
   const tot = righe.reduce((t, v) => t + (importo(v) || 0), 0);
   const codiciDS = new Set(daSistemare().map(v => v.codice)).size;
@@ -1384,7 +1395,114 @@ routes.banco = () => {
     html += `<div class="section-title"><h2>${vend ? 'Prima' : 'Oggi'}</h2><span class="count">${resto.length}</span></div><div class="list">${resto.slice(0, max).map(rigaVendita).join('')}</div>`;
     if (resto.length > max) html += `<button class="btn block" type="button" data-act="banco-tutte">Mostra tutte (${resto.length})</button>`;
   }
-  return { title: 'Banco', html, tab: 'banco', onScan: bancoScan, mount: () => { if (daCollegarePronti()) inCoda(sistemaEAvvisa); } };
+  return { title: 'Banco', html, back: '#home', tab: 'banco', onScan: bancoScan, mount: () => { if (daCollegarePronti()) inCoda(sistemaEAvvisa); } };
+};
+/* =========================================================
+   CUCINA: merce presa dagli scaffali per i pasti o per fare pane e dolci (dalla 1.15.0)
+   - esce dal magazzino come una vendita (dalla confezione che scade prima), ma non è venduta né buttata
+   - si scrive con gli sprechi (tipo 'cucina'), così va anche sull'altro dispositivo e nel backup
+   ========================================================= */
+const usiCucina = (da, a) => [...S.sprechi.values()].filter(r => isCucina(r) && r.data >= da && r.data <= a).sort((x, y) => y.data.localeCompare(x.data) || y.creato - x.creato);
+const valoreCucina = r => r.prezzoAcquisto != null ? r.prezzoAcquisto * r.qta : null;
+const ultimaCucina = () => usiCucina(todayISO(), todayISO())[0] || null;
+const nomeUso = r => { const p = prodotto(r.prodottoId); return p ? p.nome : r.nome ? `${r.nome} (eliminato)` : 'Prodotto eliminato'; };
+const qtaUso = (r, q = r.qta) => { const p = prodotto(r.prodottoId); return r.sfuso ? (p ? fmtSf(p, q) : fmtKg(q)) : fmtNum(q) + ' pz'; };
+function piuUsatiCucina(n = 12) {
+  const m = new Map();
+  for (const r of usiCucina(piuGiorni(-60), todayISO())) m.set(r.prodottoId, (m.get(r.prodottoId) || 0) + 1);
+  return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => prodotto(id)).filter(Boolean).slice(0, n);
+}
+async function usaInCucina(p, qta, { origine = 'scansione' } = {}) {
+  qta = r3(qta); if (!p || !(qta > 0)) return;
+  const u = ultimaCucina(), ora = Date.now(); BANCO.toccato = ora;
+  if (!isSfuso(p) && u && u.prodottoId === p.id && !u.sfuso && ora - (u.aggiornato || u.creato) < RAGGRUPPA_MS) return qtaCucina(u.id, r3(u.qta + qta));
+  const r = await preleva(p.id, qta);
+  await save('sprechi', { id: uid('k'), tipo: 'cucina', motivo: 'Cucina', prodottoId: p.id, nome: p.nome, qta, data: todayISO(), creato: ora, aggiornato: ora,
+    prelievi: r.prelievi, mancanti: r.mancanti, sfuso: isSfuso(p) || undefined, prezzoAcquisto: p.prezzoAcquisto ?? null, lottoId: null, scadenza: null, origine });
+  render();
+}
+async function qtaCucina(id, nuova) {
+  const r = S.sprechi.get(id); nuova = r3(nuova);
+  if (!r || !(nuova > 0) || nuova === r.qta) return;
+  if (nuova > r.qta && !S.prodotti.has(r.prodottoId)) return;
+  const ora = Date.now(); BANCO.toccato = ora;
+  if (nuova > r.qta) { const x = await preleva(r.prodottoId, r3(nuova - r.qta)); await save('sprechi', { ...r, qta: nuova, prelievi: unisci(r.prelievi, x.prelievi), mancanti: r3((r.mancanti || 0) + x.mancanti), aggiornato: ora }); }
+  else await save('sprechi', { ...r, qta: nuova, ...(await rimettiParte(r, r3(r.qta - nuova))), aggiornato: ora });
+  render();
+}
+async function annullaCucina(id) {
+  const r = S.sprechi.get(id); if (!r) return;
+  await muovi(r.prelievi, 1); await remove('sprechi', id);
+  toast(`Tolto dalla cucina: ${qtaUso(r)} di ${nomeUso(r)}, torna in negozio`); render();
+}
+function cucinaPeso(p, rec = null) {
+  pesoModal(p, { titolo: rec ? 'Cucina: quanto avete preso?' : 'Cucina: quanto ne prendi?', ok: rec ? 'Correggi' : 'Per la cucina', iniziale: rec ? rec.qta : 0, perCucina: true,
+    onOk: kg => inCoda(() => rec ? qtaCucina(rec.id, kg) : usaInCucina(p, kg)) });
+}
+function cucinaPezzi(p) {
+  openModal(`${mhead('Quanti per la cucina?')}<div class="faint">${esc(p.nome)} · in negozio ${fq(p, giacenza(p.id))}</div>
+    <div class="stepper"><button type="button" data-x="-" aria-label="Meno">−</button><input type="number" inputmode="numeric" id="kQ" value="1" min="1"><button type="button" data-x="+" aria-label="Più">+</button></div>
+    <button class="btn primary block" type="button" data-x="ok">Per la cucina</button>`, b => {
+    const i = b.querySelector('#kQ');
+    b.querySelector('[data-x="-"]').onclick = () => { i.value = Math.max(1, (+i.value || 1) - 1); };
+    b.querySelector('[data-x="+"]').onclick = () => { i.value = (+i.value || 0) + 1; };
+    b.querySelector('[data-x=ok]').onclick = () => { const n = parseInt(i.value, 10); if (!(n > 0)) { toast('Scrivi quanti', { err: true }); return; } closeModal(); inCoda(() => usaInCucina(p, n, { origine: 'ricerca' })); };
+  });
+}
+const cucinaScegli = p => isSfuso(p) ? cucinaPeso(p) : cucinaPezzi(p);
+function cucinaModal(id) {
+  const r = S.sprechi.get(id); if (!r) return;
+  const p = prodotto(r.prodottoId), sf = !!r.sfuso, v = valoreCucina(r);
+  openModal(`${mhead('Usato in cucina')}<div class="faint">${esc(nomeUso(r))} · ${fmtDate(r.data)} alle ${fmtOra(r.creato)}${v != null ? ' · ' + fmtEuro(r2(v)) + ' al costo' : ''}</div>
+    ${p ? (sf ? `<label class="field">${inLitri(p) ? 'Litri <span class="hint">con la virgola: 0,25 = 250 ml</span>' : 'Kg <span class="hint">con la virgola: 0,25 = 250 g</span>'}<input type="text" inputmode="decimal" id="kQ" value="${fmtNum(r.qta)}" autocomplete="off"></label>`
+      : `<div class="stepper"><button type="button" data-x="-" aria-label="Meno">−</button><input type="number" inputmode="numeric" id="kQ" value="${r.qta}" min="1"><button type="button" data-x="+" aria-label="Più">+</button></div>`)
+      + '<button class="btn primary block" type="button" data-x="ok">Salva</button>' : ''}
+    <button class="btn danger block" type="button" data-x="del">Toglilo: torna in negozio</button>`, b => {
+    const i = b.querySelector('#kQ');
+    if (i && !sf) { b.querySelector('[data-x="-"]').onclick = () => { i.value = Math.max(1, (+i.value || 1) - 1); }; b.querySelector('[data-x="+"]').onclick = () => { i.value = (+i.value || 0) + 1; }; }
+    const ok = b.querySelector('[data-x=ok]');
+    if (ok) ok.onclick = () => { const n = sf ? r3(parseNum(i.value)) : parseInt(i.value, 10); if (!(n > 0)) { toast(sf ? 'Scrivi quanto' : 'Scrivi quanti', { err: true }); return; } closeModal(); inCoda(() => qtaCucina(r.id, n)); };
+    b.querySelector('[data-x=del]').onclick = () => { closeModal(); inCoda(() => annullaCucina(r.id)); };
+  });
+}
+function cartaCucina(r) {
+  const p = prodotto(r.prodottoId), sf = !!r.sfuso, v = valoreCucina(r);
+  const destra = sf ? (p ? `<button class="btn" type="button" data-act="cucina-peso" data-id="${esc(r.id)}">${inLitri(p) ? 'Cambia ml' : 'Cambia peso'}</button>` : '')
+    : `<div class="qta" role="group" aria-label="Quantità"><button type="button" data-act="cucina-qta" data-d="-1" data-id="${esc(r.id)}" aria-label="Togli un pezzo" ${r.qta <= 1 ? 'disabled' : ''}>−</button><b>${fmtNum(r.qta)}</b><button type="button" data-act="cucina-qta" data-d="1" data-id="${esc(r.id)}" aria-label="Aggiungi un pezzo">+</button></div>`;
+  const manca = mancaVisibile(r) ? `<div class="notice orange"><span><b>${sf ? qtaUso(r, r.mancanti) + ' non risultavano' : r.mancanti === 1 ? '1 pezzo non risultava' : fmtNum(r.mancanti) + ' pezzi non risultavano'} in negozio.</b> È registrato lo stesso: controlla gli arrivi di questo prodotto.</span></div>` : '';
+  return `<section class="vcard cucina" aria-label="Ultimo preso per la cucina">
+    <div class="lab"><span>Per la cucina</span><time>${fmtOra(r.creato)}</time></div>
+    <div class="nome">${esc(nomeUso(r))}</div>
+    <div class="info">${[infoLotti(r), p ? 'in negozio ' + fq(p, giacenza(p.id)) : ''].filter(Boolean).join(' · ')}</div>
+    ${manca}
+    <div class="bottom"><div class="tot">${sf ? esc(qtaUso(r)) : fmtNum(r.qta) + ' pz'}<small>${v != null ? fmtEuro(r2(v)) + ' al prezzo d\'acquisto' : 'Prezzo d\'acquisto non impostato'}</small></div>${destra}</div></section>`;
+}
+const rigaCucina = (r, conData = false) => `<button class="item vrow" type="button" data-act="cucina-mod" data-id="${esc(r.id)}"><div class="main"><div class="name">${esc(nomeUso(r))}</div><div class="sub">${conData ? fmtDate(r.data) : fmtOra(r.creato)} · ${esc(qtaUso(r))}${mancaVisibile(r) ? ' · non risultava in negozio' : ''}</div></div><span class="prezzo">${valoreCucina(r) != null ? fmtEuro(r2(valoreCucina(r))) : ''}</span><span class="chev">›</span></button>`;
+function bancoCucina() {
+  const oggi = usiCucina(todayISO(), todayISO()), u = oggi[0], val = r2(oggi.reduce((t, r) => t + (valoreCucina(r) || 0), 0));
+  let html = `<div class="segmented banco-modi">${MODI_BANCO.map(([k, l]) => `<button type="button" data-act="banco-modo" data-m="${k}" class="${BANCO.modo === k ? 'on ' + k : ''}" aria-pressed="${BANCO.modo === k}">${l}</button>`).join('')}</div>`;
+  html += `<div class="notice orange"><span class="spacer"><b>Cucina:</b> scansiona quello che prendete per i pasti o per fare pane e dolci. Esce dal magazzino, ma non è venduto né buttato.</span><button class="btn small" type="button" data-act="banco-modo" data-m="vendita">Fine</button></div>`;
+  html += u ? cartaCucina(u) : scanbox('Scansiona quello che prendi per la cucina', 'Se non ha codice, cercalo per nome.', 'banco-senza');
+  html += `<div class="btn-grid banco-az" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="cucina-annulla" ${u ? '' : 'disabled'}>${ICO_ANNULLA} Annulla ultimo</button><button class="btn soft" type="button" data-act="banco-senza">${ICO_GRIGLIA} Senza codice</button></div>`;
+  html += `<div class="oggi-bar"><span>In cucina oggi <b>${oggi.length ? totaleQta(oggi) : '0 pz'}</b>${val ? ` · <b>${fmtEuro(val)}</b>` : ''}</span><a class="btn small" href="#cucina">Vedi tutto</a></div>`;
+  if (oggi.length > 1) html += `<div class="section-title"><h2>Prima</h2><span class="count">${oggi.length - 1}</span></div><div class="list">${oggi.slice(1).map(r => rigaCucina(r)).join('')}</div>`;
+  return { title: 'Banco', html, back: '#home', tab: 'banco', onScan: bancoScan };
+}
+routes.cucina = () => {
+  const [da, a] = periodo(CRU), list = usiCucina(da, a), val = r2(list.reduce((t, r) => t + (valoreCucina(r) || 0), 0));
+  const senzaPrezzo = list.filter(r => r.prezzoAcquisto == null).length, per = new Map();
+  for (const r of list) { const e = per.get(r.prodottoId) || { r, qta: 0, val: 0, n: 0 }; e.qta += r.qta; e.val += valoreCucina(r) || 0; e.n++; per.set(r.prodottoId, e); }
+  const top = [...per.values()].sort((x, y) => y.val - x.val || y.n - x.n);
+  let html = `<div class="chips">${PERIODI_CRU.map(([k, l]) => `<button class="chip ${CRU === k ? 'on' : ''}" type="button" data-act="cru-periodo" data-f="${k}">${l}</button>`).join('')}</div>
+    <div class="stats" style="grid-template-columns:1fr 1fr"><div class="stat"><b class="euro">${fmtEuro(val)}</b><span>Merce usata, al prezzo d'acquisto</span></div>
+      <div class="stat"><b>${per.size}</b><span>${per.size === 1 ? 'prodotto' : 'prodotti diversi'} · ${list.length} ${list.length === 1 ? 'volta' : 'volte'}</span></div></div>
+    ${senzaPrezzo ? `<div class="notice"><span>Per ${senzaPrezzo === 1 ? '1 riga manca' : senzaPrezzo + ' righe manca'} il prezzo d'acquisto: non ${senzaPrezzo === 1 ? 'è contata' : 'sono contate'} nel valore.</span></div>` : ''}
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn primary" type="button" data-act="cucina-banco">Scansiona al Banco</button><button class="btn" type="button" data-act="cucina-nuovo">Aggiungi a mano</button></div>
+    <div class="faint small" style="text-align:center">Quello che prendete dagli scaffali per i pasti o per fare pane e dolci. Esce dal magazzino ma non conta come venduto né come spreco.</div>`;
+  if (top.length) html += `<div class="section-title"><h2>Più usati</h2></div>` + barreHTML(top.slice(0, 10).map(e => ({ nome: nomeUso(e.r), valore: r2(e.val), href: prodotto(e.r.prodottoId) ? '#prodotto/' + encodeURIComponent(e.r.prodottoId) : null, sotto: qtaUso(e.r, r3(e.qta)) + ' · ' + (e.n === 1 ? '1 volta' : e.n + ' volte') })), top[0].val || 1);
+  html += `<div class="section-title"><h2>Elenco</h2><span class="count">${list.length}</span></div>`;
+  html += list.length ? `<div class="list">${list.slice(0, 200).map(r => rigaCucina(r, true)).join('')}</div>` : '<div class="empty">Niente usato in cucina in questo periodo.</div>';
+  return { title: 'Usato in cucina', html, back: '#cruscotto', tab: 'home', onScan: code => { const p = byCode(code); if (p) cucinaScegli(p); else collegaCodice(code, cucinaScegli); } };
 };
 function piuVendutiSenzaCodice(n = 12) {
   const da = todayISO(new Date(Date.now() - 60 * 86400000));
@@ -1393,13 +1511,13 @@ function piuVendutiSenzaCodice(n = 12) {
   return [...m.entries()].map(([id, q]) => [prodotto(id), q]).filter(([p]) => p && !(p.codici || []).length).sort((a, b) => b[1] - a[1]).slice(0, n).map(x => x[0]);
 }
 function senzaCodiceModal() {
-  const titolo = { vendita: 'Vendi senza codice', reso: 'Reso: cerca il prodotto', spreco: 'Spreco: cerca il prodotto' }[BANCO.modo];
-  const top = piuVendutiSenzaCodice();
+  const titolo = { vendita: 'Vendi senza codice', reso: 'Reso: cerca il prodotto', spreco: 'Spreco: cerca il prodotto', cucina: 'Cucina: cerca il prodotto' }[BANCO.modo];
+  const cuc = BANCO.modo === 'cucina', top = cuc ? piuUsatiCucina() : piuVendutiSenzaCodice();
   openModal(`${mhead(titolo)}<div class="stack" id="scWrap">
     <label class="field">Cerca per nome<input type="search" id="scQ" placeholder="Scrivi le prime lettere" autocomplete="off"></label>
     <div id="scRis"></div>
-    <div class="section-title"><h2>I più venduti senza codice</h2></div>
-    ${top.length ? `<div class="grid-prod">${top.map(p => `<button type="button" data-pid="${esc(p.id)}">${esc(p.nome)}<small>${prezzoBreve(p)}</small></button>`).join('')}</div>` : '<div class="faint small">Qui compariranno da soli i prodotti senza codice venduti più spesso.</div>'}</div>`, b => {
+    <div class="section-title"><h2>${cuc ? 'I più usati in cucina' : 'I più venduti senza codice'}</h2></div>
+    ${top.length ? `<div class="grid-prod">${top.map(p => `<button type="button" data-pid="${esc(p.id)}">${esc(p.nome)}<small>${cuc ? 'in negozio ' + fq(p, giacenza(p.id)) : prezzoBreve(p)}</small></button>`).join('')}</div>` : `<div class="faint small">${cuc ? 'Qui compariranno da soli i prodotti usati più spesso in cucina.' : 'Qui compariranno da soli i prodotti senza codice venduti più spesso.'}</div>`}</div>`, b => {
     const i = b.querySelector('#scQ'), ris = b.querySelector('#scRis');
     i.addEventListener('input', () => {
       const q = i.value.trim();
@@ -1625,7 +1743,7 @@ function ordiniHTML() {
   return html;
 }
 routes.ordini = () => ({
-  title: 'Ordini', html: ordiniHTML(), tab: 'ordini',
+  title: 'Ordini', html: ordiniHTML(), back: '#home', tab: 'ordini',
   mount: b => {
     if (current.fresh) controlloScorte({ avviso: false }).then(n => { if (n && current.name === 'ordini') render(); });
     b.addEventListener('change', async e => {
@@ -1713,7 +1831,7 @@ routes.catalogo = arg => {
     <div id="catList" class="stack">${catListHTML()}</div>
     ${CAT.sel ? barraSel(CAT.sel.size, 'prodotto', 'prodotti', 'cat-elimina', 'cat-sel-fine') : '<button class="btn block" type="button" data-act="nuovo-prodotto">+ Nuovo prodotto</button>'}`;
   return {
-    title: 'Catalogo', html, tab: 'catalogo',
+    title: 'Catalogo', html, back: '#home', tab: 'catalogo',
     mount: b => {
       const upd = () => { CAT.limite = 60; b.querySelector('#catList').innerHTML = catListHTML(); };
       b.querySelector('#catList').addEventListener('change', e => {
@@ -1767,7 +1885,7 @@ routes.prodotto = id => {
   const html = `<div><h2 style="margin:0" id="pTitolo">${esc(p.nome)}</h2><div class="faint" id="pSotto">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>
     <div class="section-title"><h2>In negozio</h2><span class="count" id="pGiac">${fq(p, giacenza(p.id))}</span></div>
     <div class="stack" id="pLotti">${lottiScheda(p)}</div>
-    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn" type="button" data-act="sr-inventario" data-id="${esc(p.id)}">Inventario</button><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}" style="grid-column:1/-1">Aggiungi all'ordine</button></div>
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn" type="button" data-act="sr-inventario" data-id="${esc(p.id)}">Inventario</button><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button><button class="btn" type="button" data-act="sr-cucina" data-id="${esc(p.id)}">Per la cucina</button></div>
     <div class="section-title"><h2>Dati del prodotto</h2></div>
     <div class="faint small salva-stato">Ogni modifica si salva da sola.</div>
     <div class="stack" data-auto>
@@ -1877,7 +1995,7 @@ routes.fornitori = () => {
     <div class="list">${ok.map(row).join('') || '<div class="empty">Nessun fornitore.</div>'}</div>
     ${FSEL ? barraSel(FSEL.size, 'fornitore', 'fornitori', 'for-elimina', 'for-sel-fine') : '<button class="btn block" type="button" data-act="nuovo-fornitore">+ Nuovo fornitore</button>'}`;
   return {
-    title: 'Fornitori', html, tab: 'catalogo',
+    title: 'Fornitori', html, back: '#catalogo', tab: 'catalogo',
     mount: b => b.addEventListener('change', e => {
       const c = e.target.closest('[data-sel]'); if (!c || !FSEL) return;
       if (c.checked) FSEL.add(c.dataset.sel); else FSEL.delete(c.dataset.sel);
@@ -2593,8 +2711,9 @@ function numeriPeriodo(f) {
     if (p.prezzoAcquisto == null || p.iva == null) { senzaCosto.add(v.prodottoId); continue; }
     ricavo += imp / (1 + p.iva / 100); costo += p.prezzoAcquisto * v.qta * segnoVendita(v);
   }
-  const sprechi = sprechiPeriodo(f).filter(perso);
+  const sprechi = sprechiPeriodo(f).filter(perso), cucina = usiCucina(da, a);
   return {
+    cucina, valCucina: r2(cucina.reduce((t, r) => t + (valoreCucina(r) || 0), 0)),
     da, a, chiusure, incassi, senzaChiusura, vendite, fatture, acquisti, spese, altreSpese,
     scansionato: r2(scansionato), ricavo: r2(ricavo), costo: r2(costo), margine: r2(ricavo - costo),
     perc: ricavo > 0 ? Math.round((ricavo - costo) / ricavo * 1000) / 10 : null, senzaCosto: senzaCosto.size,
@@ -2606,6 +2725,9 @@ function numeriPeriodo(f) {
 function numeriMerce() {
   const limite = piuGiorni(-60), ultimaVendita = new Map();
   for (const v of S.vendite.values()) if (v.prodottoId && v.tipo !== 'reso' && (!ultimaVendita.has(v.prodottoId) || v.data > ultimaVendita.get(v.prodottoId))) ultimaVendita.set(v.prodottoId, v.data);
+  const ultimaCuc = new Map();
+  for (const r of S.sprechi.values()) if (isCucina(r) && !(ultimaCuc.get(r.prodottoId) >= r.data)) ultimaCuc.set(r.prodottoId, r.data);
+  for (const [pid, d] of ultimaCuc) if (!(ultimaVendita.get(pid) >= d)) ultimaVendita.set(pid, d);
   let valore = 0, senzaPrezzo = 0; const perProd = new Map();
   for (const l of lottiAttivi()) {
     const p = prodotto(l.prodottoId), q = +l.quantita || 0; if (!p || q <= 0) continue;
@@ -2668,9 +2790,10 @@ routes.cruscotto = () => {
   html += `<a class="btn block" href="#categorie">Vendite per categoria e grafici</a>`;
   html += `<div class="section-title"><h2>Merce</h2></div><div class="stats" style="grid-template-columns:1fr 1fr">
       <div class="stat"><b class="euro">${fmtEuro(m.valore)}</b><span>In negozio, al prezzo d'acquisto</span></div>
-      <a class="stat ${n.sprechi ? 'red' : ''}" href="#sprechi"><b class="euro">${fmtEuro(n.sprechi)}</b><span>Buttati nel periodo · ${n.nSprechi}</span></a></div>`;
+      <a class="stat ${n.sprechi ? 'red' : ''}" href="#sprechi"><b class="euro">${fmtEuro(n.sprechi)}</b><span>Buttati nel periodo · ${n.nSprechi}</span></a>
+      <a class="stat" href="#cucina" style="grid-column:1/-1"><b class="euro">${fmtEuro(n.valCucina)}</b><span>Usata in cucina (pasti, pane e dolci) · ${n.cucina.length} ${n.cucina.length === 1 ? 'volta' : 'volte'}</span></a></div>`;
   if (m.fermi.length) html += `<div class="section-title"><h2>Ferma da più di 60 giorni</h2><span class="count">${m.fermi.length} · ${fmtEuro(m.valoreFermi)}</span></div>
-    <div class="list fermi">${m.fermi.slice(0, 6).map(x => `<a class="item" href="#prodotto/${encodeURIComponent(x.p.id)}"><div class="main"><div class="name">${esc(x.p.nome)}</div><div class="sub">${fq(x.p, r3(x.q))} · ${x.ultima ? 'ultima vendita ' + fmtDate(x.ultima) : 'mai venduto nell\'app'}</div></div><span class="prezzo">${x.val ? fmtEuro(r2(x.val)) : ''}</span></a>`).join('')}</div>
+    <div class="list fermi">${m.fermi.slice(0, 6).map(x => `<a class="item" href="#prodotto/${encodeURIComponent(x.p.id)}"><div class="main"><div class="name">${esc(x.p.nome)}</div><div class="sub">${fq(x.p, r3(x.q))} · ${x.ultima ? 'ultima uscita ' + fmtDate(x.ultima) : 'mai venduto nell\'app'}</div></div><span class="prezzo">${x.val ? fmtEuro(r2(x.val)) : ''}</span></a>`).join('')}</div>
     <div class="faint small">Da valutare: metterli in vista, in sconto, o non riordinarli.</div>`;
   html += `<a class="btn primary block" href="#riepilogo">Riepilogo del mese per la contabilità</a>`;
   return { title: 'Cruscotto', html, back: '#home', tab: 'home' };
@@ -2701,7 +2824,9 @@ function datiRiepilogo(mese) {
   const pagati = tutti.filter(x => dentro(x.pagata)).sort((a, b) => a.pagata.localeCompare(b.pagata));
   const daPagare = tutti.filter(x => !x.pagata && dentro(x.data));
   const sprechi = [...S.sprechi.values()].filter(r => dentro(r.data) && perso(r)).sort((a, b) => a.data.localeCompare(b.data));
+  const cucina = [...S.sprechi.values()].filter(r => dentro(r.data) && isCucina(r)).sort((a, b) => a.data.localeCompare(b.data) || a.creato - b.creato);
   return {
+    cucina, totCucina: r2(cucina.reduce((t, r) => t + (valoreCucina(r) || 0), 0)),
     mese, incassi, mancano, totIncassi: r2(incassi.reduce((t, c) => t + (+c.incasso || 0), 0)), totFrutta: r2(incassi.reduce((t, c) => t + (+c.frutta || 0), 0)),
     fatture, iva: [...iva.entries()].sort((a, b) => a[1].al - b[1].al), imponibile: r2(imponibile), imposta: r2(imposta),
     totFatture: r2(fatture.reduce((t, fa) => t + (+fa.totale || 0) * segnoFattura(fa), 0)),
@@ -2723,7 +2848,8 @@ routes.riepilogo = arg => {
       ${conPagamenti() || conFatture() ? `${conPagamenti() ? `<dt>${nomeSpese()}</dt><dd>${fmtEuro(d.totSpese)}</dd>` : ''}
       <dt>Pagato nel mese</dt><dd>${fmtEuro(d.totPagati)}</dd>
       <dt>Ancora da pagare (scadenze del mese)</dt><dd class="${d.daPagare.length ? 'arancio' : ''}">${fmtEuro(d.totDaPagare)}</dd>` : `<dt>Venduto nell'app (scansionato)</dt><dd>${fmtEuro(venditeMese(mese).totale)}</dd>`}
-      <dt>Merce buttata (al costo)</dt><dd>${fmtEuro(d.totSprechi)}</dd></dl>
+      <dt>Merce buttata (al costo)</dt><dd>${fmtEuro(d.totSprechi)}</dd>
+      <dt>Merce usata in cucina (al costo)</dt><dd>${fmtEuro(d.totCucina)}</dd></dl>
       <button class="btn primary block" type="button" data-act="riep-excel" data-m="${mese}">Scarica in Excel</button></div>`;
   html += `<div class="section-title"><h2>Incassi</h2><span class="count">${fmtEuro(d.totIncassi)}</span></div>`;
   html += d.incassi.length ? t(d.incassi.map(c => `<tr><td>${fmtDate(c.data)}</td><td class="n">${fmtEuro(c.incasso)}</td><td class="n faint">${c.frutta ? fmtEuro(c.frutta) : ''}</td></tr>`).join(''), ['Giorno', 'Incasso', 'Frutta e verdura']) : '<div class="empty">Nessuna chiusura di cassa in questo mese.</div>';
@@ -2815,7 +2941,7 @@ function tuttiFogli(mese) {
       ...(conFatture() ? [['Fatture dei fornitori (totale)', E(d.totFatture)], ['Fatture: imponibile', E(d.imponibile)], ['Fatture: IVA', E(d.imposta)]] : []),
       ...(conPagamenti() ? [[nomeSpese(), E(d.totSpese)]] : []), ...(conPagamenti() || conFatture() ? [['Pagato nel mese', E(d.totPagati)], ['Ancora da pagare (scadenze del mese)', E(d.totDaPagare)]] : []),
       ['Venduto nell\'app (scansionato)', E(venditeMese(mese).totale)],
-      ['Merce buttata (al costo)', E(d.totSprechi)], [],
+      ['Merce buttata (al costo)', E(d.totSprechi)], ['Merce usata in cucina (al costo)', E(d.totCucina)], [],
       [d.mancano.length ? `Mancano le chiusure di ${d.mancano.length} giorni: vedi il foglio Incassi.` : ''],
       [`Preparato dall'app Magazzino il ${fmtDate(todayISO())}.`]] },
     { nome: 'Incassi', larghezze: [12, 16, 18, 22, 14, 34], righe: [
@@ -2848,7 +2974,11 @@ function tuttiFogli(mese) {
     { nome: 'Merce buttata', larghezze: [12, 34, 14, 22, 14], righe: [
       ['Giorno', 'Prodotto', 'Quantità', 'Motivo', 'Valore (costo)'].map(T),
       ...d.sprechi.map(r => { const p = prodotto(r.prodottoId); return [D(r.data), p ? p.nome : '?', p && isSfuso(p) ? fmtSf(p, r.qta) : r.qta, r.motivo, E(valoreSpreco(r))]; }),
-      [T('Totale'), '', '', '', { et: d.totSprechi }]] }
+      [T('Totale'), '', '', '', { et: d.totSprechi }]] },
+    { nome: 'Cucina', larghezze: [12, 34, 14, 16], righe: [
+      ['Giorno', 'Prodotto', 'Quantità', 'Valore (costo)'].map(T),
+      ...d.cucina.map(r => [D(r.data), nomeUso(r), r.sfuso ? qtaUso(r) : r.qta, E(valoreCucina(r))]),
+      [T('Totale'), '', '', { et: d.totCucina }], [], ['Merce presa dagli scaffali per i pasti o per fare pane e dolci.']] }
   ];
 }
 /* un file da mettere su Drive o aprire con Excel: si condivide se il telefono lo permette, altrimenti va nei Download */
@@ -3075,9 +3205,9 @@ const venditeEliminati = (da, a) => [...S.vendite.values()].filter(v => v.prodot
 const qtaCat = e => [e.pz ? `${fmtNum(r3(e.pz))} pz` : '', e.kg ? fmtKg(e.kg) : '', e.l ? fmtLitri(e.l) : ''].filter(Boolean).join(' + ');
 /* barre orizzontali: una riga per voce (nome e valore sopra, barra sotto), dal più al meno */
 function barreHTML(voci, max) {
-  return `<div class="list barre">${voci.map(v => `<a class="item hbar" href="${v.href}"><div class="main"><div class="hb-testa"><span class="name">${esc(v.nome)}</span><b>${fmtEuro(v.valore)}</b></div>
+  return `<div class="list barre">${voci.map(v => `${v.href ? `<a class="item hbar" href="${v.href}">` : '<div class="item hbar">'}<div class="main"><div class="hb-testa"><span class="name">${esc(v.nome)}</span><b>${fmtEuro(v.valore)}</b></div>
     <div class="hb-traccia" aria-hidden="true"><i style="width:${max > 0 ? Math.max(v.valore > 0 ? 1.5 : 0, v.valore / max * 100).toFixed(1) : 0}%"></i></div>
-    ${v.sotto ? `<div class="sub">${v.sotto}</div>` : ''}</div><span class="chev">›</span></a>`).join('')}</div>`;
+    ${v.sotto ? `<div class="sub">${v.sotto}</div>` : ''}</div>${v.href ? '<span class="chev">›</span></a>' : '</div>'}`).join('')}</div>`;
 }
 /* andamento nel tempo: colonne (un giorno o un mese ciascuna), una serie alla volta */
 let VC = { periodo: 'mese', serie: 'cassa' };
@@ -3552,7 +3682,7 @@ function descriviVoce(v) {
     const p = o.prodottoId && prodotto(o.prodottoId); return p ? p.nome : ''; };
   const con = (t, x) => t + (x && nome(x) ? ' · ' + nome(x) : '');
   if (di('vendite')) { const x = di('vendite'); return con(x.prima && !x.dopo ? 'vendita tolta' : x.prima ? 'vendita cambiata' : x.dopo && x.dopo.tipo === 'reso' ? 'reso' : 'vendita', x); }
-  if (di('sprechi')) return con('spreco', di('sprechi'));
+  if (di('sprechi')) { const x = di('sprechi'), o = x.dopo || x.prima || {}; return con(isCucina(o) ? (x.prima && !x.dopo ? 'cucina, tolto' : 'cucina') : 'spreco', x); }
   if (di('lotti')) { const x = di('lotti'); return con(!x.prima ? 'confezione aggiunta' : !x.dopo ? 'confezione tolta' : 'confezione cambiata', x); }
   if (di('ordini')) return 'ordine cambiato';
   if (di('chiusure')) return 'incasso del giorno';
@@ -3728,6 +3858,7 @@ A['import-catalogo'] = () => { fileMode = 'catalogo'; $('#fileInput').click(); }
 A.installa = async () => { if (!installPrompt) return; installPrompt.prompt(); try { await installPrompt.userChoice; } catch (e) { } installPrompt = null; render(); };
 A['sr-carico'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (!p) return; CS = caricoPer(p, 'arrivo'); location.hash = '#carico/keep'; if (current.name === 'carico') render(); };
 A['sr-inventario'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (!p) return; CS = caricoPer(p, 'inventario'); location.hash = '#carico/inventario'; if (current.name === 'carico') render(); };
+A['sr-cucina'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (p) setTimeout(() => cucinaScegli(p), 60); };
 A['sr-ordina'] = async el => { closeModal(); await aggiungiOrdine(el.dataset.id); render(); };
 /* arrivo merce */
 A.modo = el => { const m = el.dataset.m; if (CS.modo === m) return; CS = cambiaModo(m); location.hash = m === 'inventario' ? '#carico/inventario' : '#carico'; render(); };
@@ -4114,7 +4245,13 @@ function leggiImpostazioni(b) {
   return { salva: async () => { if (JSON.stringify(nuovo) === JSON.stringify(S.meta.settings || {})) return true; await setMeta('settings', nuovo); aggiornaBadge(); return true; } };
 }
 /* banco */
-A['banco-modo'] = el => { BANCO.modo = el.dataset.m; render(); };
+A['banco-modo'] = el => { BANCO.modo = el.dataset.m; if (BANCO.modo === 'cucina') BANCO.toccato = Date.now(); render(); };
+A['cucina-qta'] = el => inCoda(async () => { const r = S.sprechi.get(el.dataset.id); if (r) await qtaCucina(r.id, r3(r.qta + +el.dataset.d)); });
+A['cucina-peso'] = el => { const r = S.sprechi.get(el.dataset.id), p = r && prodotto(r.prodottoId); if (p) cucinaPeso(p, r); };
+A['cucina-mod'] = el => cucinaModal(el.dataset.id);
+A['cucina-annulla'] = () => inCoda(async () => { const u = ultimaCucina(); if (u) await annullaCucina(u.id); });
+A['cucina-nuovo'] = () => pickerModal({ title: 'Cosa avete preso per la cucina?', onPick: cucinaScegli });
+A['cucina-banco'] = () => { BANCO.modo = 'cucina'; BANCO.toccato = Date.now(); location.hash = '#banco'; };
 A['banco-senza'] = () => senzaCodiceModal();
 A['banco-annulla'] = () => inCoda(async () => { const u = ultimaRiga(); if (u) await annullaRiga(u.id); });
 A['banco-qta'] = el => { const id = el.dataset.id, d = +el.dataset.d; return inCoda(() => cambiaQta(id, d)); };
