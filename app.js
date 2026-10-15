@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.15.0';
+const VERSIONE = '1.16.0';
 
 /* =========================================================
    Utilità
@@ -1828,6 +1828,7 @@ routes.catalogo = arg => {
       <label class="check"><input type="checkbox" id="catSF" ${CAT.sfuso ? 'checked' : ''}> Sfuso</label></div>
     <select id="catC"><option value="">Tutte le categorie</option>${[...categorieUsate().filter(c => [...S.prodotti.values()].some(p => catDi(p) === c)), SENZA_CAT].map(c => `<option value="${esc(c)}" ${CAT.cat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
     ${!CAT.sel && [...S.prodotti.values()].some(p => p.sfuso) ? '<a class="btn block" href="#etichette">Etichette dei contenitori sfusi</a>' : ''}
+    ${!CAT.sel && S.prodotti.size ? '<button class="btn block" type="button" data-act="listini-excel">Listini in Excel: un foglio per fornitore</button>' : ''}
     <div id="catList" class="stack">${catListHTML()}</div>
     ${CAT.sel ? barraSel(CAT.sel.size, 'prodotto', 'prodotti', 'cat-elimina', 'cat-sel-fine') : '<button class="btn block" type="button" data-act="nuovo-prodotto">+ Nuovo prodotto</button>'}`;
   return {
@@ -1993,6 +1994,7 @@ routes.fornitori = () => {
     ${dn.length ? `<div class="section-title"><h2>Da nominare</h2><span class="count">${dn.length}</span></div><div class="faint small">Nei listini questi fogli non avevano il nome del fornitore. Apri e scrivi il nome giusto.</div><div class="list">${dn.map(row).join('')}</div>` : ''}
     <div class="section-title"><h2>Fornitori</h2><span class="count">${ok.length}</span></div>
     <div class="list">${ok.map(row).join('') || '<div class="empty">Nessun fornitore.</div>'}</div>
+    ${!FSEL && S.prodotti.size ? '<button class="btn block" type="button" data-act="listini-excel">Listini in Excel: un foglio per fornitore</button>' : ''}
     ${FSEL ? barraSel(FSEL.size, 'fornitore', 'fornitori', 'for-elimina', 'for-sel-fine') : '<button class="btn block" type="button" data-act="nuovo-fornitore">+ Nuovo fornitore</button>'}`;
   return {
     title: 'Fornitori', html, back: '#catalogo', tab: 'catalogo',
@@ -2017,6 +2019,7 @@ routes.fornitore = id => {
       <label class="field">Note <span class="hint">giorni di consegna, ordine minimo, trasporto</span><textarea id="fNote" style="min-height:80px">${esc(f.note)}</textarea></label>
       <div class="faint small salva-stato" aria-live="polite">Ogni modifica si salva da sola.</div></div>
     <a class="btn block" href="#catalogo/${encodeURIComponent(f.id)}">Vedi i ${n} prodotti</a>
+    ${n ? `<button class="btn block" type="button" data-act="listino-excel" data-id="${esc(f.id)}">Scarica il listino in Excel</button>` : ''}
     <button class="btn danger block" type="button" data-act="f-elimina" data-id="${esc(f.id)}">Elimina fornitore</button>`;
   return { title: 'Fornitore', html, back: '#fornitori', tab: 'catalogo', mount: b => autoSalva(b, () => leggiFornitore(f.id, b)) };
 };
@@ -2889,7 +2892,7 @@ function creaZip(files, tipo) {
 const xmlEsc = s => String(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
 const colonna = i => { let s = ''; i++; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = (i - m - 1) / 26; } return s; };
 const serialeData = iso => { const [y, m, d] = iso.split('-').map(Number); return (Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000; };
-/* celle: testo, numero, {e: euro}, {et: euro in grassetto}, {d: data}, {t: titolo in grassetto} */
+/* celle: testo, numero, {e: euro}, {et: euro in grassetto}, {d: data}, {t: titolo in grassetto}, {c: riga di categoria}, {h: titolo grande} */
 function cellaXml(v, ref) {
   if (v == null || v === '') return '';
   const testo = (x, st) => `<c r="${ref}"${st ? ` s="${st}"` : ''} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(x)}</t></is></c>`;
@@ -2899,31 +2902,35 @@ function cellaXml(v, ref) {
   if ('et' in v) return v.et == null || isNaN(v.et) ? '' : `<c r="${ref}" s="4"><v>${r2(v.et)}</v></c>`;
   if ('d' in v) return v.d ? `<c r="${ref}" s="2"><v>${serialeData(v.d)}</v></c>` : '';
   if ('t' in v) return testo(v.t, 3);
+  if ('c' in v) return v.c ? testo(v.c, 5) : `<c r="${ref}" s="5"/>`;
+  if ('h' in v) return testo(v.h, 6);
   return '';
 }
 const STILI_XLSX = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
   '<numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0.00\\ &quot;€&quot;"/><numFmt numFmtId="165" formatCode="dd/mm/yyyy"/></numFmts>' +
-  '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>' +
-  '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>' +
+  '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="14"/><name val="Calibri"/></font></fonts>' +
+  '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFDEE8D8"/><bgColor indexed="64"/></patternFill></fill></fills>' +
   '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
   '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
-  '<cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+  '<cellXfs count="7"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
   '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
-  '<xf numFmtId="164" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/></cellXfs>' +
+  '<xf numFmtId="164" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>' +
+  '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>' +
   '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
 function creaXlsx(fogli) {
   const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main', NR = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships', TESTA = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
   const files = [
     { nome: '[Content_Types].xml', dati: `${TESTA}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${fogli.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>` },
     { nome: '_rels/.rels', dati: `${TESTA}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${NR}/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
-    { nome: 'xl/workbook.xml', dati: `${TESTA}<workbook xmlns="${NS}" xmlns:r="${NR}"><sheets>${fogli.map((f, i) => `<sheet name="${xmlEsc(f.nome)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>` },
+    { nome: 'xl/workbook.xml', dati: `${TESTA}<workbook xmlns="${NS}" xmlns:r="${NR}"><sheets>${fogli.map((f, i) => `<sheet name="${xmlEsc(f.nome)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${fogli.some(f => f.stampa && f.blocca) ? `<definedNames>${fogli.map((f, i) => f.stampa && f.blocca ? `<definedName name="_xlnm.Print_Titles" localSheetId="${i}">'${xmlEsc(f.nome.replace(/'/g, "''"))}'!$${f.blocca}:$${f.blocca}</definedName>` : '').join('')}</definedNames>` : ''}</workbook>` },
     { nome: 'xl/_rels/workbook.xml.rels', dati: `${TESTA}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${fogli.map((_, i) => `<Relationship Id="rId${i + 1}" Type="${NR}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${fogli.length + 1}" Type="${NR}/styles" Target="styles.xml"/></Relationships>` },
     { nome: 'xl/styles.xml', dati: STILI_XLSX }
   ];
   fogli.forEach((f, i) => {
+    const vista = f.blocca ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${f.blocca}" topLeftCell="A${f.blocca + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` : '';
     const cols = f.larghezze ? `<cols>${f.larghezze.map((w, j) => `<col min="${j + 1}" max="${j + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>` : '';
     const rows = f.righe.map((r, ri) => `<row r="${ri + 1}">${r.map((v, ci) => cellaXml(v, colonna(ci) + (ri + 1))).join('')}</row>`).join('');
-    files.push({ nome: `xl/worksheets/sheet${i + 1}.xml`, dati: `${TESTA}<worksheet xmlns="${NS}">${cols}<sheetData>${rows}</sheetData></worksheet>` });
+    files.push({ nome: `xl/worksheets/sheet${i + 1}.xml`, dati: `${TESTA}<worksheet xmlns="${NS}">${f.stampa ? '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>' : ''}${vista}${cols}<sheetData>${rows}</sheetData>${f.stampa ? '<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>' : ''}</worksheet>` });
   });
   return creaZip(files, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 }
@@ -2981,6 +2988,61 @@ function tuttiFogli(mese) {
       [T('Totale'), '', '', { et: d.totCucina }], [], ['Merce presa dagli scaffali per i pasti o per fare pane e dolci.']] }
   ];
 }
+/* =========================================================
+   LISTINI IN EXCEL (dalla 1.16.0): un foglio per fornitore, dentro i prodotti divisi per categoria.
+   Prezzi per la stessa unità sulla riga: a pezzo, o al kg / all'etto / al litro per lo sfuso.
+   ========================================================= */
+function nomeFoglio(nome, usati) {
+  const base = String(nome || '').replace(/[\\/?*[\]:]/g, ' ').replace(/\s+/g, ' ').replace(/^'+|'+$/g, '').trim().slice(0, 31).trim() || 'Fornitore';
+  let n = base, k = 2;
+  while (usati.has(n.toLowerCase()) || n.toLowerCase() === 'history') { const suf = ` (${k++})`; n = base.slice(0, 31 - suf.length).trim() + suf; }
+  usati.add(n.toLowerCase()); return n;
+}
+const unitaListino = p => !isSfuso(p) ? 'pezzo' : ({ kg: 'kg', etto: 'etto', l: 'litro' }[unitaDi(p)] || 'kg');
+const ordineCat = c => c === SENZA_CAT ? 999 : CATEGORIE_BASE.includes(c) ? CATEGORIE_BASE.indexOf(c) : 100;
+function rigaListino(p) {
+  const ven = prezzoVendita(p);
+  const formato = [p.formato || '', isSfuso(p) ? 'sfuso' + (p.pesoSacco ? `, ${nomeSacco(p)} da ${fmtSf(p, p.pesoSacco)}` : '') : ''].filter(Boolean).join(' · ');
+  return [p.nome, formato, (p.codici || []).join(', '), unitaListino(p), { e: p.prezzoAcquisto != null ? perUnita(p, p.prezzoAcquisto) : null },
+    p.iva != null ? +p.iva : '', p.prezzoAcquisto != null && p.prezzoManuale == null ? (+p.ricarico || 50) : '', { e: ven != null ? perUnita(p, ven) : null },
+    p.prezzoManuale != null ? 'scritto a mano' : ven != null ? 'calcolato' : 'manca', p.note || ''];
+}
+function fogliListini(soloId = null) {
+  const per = new Map();
+  for (const p of S.prodotti.values()) {
+    const fid = p.fornitoreId && S.fornitori.has(p.fornitoreId) ? p.fornitoreId : '';
+    if (soloId != null && fid !== soloId) continue;
+    if (!per.has(fid)) per.set(fid, []); per.get(fid).push(p);
+  }
+  const forn = [...per.keys()].sort((a, b) => (a === '') - (b === '') || nomeForn(a).localeCompare(nomeForn(b), 'it'));
+  const oggi = fmtDate(todayISO()), neg = settings().negozio, conIndice = soloId == null && per.size > 1, usati = new Set(conIndice ? ['fornitori'] : []), fogli = [];
+  const TESTA = ['Prodotto', 'Formato', 'Codice a barre', 'Unità', 'Acquisto € (senza IVA)', 'IVA %', 'Ricarico %', 'Vendita € (con IVA)', 'Prezzo di vendita', 'Note'];
+  for (const fid of forn) {
+    const f = fornitore(fid), prodotti = per.get(fid), cats = new Map();
+    for (const p of prodotti) { const c = catDi(p) || SENZA_CAT; if (!cats.has(c)) cats.set(c, []); cats.get(c).push(p); }
+    const righe = [[{ h: `Listino ${nomeForn(fid)}` }], [`${neg} · prodotti nell'app al ${oggi} · ${prodotti.length} ${prodotti.length === 1 ? 'prodotto' : 'prodotti'} in ${cats.size} ${cats.size === 1 ? 'categoria' : 'categorie'}`], [], TESTA.map(t => ({ t }))];
+    for (const c of [...cats.keys()].sort((a, b) => ordineCat(a) - ordineCat(b) || a.localeCompare(b, 'it'))) {
+      const l = cats.get(c).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+      righe.push([{ c: `${c} · ${l.length}` }, ...TESTA.slice(1).map(() => ({ c: '' }))], ...l.map(rigaListino), []);
+    }
+    righe.push(['Prezzi per unità: a pezzo, oppure al kg, all\'etto o al litro per lo sfuso. Vendita: il prezzo scritto a mano, se c\'è, altrimenti quello calcolato da acquisto, ricarico e IVA.']);
+    fogli.push({ nome: nomeFoglio(nomeForn(fid), usati), larghezze: [42, 22, 16, 8, 20, 7, 10, 19, 16, 40], blocca: 4, stampa: true, righe, fid, f, n: prodotti.length, nCat: cats.size });
+  }
+  if (!conIndice) return fogli;
+  const indice = { nome: 'Fornitori', larghezze: [34, 24, 10, 11, 18, 30, 30, 18], blocca: 4, stampa: true, righe: [
+    [{ h: 'Listini dei fornitori' }], [`${neg} · ${oggi} · un foglio per fornitore, dentro divisi per categoria`], [],
+    ['Fornitore', 'Foglio', 'Prodotti', 'Categorie', 'Telefono', 'Email', 'Sito', 'Come si ordina'].map(t => ({ t })),
+    ...fogli.map(x => [nomeForn(x.fid), x.nome, x.n, x.nCat, x.f ? x.f.telefono || '' : '', x.f ? x.f.email || '' : '', x.f ? x.f.sito || '' : '', x.f ? METODI[x.f.metodo || ''] || '' : '']),
+    [], [{ t: 'Totale' }, '', fogli.reduce((t, x) => t + x.n, 0)]] };
+  return [indice, ...fogli];
+}
+async function listiniExcel(soloId = null) {
+  const fogli = fogliListini(soloId);
+  if (!fogli.length) { toast('Nessun prodotto da mettere nel listino', { err: true }); return; }
+  const slug = x => x.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase();
+  const nome = soloId != null ? `listino-${slug(nomeForn(soloId)) || 'fornitore'}-${todayISO()}.xlsx` : `listini-fornitori-${todayISO()}.xlsx`;
+  avvisoFile(await mandaFile(creaXlsx(fogli), nome, soloId != null ? 'Listino ' + nomeForn(soloId) : 'Listini dei fornitori'), nome);
+}
 /* un file da mettere su Drive o aprire con Excel: si condivide se il telefono lo permette, altrimenti va nei Download */
 async function mandaFile(blob, nome, titolo) {
   const file = new File([blob], nome, { type: blob.type });
@@ -2997,7 +3059,9 @@ async function mandaFile(blob, nome, titolo) {
 async function riepilogoExcel(mese) {
   const blob = creaXlsx(fogliRiepilogo(mese));
   const nome = `riepilogo-${mese}-${settings().negozio.replace(/[^A-Za-z0-9]+/g, '-')}.xlsx`;
-  const r = await mandaFile(blob, nome, 'Riepilogo ' + nomeMese(mese));
+  avvisoFile(await mandaFile(blob, nome, 'Riepilogo ' + nomeMese(mese)), nome);
+}
+function avvisoFile(r, nome) {
   if (r === 'scaricato') openModal(`${mhead('Excel salvato nei Download')}
     <p>Il file <b>${esc(nome)}</b> è nella cartella <b>Download</b>.</p>
     <p class="muted small">Si apre con Excel o Fogli Google. Per metterlo su Drive: app <b>Drive</b> → account del negozio → <b>+</b> → <b>Carica</b> → Download → il file.</p>
@@ -3738,6 +3802,8 @@ A['cat-vedi'] = el => { CAT = { ...CAT, q: '', forn: '', cat: el.dataset.c, senz
 A['cat-categoria'] = () => { const ids = [...(CAT.sel || [])].filter(id => S.prodotti.has(id)); if (!ids.length) { toast('Scegli prima i prodotti', { err: true }); return; } categoriaModal(ids); };
 A['cassa-mod'] = el => cassaModal(el.dataset.d);
 A['vendite-prova'] = el => cancellaVendite([...S.vendite.values()].filter(v => (v.data || '').slice(0, 7) === el.dataset.m), `di ${nomeMese(el.dataset.m).toLowerCase()}`);
+A['listini-excel'] = () => listiniExcel().catch(e => toast('Non riesco a preparare il file: ' + e.message, { err: true }));
+A['listino-excel'] = el => listiniExcel(el.dataset.id).catch(e => toast('Non riesco a preparare il file: ' + e.message, { err: true }));
 A['riep-excel'] = el => riepilogoExcel(el.dataset.m).catch(e => toast('Non riesco a preparare il file: ' + e.message, { err: true }));
 A['pag-segna'] = async el => {
   if (el.dataset.s) { await segnaSpesa(el.dataset.s); return; }
