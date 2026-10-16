@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.16.0';
+const VERSIONE = '1.17.0';
 
 /* =========================================================
    Utilità
@@ -544,18 +544,18 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
     <div class="stack" id="npSaccoBox" hidden>
       ${campoUnita('npUnita', 'kg')}
       <label class="field"><span data-sacco-lab>${testoSacco('kg')}</span> <span class="hint" data-sacco-hint>${hintSacco('kg')}</span><input type="text" inputmode="decimal" id="npSacco" autocomplete="off"></label>
-      ${code ? '' : `<label class="check"><input type="checkbox" id="npCrea" checked> Crea il codice a barre e stampa l'etichetta</label>`}
     </div>
+    ${code ? '' : `<label class="check"><input type="checkbox" id="npCrea"> Non ha il codice a barre: crealo e stampa le etichette</label>`}
     <button class="btn primary block" type="button" id="npSave">Crea prodotto</button>`, b => {
     b.querySelector('#npNome').focus();
-    b.querySelector('#npSfuso').addEventListener('change', e => { b.querySelector('#npSaccoBox').hidden = !e.target.checked; });
+    b.querySelector('#npSfuso').addEventListener('change', e => { b.querySelector('#npSaccoBox').hidden = !e.target.checked; const c = b.querySelector('#npCrea'); if (c) c.checked = e.target.checked; });
     b.querySelector('#npUnita').addEventListener('change', e => aggiornaTestiSacco(b, e.target.value));
     b.querySelector('#npSave').onclick = async () => {
       const n = b.querySelector('#npNome').value.trim();
       if (!n) { toast('Scrivi il nome del prodotto', { err: true }); return; }
       const fid = b.querySelector('#npForn').value;
       const sf = b.querySelector('#npSfuso').checked, sacco = parseNum(b.querySelector('#npSacco').value);
-      const crea = sf && !code && b.querySelector('#npCrea').checked;
+      const crea = !code && b.querySelector('#npCrea').checked;
       const codici = code ? [code] : crea ? [await codiceInterno()] : [];
       const p = { id: uid('p'), nome: n, fornitoreId: fid, categoria: '', formato: b.querySelector('#npFormato').value.trim(), prezzoAcquisto: null, iva: null, prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici, tipoScadenza: b.querySelector('#npTipo').value, note: '', origine: 'Creato nell\'app', sfuso: sf, unita: sf ? b.querySelector('#npUnita').value : undefined, pesoSacco: sf && sacco > 0 ? sacco : null };
       if (code) { const prima = byCode(code); if (prima) await save('prodotti', { ...prima, codici: prima.codici.filter(c => c !== code) }); }
@@ -575,12 +575,26 @@ function aggiornaTestiSacco(b, u) {
 }
 /* etichetta da stampare subito dopo aver creato il codice: si apre la finestra di stampa,
    oppure, se c'è già un'altra finestra aperta (banco, arrivi), un avviso con «Stampa» */
-function etichettaPronta(pid) {
+let etiPronta = { id: null, t: 0 };
+function etichettaPronta(pid, copie = null) {
+  if (etiPronta.id === pid && Date.now() - etiPronta.t < 2000) return;   // già in arrivo (per esempio prodotto nuovo creato dalla scelta)
+  etiPronta = { id: pid, t: Date.now() };
   setTimeout(() => {
     const p = prodotto(pid); if (!p) return;
-    if (modal.open) toast(`Codice creato per ${p.nome}`, { ms: 8000, action: { label: 'Stampa etichetta', run: () => stampaModal([p.id], { titolo: 'Etichetta pronta' }) } });
-    else stampaModal([p.id], { titolo: 'Etichetta pronta' });
+    const apri = () => stampaModal([p.id], { titolo: isSfuso(p) ? 'Etichetta pronta' : 'Etichette pronte', copie: { [p.id]: copie ?? copieIniziali(p) } });
+    if (modal.open) toast(`Codice creato per ${p.nome}`, { ms: 8000, action: { label: 'Stampa etichette', run: apri } });
+    else apri();
   }, 350);
+}
+/* quante etichette proporre: una per lo sfuso (il contenitore), una per pezzo in negozio per gli altri */
+const copieIniziali = p => isSfuso(p) ? 1 : Math.min(48, Math.max(1, Math.round(giacenza(p.id)) || 1));
+/* codice creato dall'app (29…): il prodotto non ha il codice del produttore e si riconosce dall'etichetta */
+const codiceNegozio = p => ((p && p.codici) || []).find(c => /^29\d{11}$/.test(c)) || null;
+async function creaCodiceEStampa(p, copie = null) {
+  if (!p) return;
+  if (!(p.codici || []).length) { await save('prodotti', { ...p, codici: [await codiceInterno()] }); toast('Codice creato'); }
+  if (current.name === 'prodotto') aggiornaCodici(); else render();
+  etichettaPronta(p.id, copie);
 }
 function schedaRapida(p) {
   const lotti = lottiAttivi().filter(l => l.prodottoId === p.id).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
@@ -841,7 +855,7 @@ routes.carico = arg => {
   html += oggi.length ? `<div class="list">${oggi.map(l => {
     const pp = prodotto(l.prodottoId);
     return `<div class="item" style="flex-wrap:wrap"><div class="main tappable" style="flex:1 1 60%" data-act="lot-modifica" data-id="${esc(l.id)}" role="button" tabindex="0"><div class="name">${esc(pp ? pp.nome : '?')}</div><div class="sub">${l.sacchi ? fmtSacchi(l.sacchi, pp) + ' = ' : ''}${fq(pp, l.quantita)} · ${l.scadenza ? 'scade ' + fmtDate(l.scadenza) : 'senza scadenza'}</div></div>
-      <div class="conf-acts"><button class="btn small" type="button" data-act="lot-modifica" data-id="${esc(l.id)}">${ICO_MATITA} Modifica</button><button class="btn small ghost" type="button" data-act="lotto-annulla" data-id="${esc(l.id)}">Togli</button></div></div>`;
+      <div class="conf-acts"><button class="btn small" type="button" data-act="lot-modifica" data-id="${esc(l.id)}">${ICO_MATITA} Modifica</button>${pp && !pp.sfuso && (codiceNegozio(pp) || !(pp.codici || []).length) ? `<button class="btn small" type="button" data-act="lot-etichette" data-id="${esc(l.id)}">${codiceNegozio(pp) ? 'Etichette' : 'Crea codice ed etichette'}</button>` : ''}<button class="btn small ghost" type="button" data-act="lotto-annulla" data-id="${esc(l.id)}">Togli</button></div></div>`;
   }).join('')}</div>` : `<div class="empty">Ancora niente oggi.</div>`;
   return { title: inv ? 'Inventario' : 'Arrivo merce', html, back: '#home', tab: 'carico', onScan: caricoScan };
 };
@@ -1827,7 +1841,7 @@ routes.catalogo = arg => {
       <label class="check"><input type="checkbox" id="catSC" ${CAT.senzaCodice ? 'checked' : ''}> Senza codice</label>
       <label class="check"><input type="checkbox" id="catSF" ${CAT.sfuso ? 'checked' : ''}> Sfuso</label></div>
     <select id="catC"><option value="">Tutte le categorie</option>${[...categorieUsate().filter(c => [...S.prodotti.values()].some(p => catDi(p) === c)), SENZA_CAT].map(c => `<option value="${esc(c)}" ${CAT.cat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
-    ${!CAT.sel && [...S.prodotti.values()].some(p => p.sfuso) ? '<a class="btn block" href="#etichette">Etichette dei contenitori sfusi</a>' : ''}
+    ${!CAT.sel && S.prodotti.size ? '<a class="btn block" href="#etichette">Etichette con codice a barre</a>' : ''}
     ${!CAT.sel && S.prodotti.size ? '<button class="btn block" type="button" data-act="listini-excel">Listini in Excel: un foglio per fornitore</button>' : ''}
     <div id="catList" class="stack">${catListHTML()}</div>
     ${CAT.sel ? barraSel(CAT.sel.size, 'prodotto', 'prodotti', 'cat-elimina', 'cat-sel-fine') : '<button class="btn block" type="button" data-act="nuovo-prodotto">+ Nuovo prodotto</button>'}`;
@@ -1866,10 +1880,11 @@ const codiciHtml = p => (p.codici || []).map(c => `<span class="tag" style="font
 const infoSfuso = u => u === 'l' ? 'Magazzino in litri, prezzo al litro. Al banco si scansiona l\'etichetta e si scrivono i ml.'
   : `Magazzino in kg, prezzo ${UNITA[u].al}. Al banco si scansiona l'etichetta del contenitore e si scrivono i grammi.`;
 function boxEtichetta(p) {
-  if (!(p.codici || []).length) return `<button class="btn block" type="button" data-act="p-crea-codice" data-id="${esc(p.id)}" id="pCrea">Crea il codice a barre e stampa l'etichetta</button>
-    <div class="faint small">Se il sacco ha già il suo codice, non serve: scansionalo adesso e si collega da solo.</div>`;
-  if (!p.sfuso) return `<div class="faint small">L'etichetta userà il codice ${esc(codiceEtichetta(p))}.</div>`;
-  return `<button class="btn block" type="button" data-act="p-stampa-eti" data-id="${esc(p.id)}">Stampa l'etichetta</button>`;
+  if (!(p.codici || []).length) return `<button class="btn block" type="button" data-act="p-crea-codice" data-id="${esc(p.id)}" id="pCrea">Crea il codice a barre e stampa ${p.sfuso ? "l'etichetta" : 'le etichette'}</button>
+    <div class="faint small">${p.sfuso ? 'Se il sacco ha già il suo codice, non serve: scansionalo adesso e si collega da solo.' : 'Per i prodotti senza codice a barre (fatti da voi o da piccoli produttori): un\'etichetta per pezzo. Se il prodotto ha già il suo codice, non serve: scansionalo adesso e si collega da solo.'}</div>`;
+  if (p.sfuso) return `<button class="btn block" type="button" data-act="p-stampa-eti" data-id="${esc(p.id)}">Stampa l'etichetta</button>`;
+  if (codiceNegozio(p)) return `<button class="btn block" type="button" data-act="p-stampa-eti" data-id="${esc(p.id)}">Stampa le etichette</button>`;
+  return '';
 }
 function aggiornaCodici() {
   const p = prodotto(current.arg); if (!p) return;
@@ -1898,6 +1913,7 @@ routes.prodotto = id => {
       <label class="field">Tipo di scadenza<select id="pTipo"><option value="preferibilmente" ${p.tipoScadenza !== 'entro' ? 'selected' : ''}>Preferibilmente entro (secchi, conserve)</option><option value="entro" ${p.tipoScadenza === 'entro' ? 'selected' : ''}>Da consumarsi entro (freschi)</option></select></label>
       <div class="field" style="font-weight:600">Codici a barre
         <div class="row wrap" id="pCodici">${codiciHtml(p)}</div></div>
+      <div class="stack" id="pEtiBox">${boxEtichetta(p)}</div>
     </div>
     <div class="card"><h3>Sfuso</h3>
       <label class="check"><input type="checkbox" id="pSfuso" ${p.sfuso ? 'checked' : ''}> Sfuso (a peso o alla spina)</label>
@@ -1905,7 +1921,6 @@ routes.prodotto = id => {
         ${campoUnita('pUnita', unitaDi(p))}
         <label class="field"><span data-sacco-lab>${testoSacco(unitaDi(p))}</span> <span class="hint" data-sacco-hint>${hintSacco(unitaDi(p))}</span><input type="text" inputmode="decimal" id="pSacco" value="${p.pesoSacco ? fmtNum(p.pesoSacco) : ''}"></label>
         <div class="faint small" id="pSfInfo">${infoSfuso(unitaDi(p))}</div>
-        <div class="stack" id="pEtiBox">${boxEtichetta(p)}</div>
       </div></div>
     <div class="card"><h3>Riordino</h3>
       <label class="field"><span>Va da solo in «Da ordinare» quando ne restano</span>
@@ -2084,29 +2099,37 @@ async function codiceInterno() {
 /* codice da stampare: quello del sacco se c'è (meglio un EAN), altrimenti nessuno */
 const codiceEtichetta = p => { const cs = p.codici || []; return cs.find(c => /^\d{13}$/.test(c)) || cs.find(c => /^\d{8}$|^\d{12}$/.test(c)) || cs[0] || null; };
 
-/* si ricordano solo quelle tolte: un prodotto appena diventato sfuso è già spuntato */
-let ETI = { tolte: new Set() };
-const prodottiSfusi = () => [...S.prodotti.values()].filter(p => p.sfuso).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
-const etiScelte = () => prodottiSfusi().filter(p => !ETI.tolte.has(p.id));
+/* si ricordano solo quelle tolte: un prodotto appena diventato sfuso (o con il codice appena creato) è già spuntato */
+let ETI = { tolte: new Set(), copie: new Map() };
+const prodottiEtichette = () => [...S.prodotti.values()].filter(p => p.sfuso || codiceNegozio(p)).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+const etiScelte = () => prodottiEtichette().filter(p => !ETI.tolte.has(p.id));
+const copieDi = id => ETI.copie.get(id) || 1;
+const totEtichette = () => etiScelte().reduce((t, p) => t + copieDi(p.id), 0);
 const testoScelte = n => n === 1 ? '1 etichetta' : `${n} etichette`;
+const rigaEti = p => `<div class="item eti-riga${ETI.tolte.has(p.id) ? ' tolta' : ''}"><label class="eti-sel"><input type="checkbox" data-eti="${esc(p.id)}" ${ETI.tolte.has(p.id) ? '' : 'checked'}><div class="eti-anteprima">${htmlEtichetta(p, true)}</div></label>
+  <div class="eti-copie" role="group" aria-label="Quante etichette di ${esc(p.nome)}"><button type="button" data-act="eti-copie" data-id="${esc(p.id)}" data-d="1" aria-label="Una in più">+</button><b>×${copieDi(p.id)}</b><button type="button" data-act="eti-copie" data-id="${esc(p.id)}" data-d="-1" aria-label="Una in meno" ${copieDi(p.id) <= 1 ? 'disabled' : ''}>−</button></div></div>`;
 routes.etichette = () => {
-  const lista = prodottiSfusi();
-  const n = etiScelte().length;
-  const html = lista.length ? `<div class="notice"><span>Per fogli A4 di etichette adesive <b>70 × 37 mm</b> (24 per foglio). Qui sotto vedi come vengono: togli la spunta a quelle che non ti servono.</span></div>
+  const lista = prodottiEtichette(), sfusi = lista.filter(p => p.sfuso), pezzi = lista.filter(p => !p.sfuso);
+  const n = totEtichette();
+  const nuovo = '<button class="btn block" type="button" data-act="eti-nuovo">+ Crea il codice per un prodotto che non ce l\'ha</button>';
+  const html = lista.length ? `<div class="notice"><span>Per fogli A4 di etichette adesive <b>70 × 37 mm</b> (24 per foglio). Qui sotto vedi come vengono: togli la spunta a quelle che non ti servono, e con + e − scegli quante.</span></div>
     <div class="row"><button class="btn small" type="button" data-act="eti-tutte">Tutte</button><button class="btn small" type="button" data-act="eti-nessuna">Nessuna</button><span class="spacer"></span><span class="faint" id="etiN">${testoScelte(n)}</span></div>
-    <div class="list" id="etiList">${lista.map(p => `<label class="item eti-riga${ETI.tolte.has(p.id) ? ' tolta' : ''}"><input type="checkbox" data-eti="${esc(p.id)}" ${ETI.tolte.has(p.id) ? '' : 'checked'}><div class="eti-anteprima">${htmlEtichetta(p, true)}</div></label>`).join('')}</div>
-    <button class="btn primary block" type="button" data-act="eti-stampa" id="etiStampa"${n ? '' : ' disabled'}>Stampa ${testoScelte(n)}</button>
-`
-    : `<div class="empty">Nessun prodotto sfuso.<br>Apri un prodotto in Catalogo e spunta «Sfuso».</div><a class="btn block" href="#catalogo">Vai al Catalogo</a>`;
+    <div class="stack" id="etiList">
+    ${sfusi.length ? `<div class="section-title"><h2>Contenitori dello sfuso</h2><span class="count">${sfusi.length}</span></div><div class="list">${sfusi.map(rigaEti).join('')}</div>` : ''}
+    ${pezzi.length ? `<div class="section-title"><h2>Prodotti senza codice del produttore</h2><span class="count">${pezzi.length}</span></div><div class="faint small">Il codice l'ha creato l'app: un'etichetta su ogni pezzo, così al Banco si scansiona.</div><div class="list">${pezzi.map(rigaEti).join('')}</div>` : ''}
+    </div>
+    ${nuovo}
+    <button class="btn primary block" type="button" data-act="eti-stampa" id="etiStampa"${n ? '' : ' disabled'}>Stampa ${testoScelte(n)}</button>`
+    : `<div class="empty">Ancora nessuna etichetta.<br>Servono per lo sfuso (contenitori) e per i prodotti che non hanno il codice a barre: l'app crea il codice e stampa le etichette.</div>${nuovo}<a class="btn block" href="#catalogo">Vai al Catalogo</a>`;
   return {
-    title: 'Etichette sfuso', html, back: '#catalogo', tab: 'catalogo',
+    title: 'Etichette', html, back: '#catalogo', tab: 'catalogo',
     mount: b => {
       const l = b.querySelector('#etiList'); if (!l) return;
       l.addEventListener('change', e => {
         const c = e.target.closest('[data-eti]'); if (!c) return;
         if (c.checked) ETI.tolte.delete(c.dataset.eti); else ETI.tolte.add(c.dataset.eti);
         c.closest('.eti-riga').classList.toggle('tolta', !c.checked);
-        const n = etiScelte().length, bt = b.querySelector('#etiStampa');
+        const n = totEtichette(), bt = b.querySelector('#etiStampa');
         b.querySelector('#etiN').textContent = testoScelte(n);
         bt.textContent = 'Stampa ' + testoScelte(n); bt.disabled = !n;
       });
@@ -2115,7 +2138,8 @@ routes.etichette = () => {
 };
 function htmlEtichetta(p, anteprima = false) {
   const c = codiceEtichetta(p), pr = prezzoVendita(p);
-  const prezzo = pr != null ? `${fmtEuro(perUnita(p, pr))} <small>${UNITA[unitaDi(p)].al}</small>` : (anteprima ? '<span class="eti-manca">prezzo da scrivere</span>' : '');
+  const prezzo = pr == null ? (anteprima ? '<span class="eti-manca">prezzo da scrivere</span>' : '')
+    : isSfuso(p) ? `${fmtEuro(perUnita(p, pr))} <small>${UNITA[unitaDi(p)].al}</small>` : `${fmtEuro(pr)}${p.formato ? ` <small>· ${esc(p.formato)}</small>` : ''}`;
   const codice = c ? `${barcodeSVG(c)}<div class="eti-cod">${esc(c)}</div>` : (anteprima ? '<div class="eti-manca">il codice lo crea l\'app quando stampi</div>' : '');
   return `<div class="eti"><div class="eti-nome">${esc(p.nome)}</div><div class="eti-prezzo">${prezzo}</div>${codice}</div>`;
 }
@@ -2123,44 +2147,64 @@ window.addEventListener('afterprint', () => { const st = document.getElementById
 
 /* finestra di stampa: anteprima e da quale etichetta del foglio partire.
    L'app ricorda dove si è fermata, così un foglio iniziato si rimette nella stampante e si continua. */
-const ETI_FOGLIO = 24;
-function stampaModal(ids, { titolo = null } = {}) {
+const ETI_FOGLIO = 24, MAX_COPIE = 240;   // al massimo 10 fogli alla volta
+function stampaModal(ids, { titolo = null, copie = null } = {}) {
   ids = ids.filter(id => S.prodotti.has(id)); if (!ids.length) return;
-  const n = ids.length, p1 = prodotto(ids[0]);
+  const uno = ids.length === 1, p1 = prodotto(ids[0]), quante = id => Math.max(1, Math.min(MAX_COPIE, Math.round((copie && copie[id]) || 1)));
+  let q = quante(ids[0]), n;
+  const lista = () => uno ? Array(q).fill(ids[0]) : ids.flatMap(id => Array(quante(id)).fill(id));
   let start = Math.min(ETI_FOGLIO - 1, Math.max(0, parseInt(S.meta.etiPosizione, 10) || 0));
   const draw = b => {
+    n = lista().length;
     b.querySelector('#spGrid').innerHTML = Array.from({ length: ETI_FOGLIO }, (_, i) => {
       const cls = i < start ? 'usata' : i < start + n ? 'nuova' : '';
       return `<button type="button" data-pos="${i}" class="${cls}" aria-label="Parti dall'etichetta ${i + 1}">${cls === 'nuova' ? i - start + 1 : ''}</button>`;
     }).join('');
-    const oltre = start + n > ETI_FOGLIO;
+    const oltre = start + n > ETI_FOGLIO, fogli = Math.ceil((start + n) / ETI_FOGLIO);
     b.querySelector('#spInfo').innerHTML = (start === 0 ? 'Foglio nuovo: parte dalla <b>prima</b> etichetta.' : `${start === 1 ? 'La prima è già usata' : `Le prime ${start} sono già usate`}: parte dalla <b>n. ${start + 1}</b>.`)
-      + (oltre ? ' Poi continua su un altro foglio.' : '') + '<br><span class="faint">Tocca il foglio per cambiare.</span>';
+      + (oltre ? ` Poi continua su altri fogli (in tutto ${fogli}).` : '') + '<br><span class="faint">Tocca il foglio per cambiare.</span>';
+    b.querySelector('[data-x=stampa]').textContent = 'Stampa ' + testoScelte(n);
   };
-  openModal(`${mhead(titolo || `Stampa ${testoScelte(n)}`)}
-    ${n === 1 ? `<div class="eti-anteprima">${htmlEtichetta(p1, true)}</div>` : `<div class="faint">${ids.slice(0, 4).map(id => esc(prodotto(id).nome)).join(' · ')}${n > 4 ? ` e altre ${n - 4}` : ''}</div>`}
+  const giac = uno && !isSfuso(p1) ? Math.round(giacenza(p1.id)) : 0;
+  openModal(`${mhead(titolo || `Stampa ${testoScelte(lista().length)}`)}
+    ${uno ? `<div class="eti-anteprima">${htmlEtichetta(p1, true)}</div>
+      <div class="field" style="font-weight:600">Quante etichette?
+        <div class="stepper"><button type="button" data-x="-" aria-label="Una in meno">−</button><input type="number" inputmode="numeric" id="spQ" value="${q}" min="1" max="${MAX_COPIE}"><button type="button" data-x="+" aria-label="Una in più">+</button></div>
+        ${giac > 1 ? `<div class="chips"><button type="button" class="chip" data-x="giac">Una per pezzo in negozio: ${giac}</button><button type="button" class="chip" data-x="uno">Solo una</button></div>` : ''}</div>`
+      : `<div class="faint">${ids.slice(0, 4).map(id => esc(prodotto(id).nome) + (quante(id) > 1 ? ' ×' + quante(id) : '')).join(' · ')}${ids.length > 4 ? ` e altri ${ids.length - 4}` : ''}</div>`}
     <div class="sp-foglio"><div class="sp-grid" id="spGrid" role="group" aria-label="Foglio di etichette"></div>
       <div class="sp-testo"><b>Dove sul foglio?</b><span id="spInfo"></span><button class="btn small" type="button" data-x="nuovo">Foglio nuovo</button></div></div>
     <button class="btn primary block" type="button" data-x="stampa">Stampa</button>
     <div class="faint small" style="text-align:center">Si apre la stampa del telefono: scegli la stampante oppure «Salva come PDF». A4, margini «Nessuno», scala 100%.</div>`, b => {
     b.querySelector('#spGrid').addEventListener('click', e => { const c = e.target.closest('[data-pos]'); if (!c) return; start = +c.dataset.pos; draw(b); });
     b.querySelector('[data-x=nuovo]').onclick = () => { start = 0; draw(b); };
-    b.querySelector('[data-x=stampa]').onclick = () => stampaEtichette(ids, start);
+    const qi = b.querySelector('#spQ');
+    if (qi) {
+      const metti = v => { q = Math.max(1, Math.min(MAX_COPIE, Math.round(+v) || 1)); qi.value = q; draw(b); };
+      b.querySelector('[data-x="-"]').onclick = () => metti(q - 1);
+      b.querySelector('[data-x="+"]').onclick = () => metti(q + 1);
+      qi.addEventListener('input', () => { const v = parseInt(qi.value, 10); if (v > 0) { q = Math.min(MAX_COPIE, v); draw(b); } });
+      qi.addEventListener('change', () => metti(qi.value));
+      const g = b.querySelector('[data-x=giac]'), u = b.querySelector('[data-x=uno]');
+      if (g) g.onclick = () => metti(giac); if (u) u.onclick = () => metti(1);
+    }
+    b.querySelector('[data-x=stampa]').onclick = () => stampaEtichette(lista(), start);
     draw(b);
   });
 }
 /* tutto senza attese: alcuni telefoni aprono la stampa solo se parte subito dal tocco */
 function stampaEtichette(ids, start = 0) {
   let n = S.meta.ultimoCodiceInterno || 0;
-  const nuovi = [];
-  const lista = ids.map(prodotto).filter(Boolean).map(p => {
-    if (codiceEtichetta(p)) return p;
+  const nuovi = [], pronti = new Map();
+  for (const id of new Set(ids)) {
+    const p = prodotto(id); if (!p) continue;
+    if (codiceEtichetta(p)) { pronti.set(id, p); continue; }
     let code;
     do { n++; code = formaCodice(n); } while (codeIndex.has(code));
     const np = { ...p, codici: [...(p.codici || []), code] };
-    codeIndex.set(code, np.id); nuovi.push(np);
-    return np;
-  });
+    codeIndex.set(code, np.id); nuovi.push(np); pronti.set(id, np);
+  }
+  const lista = ids.map(id => pronti.get(id)).filter(Boolean);
   if (nuovi.length) { setMeta('ultimoCodiceInterno', n); saveMany('prodotti', nuovi); }
   setMeta('etiPosizione', (start + lista.length) % ETI_FOGLIO);
   const celle = [...Array(start).fill('<div class="eti"></div>'), ...lista.map(p => htmlEtichetta(p))];
@@ -3647,7 +3691,7 @@ routes.impostazioni = () => {
       <p class="muted small">Quando al sacco più vecchio resta meno di questa parte (polvere, pesate), l'app lo considera finito e passa al sacco dopo.</p>
       <label class="field">Avanzo del sacco, in %<input type="number" inputmode="numeric" min="0" max="30" id="sAvanzo" value="${s.avanzoSfuso}"></label>
       <div class="faint small salva-stato" aria-live="polite">Ogni modifica si salva da sola.</div>
-      <a class="btn block" href="#etichette">Etichette dei contenitori</a></div>
+      <a class="btn block" href="#etichette">Etichette con codice a barre</a></div>
     <div class="card"><h2>Prova del lettore</h2>
       <p class="muted small">Scansiona un codice qualsiasi stando su questa pagina: qui sotto vedi cosa arriva al telefono.</p>
       <dl class="kv"><dt>Ultimo codice letto</dt><dd id="diagCodice">${esc(ultimoCodice || 'nessuno')}</dd></dl>
@@ -4187,23 +4231,33 @@ async function salvaScheda(id, dati, { sacco, manRaw, fp, f, stato }) {
   }
   return true;
 }
-/* sfuso senza codice: lo crea l'app e apre subito l'etichetta */
+/* prodotto senza codice (sfuso o a pezzi): lo crea l'app e apre subito le etichette */
 A['p-crea-codice'] = async el => {
   if (paginaSalva) await paginaSalva();
   const p = prodotto(el.dataset.id); if (!p) return;
   if ((p.codici || []).length) { aggiornaCodici(); return; }
-  await save('prodotti', { ...p, codici: [...(p.codici || []), await codiceInterno()] });
-  aggiornaCodici(); toast('Codice creato');
-  etichettaPronta(p.id);
+  await creaCodiceEStampa(p);
 };
-A['p-stampa-eti'] = el => stampaModal([el.dataset.id]);
+A['p-stampa-eti'] = el => { const p = prodotto(el.dataset.id); if (p) stampaModal([p.id], { copie: { [p.id]: copieIniziali(p) } }); };
 /* etichette */
 A['eti-tutte'] = () => { ETI.tolte = new Set(); render(); };
-A['eti-nessuna'] = () => { ETI.tolte = new Set(prodottiSfusi().map(p => p.id)); render(); };
+A['eti-nessuna'] = () => { ETI.tolte = new Set(prodottiEtichette().map(p => p.id)); render(); };
+A['eti-copie'] = el => { const id = el.dataset.id; ETI.copie.set(id, Math.max(1, Math.min(MAX_COPIE, copieDi(id) + +el.dataset.d))); ETI.tolte.delete(id); render(); };
+A['eti-nuovo'] = () => pickerModal({ title: 'Quale prodotto non ha il codice a barre?', intro: 'L\'app gli crea un codice e stampa le etichette da attaccare.', onPick: p => {
+  if ((p.codici || []).length && !p.sfuso && !codiceNegozio(p)) { toast(`${p.nome} ha già il codice ${codiceEtichetta(p)}: l'etichetta non serve`, { err: true }); return; }
+  creaCodiceEStampa(p);
+} });
 A['eti-stampa'] = () => {
-  const ids = etiScelte().map(p => p.id);
-  if (!ids.length) { toast('Spunta almeno un\'etichetta', { err: true }); return; }
-  stampaModal(ids);
+  const ps = etiScelte();
+  if (!ps.length) { toast('Spunta almeno un\'etichetta', { err: true }); return; }
+  stampaModal(ps.map(p => p.id), { copie: Object.fromEntries(ps.map(p => [p.id, copieDi(p.id)])) });
+};
+/* arrivo di un prodotto senza codice del produttore: le etichette per i pezzi arrivati */
+A['lot-etichette'] = async el => {
+  const l = S.lotti.get(el.dataset.id), p = l && prodotto(l.prodottoId); if (!p) return;
+  const q = Math.max(1, Math.min(MAX_COPIE, Math.round(+l.quantita || 1)));
+  if (!(p.codici || []).length) await creaCodiceEStampa(p, q);
+  else stampaModal([p.id], { titolo: 'Etichette per l\'arrivo', copie: { [p.id]: q } });
 };
 A['p-codice-del'] = async el => { const p = prodotto(current.arg); if (!p) return; await save('prodotti', { ...p, codici: (p.codici || []).filter(c => c !== el.dataset.c) }); aggiornaCodici(); };
 A['p-elimina'] = async el => {
