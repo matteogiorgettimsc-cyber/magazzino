@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.17.0';
+const VERSIONE = '1.17.1';
 
 /* =========================================================
    Utilità
@@ -683,6 +683,7 @@ function render(scrollTop = false) {
   current.onScan = r.onScan || null;
   current.back = r.back || null;
   $('#backBtn').hidden = !r.back;
+  document.documentElement.dataset.modo = current.name === 'banco' && BANCO.modo !== 'vendita' ? BANCO.modo : '';
   $$('.tabbar a').forEach(a => a.classList.toggle('on', a.dataset.tab === (r.tab || current.name)));
   if (r.mount) r.mount($('#view'));
   aggiornaBadge();
@@ -1279,16 +1280,31 @@ async function sistemaEAvvisa() {
 }
 const daCollegarePronti = () => daSistemare().some(v => byCode(v.codice));
 
+/* Reso e Spreco valgono per un prodotto solo: appena lo si scansiona (o lo si sceglie) si torna in Vendita,
+   anche se poi la finestra si chiude senza confermare. In Vendita si torna anche uscendo dal Banco
+   o dopo un minuto senza scansioni (dalla 1.17.1: prima la scelta restava e le vendite finivano in reso o spreco). */
+const modoBreve = m => m === 'reso' || m === 'spreco';
+function prendiModo() {
+  const m = BANCO.modo;
+  if (modoBreve(m)) { BANCO.modo = 'vendita'; clearTimeout(BANCO.timer); if (current.name === 'banco') render(); }
+  return m;
+}
+function scadeModo() {
+  if (!modoBreve(BANCO.modo)) return;
+  if (modal.open) { BANCO.timer = setTimeout(scadeModo, 30000); return; }   // sta scegliendo il prodotto: si aspetta
+  BANCO.modo = 'vendita';
+  if (current.name === 'banco') { render(); toast('Nessuna scansione da un minuto: di nuovo in Vendita'); }
+}
 function bancoScan(code) {
   return inCoda(async () => {
-    const p = byCode(code);
-    if (BANCO.modo === 'reso') {
+    const p = byCode(code), modo = prendiModo();
+    if (modo === 'reso') {
       if (p) { if (isSfuso(p)) resoPeso(p); else await rendi(p); }
       else collegaCodice(code, p2 => isSfuso(p2) ? resoPeso(p2) : inCoda(() => rendi(p2)));
       return;
     }
-    if (BANCO.modo === 'spreco') { if (p) sprecoBanco(p); else collegaCodice(code, sprecoBanco); return; }
-    if (BANCO.modo === 'cucina') { if (p && isSfuso(p)) cucinaPeso(p); else if (p) await usaInCucina(p, 1); else collegaCodice(code, p2 => isSfuso(p2) ? cucinaPeso(p2) : inCoda(() => usaInCucina(p2, 1))); return; }
+    if (modo === 'spreco') { if (p) sprecoBanco(p); else collegaCodice(code, sprecoBanco); return; }
+    if (modo === 'cucina') { if (p && isSfuso(p)) cucinaPeso(p); else if (p) await usaInCucina(p, 1); else collegaCodice(code, p2 => isSfuso(p2) ? cucinaPeso(p2) : inCoda(() => usaInCucina(p2, 1))); return; }
     if (p && isSfuso(p)) { vendiPesoModal(p); return; }
     if (p) await vendi(p); else await vendiSconosciuto(code);
   });
@@ -1296,9 +1312,10 @@ function bancoScan(code) {
 function vendiPesoModal(p, origine = 'scansione') { pesoModal(p, { onOk: kg => inCoda(() => vendiPeso(p, kg, { origine })) }); }
 function resoPeso(p) { pesoModal(p, { titolo: 'Reso: quanto riporta?', ok: 'Rimetti in negozio', onOk: kg => inCoda(() => rendi(p, kg)) }); }
 function azioneBanco(p) {
-  if (BANCO.modo === 'reso') { if (isSfuso(p)) return resoPeso(p); return inCoda(() => rendi(p)); }
-  if (BANCO.modo === 'spreco') return sprecoBanco(p);
-  if (BANCO.modo === 'cucina') return isSfuso(p) ? cucinaPeso(p) : inCoda(() => usaInCucina(p, 1, { origine: 'ricerca' }));
+  const modo = prendiModo();
+  if (modo === 'reso') { if (isSfuso(p)) return resoPeso(p); return inCoda(() => rendi(p)); }
+  if (modo === 'spreco') return sprecoBanco(p);
+  if (modo === 'cucina') return isSfuso(p) ? cucinaPeso(p) : inCoda(() => usaInCucina(p, 1, { origine: 'ricerca' }));
   if (isSfuso(p)) return vendiPesoModal(p, 'ricerca');
   return inCoda(() => vendi(p, { origine: 'ricerca' }));
 }
@@ -1389,6 +1406,7 @@ function rigaVendita(v) {
     <span class="prezzo">${imp == null ? '–' : fmtEuro(imp)}</span><time>${fmtOra(v.creato)}</time></button>`;
 }
 routes.banco = () => {
+  if (modoBreve(BANCO.modo) && current.fresh) { BANCO.modo = 'vendita'; clearTimeout(BANCO.timer); }   // tornando al Banco si riparte da Vendita
   if (BANCO.modo === 'cucina' && current.fresh && Date.now() - (BANCO.toccato || 0) > 10 * 60000) BANCO.modo = 'vendita';   // tornando al banco dopo un po' si riparte da Vendita
   if (BANCO.modo === 'cucina') return bancoCucina();
   const righe = venditeDel(todayISO());
@@ -1409,7 +1427,7 @@ routes.banco = () => {
     html += `<div class="section-title"><h2>${vend ? 'Prima' : 'Oggi'}</h2><span class="count">${resto.length}</span></div><div class="list">${resto.slice(0, max).map(rigaVendita).join('')}</div>`;
     if (resto.length > max) html += `<button class="btn block" type="button" data-act="banco-tutte">Mostra tutte (${resto.length})</button>`;
   }
-  return { title: 'Banco', html, back: '#home', tab: 'banco', onScan: bancoScan, mount: () => { if (daCollegarePronti()) inCoda(sistemaEAvvisa); } };
+  return { title: vend ? 'Banco' : BANCO.modo === 'reso' ? 'Banco · Reso' : 'Banco · Spreco', html, back: '#home', tab: 'banco', onScan: bancoScan, mount: () => { if (daCollegarePronti()) inCoda(sistemaEAvvisa); } };
 };
 /* =========================================================
    CUCINA: merce presa dagli scaffali per i pasti o per fare pane e dolci (dalla 1.15.0)
@@ -1500,7 +1518,7 @@ function bancoCucina() {
   html += `<div class="btn-grid banco-az" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="cucina-annulla" ${u ? '' : 'disabled'}>${ICO_ANNULLA} Annulla ultimo</button><button class="btn soft" type="button" data-act="banco-senza">${ICO_GRIGLIA} Senza codice</button></div>`;
   html += `<div class="oggi-bar"><span>In cucina oggi <b>${oggi.length ? totaleQta(oggi) : '0 pz'}</b>${val ? ` · <b>${fmtEuro(val)}</b>` : ''}</span><a class="btn small" href="#cucina">Vedi tutto</a></div>`;
   if (oggi.length > 1) html += `<div class="section-title"><h2>Prima</h2><span class="count">${oggi.length - 1}</span></div><div class="list">${oggi.slice(1).map(r => rigaCucina(r)).join('')}</div>`;
-  return { title: 'Banco', html, back: '#home', tab: 'banco', onScan: bancoScan };
+  return { title: 'Banco · Cucina', html, back: '#home', tab: 'banco', onScan: bancoScan };
 }
 routes.cucina = () => {
   const [da, a] = periodo(CRU), list = usiCucina(da, a), val = r2(list.reduce((t, r) => t + (valoreCucina(r) || 0), 0));
@@ -4365,7 +4383,7 @@ function leggiImpostazioni(b) {
   return { salva: async () => { if (JSON.stringify(nuovo) === JSON.stringify(S.meta.settings || {})) return true; await setMeta('settings', nuovo); aggiornaBadge(); return true; } };
 }
 /* banco */
-A['banco-modo'] = el => { BANCO.modo = el.dataset.m; if (BANCO.modo === 'cucina') BANCO.toccato = Date.now(); render(); };
+A['banco-modo'] = el => { BANCO.modo = el.dataset.m; clearTimeout(BANCO.timer); if (modoBreve(BANCO.modo)) BANCO.timer = setTimeout(scadeModo, 60000); if (BANCO.modo === 'cucina') BANCO.toccato = Date.now(); render(); };
 A['cucina-qta'] = el => inCoda(async () => { const r = S.sprechi.get(el.dataset.id); if (r) await qtaCucina(r.id, r3(r.qta + +el.dataset.d)); });
 A['cucina-peso'] = el => { const r = S.sprechi.get(el.dataset.id), p = r && prodotto(r.prodottoId); if (p) cucinaPeso(p, r); };
 A['cucina-mod'] = el => cucinaModal(el.dataset.id);
