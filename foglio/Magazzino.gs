@@ -9,7 +9,7 @@
  * - Il foglio si aggiorna ogni 10 minuti, o subito dal menu «Magazzino → Aggiorna adesso».
  *
  * Come si collega: Estensioni → Apps Script, incolla questo codice, salva, torna al foglio,
- * ricarica la pagina, menu «Magazzino → Collega all'app…» e scrivi la password del negozio.
+ * ricarica la pagina, menu «Magazzino → Collega il foglio» e scrivi la password del negozio.
  * La password non resta da nessuna parte: si tiene solo il «biglietto» di accesso di Firebase.
  */
 var CONF_BASE = {
@@ -24,6 +24,9 @@ var TESTA = ['ID', 'Prodotto', 'Formato', 'Codice a barre', 'Unità', 'Acquisto 
 var PRIMA = 5;   // prima riga dei prodotti
 var EURO = '#,##0.00 "€"';
 var GRIGIO = '#EEF0E8', VERDE = '#DEE8D8';
+var INIZIO = Date.now(), LAVORO = 0;   // Google ferma uno script dopo 6 minuti: oltre i 4 e mezzo si salva il punto e si continua al giro dopo
+function limite_() { var l = conf_().limiteMs; return l != null ? l : 270000; }
+function basta_() { return LAVORO > 0 && Date.now() - INIZIO > limite_(); }
 
 /* ---------------- menu ---------------- */
 function onOpen() {
@@ -31,44 +34,52 @@ function onOpen() {
     .addItem('Aggiorna adesso', 'aggiornaAdesso')
     .addItem('Rifai tutti i fogli', 'ricostruisci')
     .addSeparator()
-    .addItem('Collega all\'app…', 'collega')
+    .addItem('Collega il foglio', 'collega')
     .addItem('Scollega', 'scollega')
     .addToUi();
 }
 function collega() {
-  var html = '<div style="font:14px Arial,sans-serif">'
-    + '<p>Password dell\'account del negozio (' + conf_().email + '):</p>'
-    + '<input id="pw" type="password" style="width:100%;font-size:16px;padding:6px" autofocus>'
-    + '<p id="msg" style="color:#555"></p>'
-    + '<button id="ok" style="font-size:15px;padding:6px 14px">Collega</button></div>'
-    + '<script>var b=document.getElementById("ok"),m=document.getElementById("msg");'
-    + 'function via(){b.disabled=true;m.style.color="#555";m.textContent="Collego… la prima volta ci vuole un paio di minuti.";'
-    + 'google.script.run.withSuccessHandler(function(){m.textContent="Collegato! Il foglio si aggiorna da solo ogni 10 minuti.";setTimeout(function(){google.script.host.close()},2500)})'
-    + '.withFailureHandler(function(e){b.disabled=false;m.style.color="#B00";m.textContent="Non collegato: "+e.message})'
-    + '.collegaConPassword(document.getElementById("pw").value)}'
-    + 'b.onclick=via;document.getElementById("pw").onkeydown=function(e){if(e.key==="Enter")via()};</script>';
-  SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutput(html).setWidth(380).setHeight(220), 'Collega il foglio all\'app');
+  var ui = SpreadsheetApp.getUi();
+  var r = ui.prompt('Collega il foglio all\'app', 'Password dell\'account del negozio (' + conf_().email + '):', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK || !r.getResponseText()) return;
+  var esito;
+  try { esito = collegaConPassword(r.getResponseText()); }
+  catch (e) { ui.alert('Non collegato', e.message + '\n\nRiprova dal menu Magazzino → Collega il foglio.', ui.ButtonSet.OK); return; }
+  ui.alert('Collegato!', esito === 'fatto' ? 'Il foglio si aggiorna da solo ogni 10 minuti.'
+    : 'I dati sono tanti: finisco di preparare i fogli da solo nei prossimi minuti, non serve fare niente. Nel foglio «Leggimi» vedi a che punto sono.', ui.ButtonSet.OK);
 }
 function collegaConPassword(password) {
-  var a = accedi_(password);
+  var a;
+  try { a = accedi_(password); } catch (e) { if (String(password).trim() === password) throw e; a = accedi_(String(password).trim()); }   // spazio finale messo dalla tastiera
   var P = props_();
   P.setProperty('refresh', a.refreshToken);
   CacheService.getScriptCache().put('token', a.idToken, 3000);
-  ['syncDa', 'firme'].forEach(function (k) { P.deleteProperty(k); });
+  ['syncDa', 'firme', 'sospeso'].forEach(function (k) { P.deleteProperty(k); });
   installaTrigger_();
-  aggiorna({ tutto: true });
+  return aggiorna({ tutto: true });
 }
 function scollega() {
   ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
-  props_().deleteProperty('refresh'); CacheService.getScriptCache().remove('token');
+  ['refresh', 'seguito', 'sospeso'].forEach(function (k) { props_().deleteProperty(k); }); CacheService.getScriptCache().remove('token');
   SpreadsheetApp.getActive().toast('Scollegato: il foglio non si aggiorna più con l\'app.', 'Magazzino', 6);
 }
-function aggiornaAdesso() { aggiorna({}); SpreadsheetApp.getActive().toast('Aggiornato con l\'app.', 'Magazzino', 4); }
-function ricostruisci() { props_().deleteProperty('firme'); aggiorna({ tutto: true }); SpreadsheetApp.getActive().toast('Fogli rifatti.', 'Magazzino', 4); }
+function aggiornaAdesso() { var e = aggiorna({}); SpreadsheetApp.getActive().toast(e === 'sospeso' ? 'Tante novità: continuo da solo tra un minuto.' : e === 'occupato' ? 'Un aggiornamento è già in corso: tra poco è tutto pronto.' : 'Aggiornato con l\'app.', 'Magazzino', 5); }
+function ricostruisci() { props_().deleteProperty('firme'); props_().deleteProperty('sospeso'); var e = aggiorna({ tutto: true }); SpreadsheetApp.getActive().toast(e === 'sospeso' ? 'Sto rifacendo i fogli: finisco da solo nei prossimi minuti.' : 'Fogli rifatti.', 'Magazzino', 6); }
 function installaTrigger_() {
   ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  props_().deleteProperty('seguito');
   ScriptApp.newTrigger('aggiorna').timeBased().everyMinutes(10).create();
   ScriptApp.newTrigger('quandoModifichi').forSpreadsheet(SpreadsheetApp.getActive()).onEdit().create();
+}
+
+function continua_() {   // lavoro a metà: un giro in più tra un minuto, senza aspettare i 10
+  var P = props_(); if (P.getProperty('seguito')) return;
+  P.setProperty('seguito', ScriptApp.newTrigger('aggiorna').timeBased().after(60000).create().getUniqueId());
+}
+function pulisciSeguito_() {
+  var P = props_(), id = P.getProperty('seguito'); if (!id) return;
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getUniqueId() === id) ScriptApp.deleteTrigger(t); });
+  P.deleteProperty('seguito');
 }
 
 /* ---------------- Firebase ---------------- */
@@ -162,6 +173,7 @@ function scarica_(copia) {
     var pag = (fs_(':runQuery', { structuredQuery: q }) || []).filter(function (x) { return x.document; }).map(function (x) { return x.document; });
     docs = docs.concat(pag);
     if (pag.length < LIM) break;
+    if (Date.now() - INIZIO > limite_() * 0.6) { cambiati._incompleto = true; break; }   // il resto al giro dopo (si riparte dall'ultimo documento letto)
     var ul = pag[pag.length - 1]; cursore = { srv: ul.fields.srv.timestampValue, name: ul.name };
   }
   docs.forEach(function (d) {
@@ -184,25 +196,46 @@ function primoDelMeseScorso_() { var o = oggi_(), y = +o.slice(0, 4), m = +o.sli
 function aggiorna(opz) {
   opz = opz && opz.tutto !== undefined ? opz : {};
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(25000)) return;
+  if (!lock.tryLock(25000)) return 'occupato';
+  var P = props_(), ora = function () { return Utilities.formatDate(new Date(), 'Europe/Rome', 'dd/MM/yyyy HH:mm'); };
   try {
-    if (!props_().getProperty('refresh')) return;
-    var tutto = !!opz.tutto, coda = foglio_('_coda', false), inCoda = !!(coda && coda.getLastRow());
-    if (!tutto && !inCoda && !novita_()) { leggimi_('Ultimo aggiornamento: ' + Utilities.formatDate(new Date(), 'Europe/Rome', 'dd/MM/yyyy HH:mm') + ' (nessuna novità)'); return; }
+    pulisciSeguito_();
+    if (!P.getProperty('refresh')) return 'scollegato';
+    var sospeso = P.getProperty('sospeso'), fatti = sospeso && !opz.tutto ? JSON.parse(sospeso) : [];
+    var tutto = !!opz.tutto || !!sospeso || !P.getProperty('firme'), coda = foglio_('_coda', false), inCoda = !!(coda && coda.getLastRow());
+    if (!tutto && !inCoda && !novita_()) { leggimi_('Ultimo aggiornamento: ' + ora() + ' (nessuna novità)'); return 'niente'; }
     var copia = leggiCopia_();
     mandaCoda_(copia);
     var cambiati = scarica_(copia);
-    if (!tutto && !Object.keys(cambiati).length) { leggimi_('Ultimo aggiornamento: ' + Utilities.formatDate(new Date(), 'Europe/Rome', 'dd/MM/yyyy HH:mm') + ' (nessuna novità)'); return; }
+    if (!tutto && !Object.keys(cambiati).length) { leggimi_('Ultimo aggiornamento: ' + ora() + ' (nessuna novità)'); return 'niente'; }
     scriviCopia_(copia);
-    var s = stato_(copia);
-    var firme = JSON.parse(props_().getProperty('firme') || '{}');
-    if (tutto || cambiati.prodotti || cambiati.fornitori || !firme._listini) { listini_(s, firme, tutto); firme._listini = 1; }
-    if (tutto || cambiati.prodotti || cambiati.fornitori || cambiati.lotti) { magazzino_(s); scadenze_(s); }
-    if (tutto || cambiati.vendite || cambiati.chiusure || cambiati.sprechi || cambiati.prodotti) riepilogo_(s);
-    props_().setProperty('firme', JSON.stringify(firme));
-    leggimi_('Ultimo aggiornamento: ' + Utilities.formatDate(new Date(), 'Europe/Rome', 'dd/MM/yyyy HH:mm'));
+    var sospendi = function (cosa) {
+      P.setProperty('sospeso', JSON.stringify(fatti)); continua_();
+      leggimi_('Sto ancora ' + cosa + ' (' + ora() + '): continuo da solo tra un minuto, non serve fare niente.');
+      return 'sospeso';
+    };
+    if (cambiati._incompleto) return sospendi('scaricando i dati dall\'app');
+    var s = stato_(copia), firme = JSON.parse(P.getProperty('firme') || '{}');
+    var passi = [
+      ['listini', tutto || cambiati.prodotti || cambiati.fornitori || !firme._listini, function () { return listini_(s, firme); }],
+      ['magazzino', tutto || cambiati.prodotti || cambiati.fornitori || cambiati.lotti, function () { magazzino_(s); }],
+      ['scadenze', tutto || cambiati.prodotti || cambiati.fornitori || cambiati.lotti, function () { scadenze_(s); }],
+      ['riepilogo', tutto || cambiati.vendite || cambiati.chiusure || cambiati.sprechi || cambiati.prodotti, function () { riepilogo_(s); }]
+    ];
+    for (var i = 0; i < passi.length; i++) {
+      var p = passi[i];
+      if (!p[1] || fatti.indexOf(p[0]) >= 0) continue;
+      if (basta_()) return sospendi('preparando i fogli');
+      var finito = p[2]() !== false;
+      P.setProperty('firme', JSON.stringify(firme));
+      if (!finito) return sospendi('preparando i fogli dei fornitori');
+      fatti.push(p[0]); LAVORO++;
+    }
+    P.deleteProperty('sospeso');
+    leggimi_('Ultimo aggiornamento: ' + ora());
+    return 'fatto';
   } catch (e) {
-    leggimi_('Ultimo tentativo non riuscito (' + Utilities.formatDate(new Date(), 'Europe/Rome', 'dd/MM/yyyy HH:mm') + '): ' + e.message);
+    leggimi_('Ultimo tentativo non riuscito (' + ora() + '): ' + e.message);
     throw e;
   } finally { lock.releaseLock(); }
 }
@@ -262,7 +295,7 @@ function righeListino_(s, fid, prodotti) {
   return { righe: righe.map(function (r) { while (r.length < TESTA.length) r.push(''); return r; }), tipi: tipi };
 }
 function firma_(x) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(x), Utilities.Charset.UTF_8)); }
-function listini_(s, firme, tutto) {
+function listini_(s, firme) {   // false = fermato a metà per il tempo: si riprende dal fornitore dopo
   var ss = SpreadsheetApp.getActive(), per = gruppi_(s), usati = {};
   FISSI.forEach(function (n) { usati[n.toLowerCase()] = 1; });
   var esistenti = {};
@@ -270,18 +303,24 @@ function listini_(s, firme, tutto) {
   var fids = Object.keys(per).filter(function (fid) { return per[fid].length; })
     .sort(function (a, b) { return (a === '-') - (b === '-') || nomeForn_(s, a === '-' ? '' : a).localeCompare(nomeForn_(s, b === '-' ? '' : b), 'it'); });
   var indice = [];
-  fids.forEach(function (fid) {
-    var nome = nomeFoglio_(nomeForn_(s, fid === '-' ? '' : fid), usati), r = righeListino_(s, fid, per[fid]), f = firma_([nome, r.righe]);
-    var sh = esistenti[fid]; delete esistenti[fid];
-    if (sh && sh.getName() !== nome) sh.setName(nome);
-    if (!sh) sh = ss.insertSheet(nome);
-    if (tutto || firme[fid] !== f) { scriviListino_(sh, r); firme[fid] = f; }
+  for (var i = 0; i < fids.length; i++) {
+    var fid = fids[i], nome = nomeFoglio_(nomeForn_(s, fid === '-' ? '' : fid), usati), r = righeListino_(s, fid, per[fid]), f = firma_([nome, r.righe]);
+    var sh = esistenti[fid];
+    if (!sh || firme[fid] !== f) {
+      if (basta_()) return false;
+      if (sh && sh.getName() !== nome) sh.setName(nome);
+      if (!sh) sh = ss.insertSheet(nome);
+      scriviListino_(sh, r); firme[fid] = f; LAVORO++;
+      props_().setProperty('firme', JSON.stringify(firme));
+    }
+    delete esistenti[fid];
     var fo = s.fornitori[fid];
     indice.push([nomeForn_(s, fid === '-' ? '' : fid), nome, per[fid].length, r.tipi.filter(function (t) { return t === 'cat'; }).length, fo ? fo.telefono || '' : '', fo ? fo.email || '' : '', fo ? fo.sito || '' : '']);
-  });
+  }
   Object.keys(esistenti).forEach(function (fid) { ss.deleteSheet(esistenti[fid]); delete firme[fid]; });   // fornitore tolto nell'app
   var ix = foglio_('Fornitori', true);
   scriviTabella_(ix, 'Listini dei fornitori', 'Un foglio per fornitore, dentro divisi per categoria. Aggiornato dall\'app.', ['Fornitore', 'Foglio', 'Prodotti', 'Categorie', 'Telefono', 'Email', 'Sito'], indice, { larghezze: [220, 200, 80, 80, 120, 200, 200] });
+  firme._listini = 1;
 }
 function scriviListino_(sh, r) {
   var n = r.righe.length;
