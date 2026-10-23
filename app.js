@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.20.0';
+const VERSIONE = '1.20.1';
 
 /* =========================================================
    Utilità
@@ -3825,6 +3825,8 @@ function cardFoglio() {
       <li>Di nuovo <b>Magazzino → Collega all'app…</b>, scrivi la password del negozio: in un paio di minuti compaiono i fogli.</li>
     </ol>
     <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="foglio-copia">Copia il codice</button><a class="btn" href="foglio/Magazzino.gs" target="_blank" rel="noopener">Apri il codice</a></div>
+    <button class="btn block" type="button" data-act="foglio-copia" data-breve="1">Dal tablet o dal telefono: copia il codice breve</button>
+    <div class="faint small">Il codice breve sono tre righe che scaricano quello completo dall'app: si incolla senza errori anche dal tablet e si aggiorna da solo. Nel menu del foglio la voce è «Magazzino → Collega il foglio».</div>
     <div class="faint small">Il foglio si aggiorna ogni 10 minuti (o subito dal menu Magazzino). I fogli nascosti «_dati» e «_coda» servono allo script: non cancellarli.</div></div>`;
 }
 /* =========================================================
@@ -4113,12 +4115,13 @@ A['sync-collega'] = async el => {
     if (document.contains(el)) { el.disabled = false; el.textContent = 'Collega questo dispositivo'; }
   }
 };
-A['foglio-copia'] = async () => {
+A['foglio-copia'] = async el => {
+  const file = 'foglio/' + (el.dataset.breve ? 'avvio.gs' : 'Magazzino.gs');
   try {
-    const r = await fetch('foglio/Magazzino.gs', { cache: 'no-store' }); if (!r.ok) throw new Error(r.status);
+    const r = await fetch(file, { cache: 'no-store' }); if (!r.ok) throw new Error(r.status);
     await navigator.clipboard.writeText(await r.text());
-    toast('Codice copiato: incollalo in Apps Script');
-  } catch (e) { window.open('foglio/Magazzino.gs', '_blank'); toast('Si apre il codice: selezionalo tutto e copialo', { ms: 6000 }); }
+    toast(el.dataset.breve ? 'Codice breve copiato: incollalo in Apps Script' : 'Codice copiato: incollalo in Apps Script');
+  } catch (e) { window.open(file, '_blank'); toast('Si apre il codice: selezionalo tutto e copialo', { ms: 6000 }); }
 };
 A['push-on'] = async el => {
   el.disabled = true; el.textContent = 'Un momento…';
