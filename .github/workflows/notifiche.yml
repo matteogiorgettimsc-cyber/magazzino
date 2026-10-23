@@ -1,0 +1,26 @@
+name: Notifiche delle scadenze
+# ogni mattina verso le 8 (ora italiana, estate e inverno): manda le scadenze ai telefoni iscritti
+on:
+  schedule:
+    - cron: '2 6 * * *'
+    - cron: '2 7 * * *'
+  workflow_dispatch:
+    inputs:
+      forza:
+        description: 'Manda adesso, anche se è già partita oggi'
+        type: boolean
+        default: true
+jobs:
+  invia:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Manda le notifiche
+        run: node notifiche/scadenze.mjs
+        env:
+          FIREBASE_PASSWORD: ${{ secrets.FIREBASE_PASSWORD }}
+          FORZA: ${{ github.event_name == 'workflow_dispatch' && inputs.forza && '1' || '' }}

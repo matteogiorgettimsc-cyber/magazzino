@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.18.0';
+const VERSIONE = '1.19.0';
 
 /* =========================================================
    Utilità
@@ -3745,6 +3745,70 @@ function cardSync() {
 }
 
 /* =========================================================
+   NOTIFICHE DELLE SCADENZE (dalla 1.19.0)
+   - ogni telefono collegato può riceverle: si iscrive alle notifiche di Chrome e lascia il suo indirizzo su Firebase
+   - le chiavi per firmare le notifiche le crea il primo telefono e stanno su Firebase (le legge solo l'account del negozio)
+   - ogni mattina il programma «notifiche/scadenze.mjs» (GitHub Actions) legge le scadenze e manda la notifica agli iscritti
+   ========================================================= */
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const daB64u = t => { t = t.replace(/-/g, '+').replace(/_/g, '/'); while (t.length % 4) t += '='; return Uint8Array.from(atob(t), c => c.charCodeAt(0)); };
+const pushPossibili = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const campoFs = d => k => { const v = d && d.fields && d.fields['f_' + k]; try { return v && v.stringValue != null ? JSON.parse(v.stringValue) : null; } catch (e) { return null; } };
+async function chiaviNotifiche() {
+  const leggi = async () => campoFs(await chiamaFs('/dati/' + docId('sys', 'vapid'), null, 'GET'))('pub');
+  let pub = await leggi(); if (pub) return pub;
+  // il primo telefono crea la coppia di chiavi (la parte privata resta su Firebase, per il programma che manda le notifiche)
+  const k = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  pub = b64u(await crypto.subtle.exportKey('raw', k.publicKey));
+  const priv = (await crypto.subtle.exportKey('jwk', k.privateKey)).d;
+  try {
+    await chiamaFs(':commit', { writes: [{ ...scrittura({ st: 'sys', id: 'vapid', set: { pub, priv } }, nomiFs(syncConf())), currentDocument: { exists: false } }] });
+  } catch (e) { const gia = await leggi(); if (gia) return gia; throw e; }   // un altro telefono le ha create nello stesso momento
+  return pub;
+}
+async function salvaIscrizione(sub) {
+  const slot = String(S.meta.syncSlot || 0);
+  await chiamaFs(':commit', { writes: [scrittura({ st: 'push', id: slot, set: { sub: sub.toJSON(), nome: S.meta.syncDev || 'Dispositivo', dal: todayISO() } }, nomiFs(syncConf()))] });
+  await setMeta('pushIscritto', sub.endpoint);
+}
+async function attivaNotifiche() {
+  if (!pushPossibili()) throw new Error('Su questo telefono le notifiche dell\'app non sono possibili');
+  if (!syncAttiva()) throw new Error('Prima collega il telefono qui sopra, in «Più dispositivi insieme»');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('Notifiche non permesse: si attivano dalle impostazioni di Chrome (Impostazioni sito → Notifiche)');
+  const pub = await chiaviNotifiche();
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && sub.options && sub.options.applicationServerKey && b64u(sub.options.applicationServerKey) !== pub) { await sub.unsubscribe(); sub = null; }
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: daB64u(pub) });
+  await salvaIscrizione(sub);
+}
+async function disattivaNotifiche() {
+  try { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch (e) { }
+  if (syncAttiva()) await chiamaFs(':commit', { writes: [scrittura({ st: 'push', id: String(S.meta.syncSlot || 0), del: true }, nomiFs(syncConf()))] });
+  await setMeta('pushIscritto', null);
+}
+/* all'avvio: se Chrome ha cambiato l'indirizzo delle notifiche, lo si aggiorna su Firebase */
+async function controllaIscrizione() {
+  if (!S.meta.pushIscritto || !syncAttiva() || !pushPossibili()) return;
+  if (Notification.permission !== 'granted') { await disattivaNotifiche(); return; }
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: daB64u(await chiaviNotifiche()) });
+  if (sub.endpoint !== S.meta.pushIscritto) await salvaIscrizione(sub);
+}
+function cardNotifiche() {
+  const testa = `<div class="card"><h2>Notifiche delle scadenze</h2>
+    <p class="muted small">Ogni mattina alle 8, su questo telefono: cosa è scaduto, cosa scade oggi e nei prossimi giorni (i rossi delle Scadenze). Se non scade niente, nessuna notifica.</p>`;
+  if (!pushPossibili()) return testa + '<div class="faint small">Su questo telefono (o browser) le notifiche dell\'app non sono possibili.</div></div>';
+  if (!syncAttiva()) return testa + '<div class="faint small">Prima collega questo telefono qui sopra, in «Più dispositivi insieme».</div></div>';
+  if (Notification.permission === 'denied') return testa + '<div class="notice"><span>Le notifiche sono bloccate in Chrome. Per sbloccarle: tieni premuta l\'icona dell\'app → Informazioni app → Notifiche, oppure in Chrome Impostazioni sito → Notifiche.</span></div></div>';
+  return testa + (S.meta.pushIscritto
+    ? `<div class="sync-stato ok">Attive su questo telefono</div>
+      <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="push-prova">Prova una notifica</button><button class="btn ghost" type="button" data-act="push-off">Disattiva</button></div>`
+    : `<button class="btn primary block" type="button" data-act="push-on">Attiva su questo telefono</button>`) + '</div>';
+}
+/* =========================================================
    IMPOSTAZIONI, BACKUP
    ========================================================= */
 let persistito = null;
@@ -3757,6 +3821,7 @@ routes.impostazioni = () => {
       <button class="btn primary block" type="button" data-act="backup">Fai backup ora</button>
       <button class="btn block" type="button" data-act="ripristina">Ripristina da un backup</button></div>
     ${cardSync()}
+    ${cardNotifiche()}
     <div class="card"><h2>Catalogo</h2>
       <dl class="kv"><dt>Prodotti</dt><dd>${S.prodotti.size}</dd><dt>Fornitori</dt><dd>${S.fornitori.size}</dd><dt>Con codice a barre</dt><dd>${[...S.prodotti.values()].filter(p => (p.codici || []).length).length}</dd><dt>Confezioni in negozio</dt><dd>${lottiAttivi().length}</dd></dl>
       <button class="btn block" type="button" data-act="import-catalogo">Carica catalogo dai listini</button>
@@ -4028,11 +4093,24 @@ A['sync-collega'] = async el => {
     if (document.contains(el)) { el.disabled = false; el.textContent = 'Collega questo dispositivo'; }
   }
 };
+A['push-on'] = async el => {
+  el.disabled = true; el.textContent = 'Un momento…';
+  try { await attivaNotifiche(); toast('Notifiche attive: ogni mattina le scadenze'); } catch (e) { toast(e.message, { err: true }); }
+  render();
+};
+A['push-off'] = async () => { try { await disattivaNotifiche(); toast('Notifiche disattivate su questo telefono'); } catch (e) { toast(e.message, { err: true }); } render(); };
+A['push-prova'] = async () => {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    await reg.showNotification(settings().negozio + ': prova', { body: 'Le notifiche arrivano. Ogni mattina qui trovi le scadenze.', icon: 'icons/icon-192.png', tag: 'prova', data: { url: '#scadenze' } });
+  } catch (e) { toast('Non riesco a mostrare la notifica: ' + e.message, { err: true }); }
+};
 A['sync-ora'] = async () => { await giro(); if (SYNC.stato === 'ok') toast('Sincronizzato'); else toast(testoStato(), { err: true }); render(); };
 A['sync-scollega'] = async () => {
   const n = S.coda.size;
   if (!(await confirmBox(`Scollego questo dispositivo? I dati restano qui, ma non si aggiornano più con gli altri dispositivi.${n ? ` Attenzione: ${n === 1 ? '1 modifica non è ancora partita' : n + ' modifiche non sono ancora partite'}, gli altri non le riceveranno.` : ''}`, { ok: 'Scollega', danger: true }))) return;
   clearInterval(SYNC.timer);
+  if (S.meta.pushIscritto) { try { await disattivaNotifiche(); } catch (e) { await setMeta('pushIscritto', null); } }
   for (const k of ['syncAuth', 'syncDa', 'syncDev']) await setMeta(k, null);
   S.coda.clear(); await tx('coda', x => x.clear());
   SYNC.stato = 'spento'; toast('Dispositivo scollegato'); render();
@@ -4548,6 +4626,8 @@ async function init() {
       });
     }).catch(() => { });
   }
+  setTimeout(() => controllaIscrizione().catch(() => { }), 4000);
+  if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.vai) location.hash = e.data.vai; });
   window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta, categorieDalCatalogo, ANN, salvaOra: () => paginaSalva ? paginaSalva() : Promise.resolve() };
 }
 init();
