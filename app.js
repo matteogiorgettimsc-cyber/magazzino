@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.17.1';
+const VERSIONE = '1.18.0';
 
 /* =========================================================
    Utilità
@@ -707,6 +707,83 @@ function scanbox(title, sub, cercaAct) {
 const tagTipo = p => p && p.tipoScadenza === 'entro' ? '<span class="tag fresh">fresco</span>' : '';
 
 /* =========================================================
+   REPARTO FRUTTA E VERDURA (dalla 1.18.0)
+   - ogni frutto o verdura è un prodotto della categoria «Frutta e verdura», di solito venduto al kg
+   - ha il suo codice a barre (lo crea l'app) e l'etichetta per la cassetta o lo scaffale
+   - al Banco si scansiona l'etichetta e si scrivono i grammi; i prezzi cambiano spesso: si cambiano da qui
+   ========================================================= */
+const FV = 'Frutta e verdura';
+const prodottiFV = () => [...S.prodotti.values()].filter(p => catDi(p) === FV).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+const prezzoFV = p => { const pr = prezzoVendita(p); return pr == null ? 'prezzo da scrivere' : fmtEuro(perUnita(p, pr)) + (isSfuso(p) ? ' ' + UNITA[unitaDi(p)].al : ' al pezzo'); };
+routes.frutta = () => {
+  const lista = prodottiFV(), senzaCod = lista.filter(p => !(p.codici || []).length).length;
+  let html = `<div class="notice green"><span>Si vendono a peso (o a pezzo). Ogni prodotto ha il suo <b>codice a barre</b>: attacca l'etichetta alla cassetta o allo scaffale. Al Banco si scansiona e si scrivono i grammi.</span></div>
+    <button class="btn primary block" type="button" data-act="fv-nuovo">+ Nuovo frutto o verdura</button>`;
+  if (lista.length) {
+    html += `<div class="section-title"><h2>Prodotti</h2><span class="count">${lista.length}</span></div>
+      <div class="list" id="fvList">${lista.map(p => `<div class="item" style="flex-wrap:wrap"><a class="main" href="#prodotto/${encodeURIComponent(p.id)}" style="flex:1 1 55%;text-decoration:none;color:inherit"><div class="name">${esc(p.nome)}</div>
+        <div class="sub">${esc(prezzoFV(p))}${giacenza(p.id) > 0 ? ' · in negozio ' + fq(p, giacenza(p.id)) : ''}${(p.codici || []).length ? '' : ' · <span class="arancio">senza codice</span>'}</div></a>
+        <div class="conf-acts"><button class="btn small" type="button" data-act="fv-prezzo" data-id="${esc(p.id)}">Prezzo</button><button class="btn small" type="button" data-act="fv-eti" data-id="${esc(p.id)}">Etichetta</button></div></div>`).join('')}</div>
+      <button class="btn block" type="button" data-act="fv-eti-tutte">Stampa le etichette di tutti (${lista.length})</button>
+      ${senzaCod ? `<div class="faint small" style="text-align:center">${senzaCod === 1 ? '1 prodotto non ha' : senzaCod + ' prodotti non hanno'} ancora il codice: lo crea l'app quando stampi l'etichetta.</div>` : ''}`;
+  } else html += `<div class="empty">Ancora nessun prodotto in questo reparto.<br>Aggiungi la frutta e la verdura che vendete: nome e prezzo al kg bastano.</div>`;
+  html += `<div class="faint small" style="text-align:center">Gli arrivi si registrano in kg da «Arrivi», come lo sfuso. Al Banco, senza etichetta a portata di mano: «Senza codice» li mostra tutti.</div>`;
+  return { title: 'Frutta e verdura', html, back: '#catalogo', tab: 'catalogo', onScan: code => { const p = byCode(code); if (p) schedaRapida(p); else collegaCodice(code, p2 => location.hash = '#prodotto/' + encodeURIComponent(p2.id)); } };
+};
+function fvNuovoModal() {
+  const forn = [...S.fornitori.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+  let kg = true;
+  openModal(`${mhead('Nuovo frutto o verdura')}
+    <label class="field">Nome <span class="hint">es. Mele Golden, Zucchine</span><input type="text" id="fvNome" autocomplete="off"></label>
+    <div class="field" style="font-weight:600">Si vende<div class="segmented" id="fvModo"><button type="button" class="on" data-m="kg">Al kg</button><button type="button" data-m="pz">A pezzo</button></div></div>
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr">
+      <label class="field"><span>Vendita € <span class="hint" data-u>al kg</span></span><input type="text" inputmode="decimal" id="fvPrezzo" autocomplete="off" placeholder="es. 2,40"></label>
+      <label class="field"><span>Acquisto € <span class="hint" data-u>al kg</span></span><input type="text" inputmode="decimal" id="fvAcq" autocomplete="off" placeholder="facoltativo"></label></div>
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr">
+      <label class="field">IVA<select id="fvIva">${[4, 5, 10, 22].map(v => `<option value="${v}" ${v === 4 ? 'selected' : ''}>${v}%</option>`).join('')}</select></label>
+      <label class="field">Fornitore<select id="fvForn"><option value="">— nessuno —</option>${forn.map(x => `<option value="${esc(x.id)}">${esc(x.nome)}</option>`).join('')}</select></label></div>
+    <label class="check"><input type="checkbox" id="fvEti" checked> Crea il codice a barre e stampa l'etichetta</label>
+    <button class="btn primary block" type="button" data-x="ok">Aggiungi al reparto</button>`, b => {
+    b.querySelector('#fvNome').focus();
+    $$('#fvModo [data-m]', b).forEach(x => x.onclick = () => { kg = x.dataset.m === 'kg'; $$('#fvModo [data-m]', b).forEach(y => y.classList.toggle('on', y === x)); $$('[data-u]', b).forEach(u => { u.textContent = kg ? 'al kg' : 'al pezzo'; }); });
+    b.querySelector('[data-x=ok]').onclick = async () => {
+      const nome = b.querySelector('#fvNome').value.replace(/\s+/g, ' ').trim();
+      if (!nome) { toast('Scrivi il nome', { err: true }); return; }
+      const doppio = prodottiFV().find(p => p.nome.toLowerCase() === nome.toLowerCase());
+      if (doppio && !(await confirmBox(`«${doppio.nome}» c'è già nel reparto. Ne creo un altro?`, { ok: 'Crea lo stesso' }))) return;
+      const pr = parseNum(b.querySelector('#fvPrezzo').value), acq = parseNum(b.querySelector('#fvAcq').value);
+      if (b.querySelector('#fvPrezzo').value.trim() && !(pr > 0)) { toast('Il prezzo di vendita non è un numero valido', { err: true }); return; }
+      if (b.querySelector('#fvAcq').value.trim() && !(acq > 0)) { toast('Il prezzo d\'acquisto non è un numero valido', { err: true }); return; }
+      const conEti = b.querySelector('#fvEti').checked;
+      const p = { id: uid('p'), nome, fornitoreId: b.querySelector('#fvForn').value, categoria: FV, formato: '', prezzoAcquisto: acq > 0 ? r3(acq) : null, iva: +b.querySelector('#fvIva').value, prezzoVendita: null, prezzoManuale: pr > 0 ? r2(pr) : null, ricarico: 50,
+        codici: conEti ? [await codiceInterno()] : [], tipoScadenza: 'entro', note: '', origine: 'Creato nell\'app', sfuso: kg, unita: 'kg', pesoSacco: null };
+      await save('prodotti', p);
+      closeModal(); toast(`Aggiunto: ${p.nome}`); render();
+      if (conEti) etichettaPronta(p.id, 1);
+    };
+  });
+}
+function fvPrezzoModal(p) {
+  const f = isSfuso(p) ? UNITA[unitaDi(p)].f : 1, u = isSfuso(p) ? UNITA[unitaDi(p)].al : 'al pezzo';
+  const ora = p.prezzoManuale != null ? fmtNum(Math.round(p.prezzoManuale * f * 1000) / 1000) : '';
+  openModal(`${mhead('Prezzo di ' + p.nome)}
+    <label class="field"><span>Vendita € <span class="hint">${esc(u)}</span></span><input type="text" inputmode="decimal" id="fpPrezzo" value="${ora}" autocomplete="off" placeholder="${p.prezzoManuale == null && prezzoCalcolato(p) != null ? 'calcolato: ' + fmtNum(perUnita(p, prezzoCalcolato(p))) : ''}"></label>
+    <label class="field"><span>Acquisto € <span class="hint">${esc(u)}, facoltativo</span></span><input type="text" inputmode="decimal" id="fpAcq" value="${p.prezzoAcquisto != null ? fmtNum(Math.round(p.prezzoAcquisto * f * 1000) / 1000) : ''}" autocomplete="off"></label>
+    <label class="check"><input type="checkbox" id="fpEti" checked> Ristampa l'etichetta con il prezzo nuovo</label>
+    <button class="btn primary block" type="button" data-x="ok">Salva</button>`, b => {
+    const i = b.querySelector('#fpPrezzo'); i.focus(); i.select();
+    b.querySelector('[data-x=ok]').onclick = async () => {
+      const tv = i.value.trim(), ta = b.querySelector('#fpAcq').value.trim(), pr = parseNum(tv), acq = parseNum(ta);
+      if (tv && !(pr > 0)) { toast('Il prezzo non è un numero valido', { err: true }); return; }
+      if (ta && !(acq > 0)) { toast('Il prezzo d\'acquisto non è un numero valido', { err: true }); return; }
+      const cur = prodotto(p.id) || p, n = { ...cur, prezzoManuale: tv ? r3(pr / f) : null, prezzoAcquisto: ta ? r3(acq / f) : null };
+      const cambiato = n.prezzoManuale !== cur.prezzoManuale, eti = b.querySelector('#fpEti').checked;
+      await save('prodotti', n); closeModal(); toast(`${n.nome}: ${prezzoFV(n)}`); render();
+      if (cambiato && eti) setTimeout(() => stampaModal([n.id], { titolo: 'Etichetta con il prezzo nuovo', copie: { [n.id]: 1 } }), 300);
+    };
+  });
+}
+/* =========================================================
    HOME
    ========================================================= */
 let installPrompt = null;
@@ -737,6 +814,7 @@ routes.home = () => {
     <a class="big-btn" href="#ordini">Da ordinare<small>Giro con il lettore e invio</small></a>
     <a class="big-btn" href="#carico/inventario">Inventario<small>Conta quello che c'è già</small></a></div>`;
   const rv = venditeDel(todayISO());
+  { const nFV = prodottiFV().length; html += `<a class="card tight" href="#frutta" style="text-decoration:none"><div class="row"><div class="spacer"><b>Frutta e verdura</b><div class="faint small">${nFV ? `${nFV} prodotti · cambia i prezzi, stampa le etichette` : 'Crea il reparto: nome, prezzo al kg e codice a barre'}</div></div><span class="chev">›</span></div></a>`; }
   if (rv.length) html += `<a class="card tight" href="#banco" style="text-decoration:none"><div class="row"><div class="spacer"><b>Banco di oggi</b><div class="faint small">${totaleQta(rv, v => v.tipo === 'reso' ? -1 : 1)} · ${fmtEuro(rv.reduce((t, v) => t + (importo(v) || 0), 0))}</div></div><span class="chev">›</span></div></a>`;
   {
     const fat = [...S.fatture.values()], daC = fat.filter(f => f.stato !== 'controllata').length;
@@ -826,7 +904,7 @@ routes.carico = arg => {
     html += `<div class="card">
       <div class="row"><div class="spacer"><h2>${esc(p.nome)}</h2><div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>${tagTipo(p)}</div>
       ${info ? `<div class="notice green"><span>In ordine: <b>${p.sfuso ? fmtSacchi(info.qta, p) : fmtNum(info.qta)}</b> · già arrivati <b>${fmtNum(r3(info.ric))}</b></span></div>` : ''}
-      ${p.sfuso && !p.pesoSacco && !inv ? `<div class="notice"><span>Sfuso senza ${inLitri(p) ? 'litri della tanica' : 'peso del sacco'}: scrivi i <b>${nomeBase(p)}</b>. Per contare a ${nomeSacco(p, 2)}, scrivi ${inLitri(p) ? 'i litri della tanica' : 'il peso del sacco'} nella <a href="#prodotto/${encodeURIComponent(p.id)}"><b>scheda</b></a>.</span></div>` : ''}
+      ${p.sfuso && !p.pesoSacco && !inv && catDi(p) !== FV ? `<div class="notice"><span>Sfuso senza ${inLitri(p) ? 'litri della tanica' : 'peso del sacco'}: scrivi i <b>${nomeBase(p)}</b>. Per contare a ${nomeSacco(p, 2)}, scrivi ${inLitri(p) ? 'i litri della tanica' : 'il peso del sacco'} nella <a href="#prodotto/${encodeURIComponent(p.id)}"><b>scheda</b></a>.</span></div>` : ''}
       <div class="kp-fields">
         <button type="button" class="kp-field ${CS.field === 'scad' ? 'on' : ''}" data-act="kp-field" data-f="scad" ${CS.senza ? 'disabled' : ''}><small>Scadenza</small><b>${CS.senza ? '—' : fmtScadDigits(CS.scad)}</b></button>
         <div class="kp-qta ${kgMode ? 'solo' : ''}">
@@ -1548,6 +1626,7 @@ function senzaCodiceModal() {
   openModal(`${mhead(titolo)}<div class="stack" id="scWrap">
     <label class="field">Cerca per nome<input type="search" id="scQ" placeholder="Scrivi le prime lettere" autocomplete="off"></label>
     <div id="scRis"></div>
+    ${!cuc && BANCO.modo === 'vendita' && prodottiFV().length ? `<div class="section-title"><h2>Frutta e verdura</h2></div><div class="grid-prod">${prodottiFV().map(p => `<button type="button" data-pid="${esc(p.id)}">${esc(p.nome)}<small>${prezzoBreve(p)}</small></button>`).join('')}</div>` : ''}
     <div class="section-title"><h2>${cuc ? 'I più usati in cucina' : 'I più venduti senza codice'}</h2></div>
     ${top.length ? `<div class="grid-prod">${top.map(p => `<button type="button" data-pid="${esc(p.id)}">${esc(p.nome)}<small>${cuc ? 'in negozio ' + fq(p, giacenza(p.id)) : prezzoBreve(p)}</small></button>`).join('')}</div>` : `<div class="faint small">${cuc ? 'Qui compariranno da soli i prodotti usati più spesso in cucina.' : 'Qui compariranno da soli i prodotti senza codice venduti più spesso.'}</div>`}</div>`, b => {
     const i = b.querySelector('#scQ'), ris = b.querySelector('#scRis');
@@ -1612,7 +1691,7 @@ routes.chiusura = () => {
   const html = `<div><h2 style="margin:0">${esc(fmtDateLong(oggi))}</h2>${salvata ? `<div class="faint">Chiusura salvata alle ${fmtOra(salvata.creato)}: puoi correggerla e salvarla di nuovo.</div>` : ''}</div>
     <div class="card"><h3>Dalla cassa</h3>
       <label class="field">Incasso totale €<input type="text" inputmode="decimal" id="chInc" value="${esc(CH.incasso)}" autocomplete="off" placeholder="es. 612,40"></label>
-      <label class="field">Di cui frutta e verdura € <span class="hint">dalla chiusura per reparto della cassa; se la cassa non lo separa, lascia vuoto</span><input type="text" inputmode="decimal" id="chFr" value="${esc(CH.frutta)}" autocomplete="off"></label></div>
+      <label class="field">Di cui frutta e verdura € <span class="hint">solo per la frutta e verdura <b>non</b> scansionata al Banco (dalla chiusura per reparto della cassa); se la scansionate tutta, lascia vuoto</span><input type="text" inputmode="decimal" id="chFr" value="${esc(CH.frutta)}" autocomplete="off"></label></div>
     <div class="card" id="chRis" aria-live="polite">${riepilogoChiusuraHTML()}</div>
     <div class="section-title"><h2>Da controllare</h2></div>
     ${controlli.length ? `<div class="list">${controlli.join('')}</div>` : '<div class="notice green"><span>Niente da controllare.</span></div>'}
@@ -1853,7 +1932,9 @@ routes.catalogo = arg => {
   if (current.fresh) CAT.sel = null;     // la scelta per eliminare si spegne uscendo dalla pagina
   if (current.fresh && arg) { CAT.forn = arg; CAT.q = ''; CAT.limite = 60; }
   const forn = [...S.fornitori.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+  const nFV = prodottiFV().length;
   const html = `${segCat('p')}
+    ${CAT.sel ? '' : `<a class="card tight" href="#frutta" style="text-decoration:none"><div class="row"><div class="spacer"><b>Reparto Frutta e verdura</b><div class="faint small">${nFV ? `${nFV} prodotti · prezzi ed etichette` : 'Aggiungi frutta e verdura con il loro codice a barre'}</div></div><span class="chev">›</span></div></a>`}
     <input type="search" id="catQ" placeholder="Cerca per nome o codice" value="${esc(CAT.q)}" autocomplete="off">
     <div class="row wrap"><select id="catF" style="flex:1;min-width:200px"><option value="">Tutti i fornitori</option>${forn.map(f => `<option value="${esc(f.id)}" ${CAT.forn === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select>
       <label class="check"><input type="checkbox" id="catSC" ${CAT.senzaCodice ? 'checked' : ''}> Senza codice</label>
@@ -2844,12 +2925,11 @@ routes.cruscotto = () => {
       <div class="barra-m" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, n.perc || 0))}%"></i></div>
       <dl class="kv"><dt>Venduto (con IVA)</dt><dd>${fmtEuro(n.scansionato)}</dd><dt>Venduto senza IVA</dt><dd>${fmtEuro(n.ricavo)}</dd><dt>Costo della merce venduta</dt><dd>${fmtEuro(n.costo)}</dd></dl>` : '<p class="muted small" style="margin:0">Nessuna vendita scansionata in questo periodo.</p>'}
       ${n.senzaCosto ? `<div class="faint small">${n.senzaCosto === 1 ? '1 prodotto venduto non ha' : n.senzaCosto + ' prodotti venduti non hanno'} prezzo d'acquisto o IVA: non ${n.senzaCosto === 1 ? 'è contato' : 'sono contati'} nel margine.</div>` : ''}
-      <div class="faint small">Con il ricarico del 50% il margine è circa il 33%; con il 40%, circa il 29%. Frutta e verdura non sono contate.</div></div>`;
+      <div class="faint small">Con il ricarico del 50% il margine è circa il 33%; con il 40%, circa il 29%. Contano le vendite scansionate al Banco.</div></div>`;
   if (n.piuVenduti.length) html += `<div class="section-title"><h2>Più venduti</h2></div><div class="list venduti">${n.piuVenduti.map(([pid, e]) => {
     const p = prodotto(pid), dentro = `<div class="main"><div class="name">${esc(nomeVendita(e.v))}</div><div class="sub">${p ? fq(p, r3(e.qta)) : `${e.v.sfuso ? fmtKg(r3(e.qta)) : fmtNum(r3(e.qta)) + ' pz'} · non è più nel catalogo`}</div></div><span class="prezzo">${fmtEuro(r2(e.imp))}</span>`;
     return p ? `<a class="item" href="#prodotto/${encodeURIComponent(pid)}">${dentro}</a>` : `<div class="item">${dentro}</div>`;
   }).join('')}</div>`;
-  if (n.vendite.length) html += `<button class="btn ghost block" type="button" data-act="cru-prove">Erano prove? Cancella le vendite scansionate (${n.vendite.length})</button>`;
   const vc = venditeCategorie(CRU);
   if (vc.lista.some(e => e.imp > 0)) html += `<div class="section-title"><h2>Per categoria</h2></div>${barreHTML(vc.lista.filter(e => e.imp > 0).slice(0, 5).map(e => ({ nome: e.nome, valore: e.imp, href: '#categoria/' + encodeURIComponent(e.nome), sotto: Math.round(e.quota) + '% del venduto' + (e.perc != null ? ' · margine ' + fmtNum(e.perc) + '%' : '') })), vc.lista[0].imp)}`;
   html += `<a class="btn block" href="#categorie">Vendite per categoria e grafici</a>`;
@@ -3132,7 +3212,7 @@ function avvisoFile(r, nome) {
 }
 
 /* =========================================================
-   STORICO DI CASSA: gli incassi giorno per giorno, da correggere o cancellare (per esempio le prove)
+   STORICO DI CASSA: gli incassi giorno per giorno, da correggere o cancellare
    ========================================================= */
 const GIORNI_SETT = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
 const nomeGiorno = iso => { const d = isoToDate(iso), s = GIORNI_SETT[d.getDay()]; return `${s[0].toUpperCase() + s.slice(1)} ${d.getDate()} ${MESI[d.getMonth()]}`; };
@@ -3152,33 +3232,20 @@ routes.cassa = arg => {
     const sotto = c ? [c.frutta ? 'frutta e verdura ' + fmtEuro(c.frutta) : '', sc ? 'scansionato ' + fmtEuro(sc) : ''].filter(Boolean).join(' · ') : `manca la chiusura · scansionati ${fmtEuro(sc)}`;
     return `<button class="item" type="button" data-act="cassa-mod" data-d="${d}"><div class="main"><div class="name">${nomeGiorno(d)}</div><div class="sub ${c ? '' : 'arancio'}">${sotto}</div></div><span class="prezzo">${c ? fmtEuro(c.incasso) : '–'}</span><span class="chev">›</span></button>`;
   }).join('')}</div>` : '<div class="empty">Nessun incasso in questo mese.</div>';
-  html += `<div class="faint small" style="text-align:center">Tocca un giorno per correggere l'incasso o cancellarlo, per esempio una prova.</div>`;
-  const vm = [...S.vendite.values()].filter(v => (v.data || '').slice(0, 7) === mese);
-  if (vm.length) html += `<button class="btn ghost block" type="button" data-act="vendite-prova" data-m="${mese}">Erano prove: cancella tutte le vendite scansionate di ${nomeMese(mese).toLowerCase()} (${vm.length})</button>`;
+  html += `<div class="faint small" style="text-align:center">Tocca un giorno per correggere l'incasso o cancellarlo.</div>`;
   return { title: 'Storico di cassa', html, back: '#cruscotto', tab: 'banco' };
 };
-/* vendite di prova (scansioni fatte per provare): si cancellano rimettendo in magazzino quello che avevano tolto */
-async function cancellaVendite(lista, quando) {
-  if (!lista.length) return;
-  const tot = r2(lista.reduce((t, v) => t + (importo(v) || 0), 0));
-  if (!(await confirmBox(`Cancello ${lista.length === 1 ? 'la vendita' : 'le ' + lista.length + ' vendite'} ${quando} (${fmtEuro(tot)})? Usale solo se erano prove: i pezzi tornano in magazzino e non contano più nel cruscotto.`, { ok: 'Cancella', danger: true, title: 'Vendite di prova' }))) return;
-  for (const v of [...lista].sort((a, b) => b.creato - a.creato)) await annullaRiga(v.id, { silenzioso: true });
-  render();
-  setTimeout(() => toast(`${lista.length === 1 ? 'Cancellata 1 vendita' : 'Cancellate ' + lista.length + ' vendite'}: si può annullare con la freccia in alto`, { ms: 5000 }), 120);
-}
 function cassaModal(data, mese) {
   const c = data ? S.chiusure.get('c' + data) : null, oggi = todayISO();
   const proposta = mese && mese < oggi.slice(0, 7) ? `${mese}-01` : oggi;
   openModal(`${mhead(data ? nomeGiorno(data) : 'Incasso di un giorno')}
     ${data ? '' : `<label class="field">Giorno<input type="date" id="caData" max="${oggi}" value="${proposta}"></label>`}
     <label class="field">Incasso totale €<input type="text" inputmode="decimal" id="caInc" value="${c ? fmtImporto(c.incasso) : ''}" autocomplete="off" placeholder="es. 612,40"></label>
-    <label class="field">Di cui frutta e verdura € <span class="hint">se la cassa non lo separa, lascia vuoto</span><input type="text" inputmode="decimal" id="caFr" value="${c && c.frutta != null ? fmtImporto(c.frutta) : ''}" autocomplete="off"></label>
+    <label class="field">Di cui frutta e verdura non scansionata € <span class="hint">se la scansionate al Banco, o la cassa non lo separa, lascia vuoto</span><input type="text" inputmode="decimal" id="caFr" value="${c && c.frutta != null ? fmtImporto(c.frutta) : ''}" autocomplete="off"></label>
     ${data ? `<div class="faint small">Scansionato nell'app quel giorno: ${fmtEuro(scansionatoDel(data))}${venditeDel(data).length ? ` (${venditeDel(data).length} ${venditeDel(data).length === 1 ? 'vendita' : 'vendite'})` : ''}</div>` : ''}
     <button class="btn primary block" type="button" data-x="ok">Salva</button>
     ${c ? `<button class="btn danger block" type="button" data-x="del">Cancella l'incasso di questo giorno</button>` : ''}
-    ${data && venditeDel(data).length ? `<button class="btn ghost block" type="button" data-x="vend">Erano prove: cancella le vendite scansionate</button>` : ''}`, b => {
-    const vb = b.querySelector('[data-x=vend]');
-    if (vb) vb.onclick = async () => { const l = venditeDel(data); closeModal(); await cancellaVendite(l, `del ${fmtDate(data)}`); };
+`, b => {
     b.querySelector('[data-x=ok]').onclick = async () => {
       const d = data || b.querySelector('#caData').value;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d > oggi) { toast('Scegli un giorno, al massimo oggi', { err: true }); return; }
@@ -3326,8 +3393,6 @@ function venditeCategorie(f) {
   return { da, a, lista, totale: r2(totale) };
 }
 const venditeMese = mese => venditeCategorie([`${mese}-01`, `${mese}-31`]);
-/* vendite di prodotti che non sono più nel catalogo (di solito prove) */
-const venditeEliminati = (da, a) => [...S.vendite.values()].filter(v => v.prodottoId && !S.prodotti.has(v.prodottoId) && v.data >= da && v.data <= a);
 const qtaCat = e => [e.pz ? `${fmtNum(r3(e.pz))} pz` : '', e.kg ? fmtKg(e.kg) : '', e.l ? fmtLitri(e.l) : ''].filter(Boolean).join(' + ');
 /* barre orizzontali: una riga per voce (nome e valore sopra, barra sotto), dal più al meno */
 function barreHTML(voci, max) {
@@ -3382,7 +3447,7 @@ routes.categorie = () => {
     nome: e.nome, valore: e.imp, href: '#categoria/' + encodeURIComponent(e.nome),
     sotto: e.imp ? [qtaCat(e), Math.round(e.quota) + '% del venduto', e.perc != null ? 'margine ' + fmtNum(e.perc) + '%' : ''].filter(Boolean).join(' · ') : `nessuna vendita · in negozio ${fmtEuro(r2(e.merce))} di merce`
   })), d.lista[0].imp) : '<div class="empty">Nessuna vendita scansionata in questo periodo.</div>';
-  html += `<div class="faint small">Dalla più venduta alla meno venduta. Contano le vendite scansionate al banco (frutta e verdura no). Tocca una categoria per vedere i suoi prodotti.</div>`;
+  html += `<div class="faint small">Dalla più venduta alla meno venduta. Contano le vendite scansionate al banco. Tocca una categoria per vedere i suoi prodotti.</div>`;
   return {
     title: 'Vendite e grafici', html, back: '#cruscotto', tab: 'home',
     mount: b => {
@@ -3400,11 +3465,10 @@ routes.categorie = () => {
 routes.categoria = arg => {
   const nome = arg || SENZA_CAT, d = venditeCategorie(VC.periodo), e = d.lista.find(x => x.nome === nome);
   if (nome === ELIMINATI) {
-    const [da, a] = periodo(VC.periodo), voci = e ? [...e.prodotti.values()].filter(x => x.imp > 0).sort((x, y) => y.imp - x.imp) : [], tutte = venditeEliminati(da, a);
+    const voci = e ? [...e.prodotti.values()].filter(x => x.imp > 0).sort((x, y) => y.imp - x.imp) : [];
     let html = `<div class="chips">${PERIODI_CRU.map(([k, l]) => `<button class="chip ${VC.periodo === k ? 'on' : ''}" type="button" data-act="vc-periodo" data-f="${k}">${l}</button>`).join('')}</div>
-      <div class="notice"><span>Vendite scansionate di prodotti che poi sono stati eliminati dal catalogo. Di solito sono prove: se è così, cancellale.</span></div>`;
+      <div class="notice"><span>Vendite scansionate di prodotti che poi sono stati eliminati dal catalogo.</span></div>`;
     html += voci.length ? `<div class="list">${voci.map(x => `<div class="item"><div class="main"><div class="name">${esc(nomeVendita(x.v))}</div><div class="sub">${x.v.sfuso ? fmtKg(r3(x.qta)) : fmtNum(r3(x.qta)) + ' pz'}</div></div><span class="prezzo">${fmtEuro(r2(x.imp))}</span></div>`).join('')}</div>` : '<div class="empty">Nessuna vendita in questo periodo.</div>';
-    if (tutte.length) html += `<button class="btn danger block" type="button" data-act="elim-prove" data-f="${VC.periodo}">Erano prove: cancellale (${tutte.length})</button>`;
     return { title: nome, html, back: '#categorie', tab: 'home' };
   }
   const prodotti = [...S.prodotti.values()].filter(p => (catDi(p) || SENZA_CAT) === nome);
@@ -3854,8 +3918,6 @@ A['fa-pag-fatto'] = async el => {
   render();
 };
 A['cru-periodo'] = el => { CRU = VC.periodo = el.dataset.f; render(); };
-A['cru-prove'] = () => { const n = numeriPeriodo(CRU); cancellaVendite(n.vendite, n.da === n.a ? `del ${fmtDate(n.da)}` : `dal ${fmtDate(n.da)} al ${fmtDate(n.a)}`); };
-A['elim-prove'] = el => { const [da, a] = periodo(el.dataset.f); cancellaVendite(venditeEliminati(da, a), 'dei prodotti eliminati'); };
 A['cassa-nuova'] = el => cassaModal(null, el.dataset.m);
 A['vc-periodo'] = el => { VC.periodo = CRU = el.dataset.f; render(); };
 A['vc-serie'] = el => { VC.serie = el.dataset.s; render(); };
@@ -3863,7 +3925,10 @@ A['cat-proponi'] = () => proponiCategorie();
 A['cat-vedi'] = el => { CAT = { ...CAT, q: '', forn: '', cat: el.dataset.c, senzaCodice: false, sfuso: false, limite: 60, sel: null }; location.hash = '#catalogo'; };
 A['cat-categoria'] = () => { const ids = [...(CAT.sel || [])].filter(id => S.prodotti.has(id)); if (!ids.length) { toast('Scegli prima i prodotti', { err: true }); return; } categoriaModal(ids); };
 A['cassa-mod'] = el => cassaModal(el.dataset.d);
-A['vendite-prova'] = el => cancellaVendite([...S.vendite.values()].filter(v => (v.data || '').slice(0, 7) === el.dataset.m), `di ${nomeMese(el.dataset.m).toLowerCase()}`);
+A['fv-nuovo'] = () => fvNuovoModal();
+A['fv-prezzo'] = el => { const p = prodotto(el.dataset.id); if (p) fvPrezzoModal(p); };
+A['fv-eti'] = el => { const p = prodotto(el.dataset.id); if (p) stampaModal([p.id], { copie: { [p.id]: 1 } }); };
+A['fv-eti-tutte'] = () => { const ids = prodottiFV().map(p => p.id); if (ids.length) stampaModal(ids); };
 A['listini-excel'] = () => listiniExcel().catch(e => toast('Non riesco a preparare il file: ' + e.message, { err: true }));
 A['listino-excel'] = el => listiniExcel(el.dataset.id).catch(e => toast('Non riesco a preparare il file: ' + e.message, { err: true }));
 A['riep-excel'] = el => riepilogoExcel(el.dataset.m).catch(e => toast('Non riesco a preparare il file: ' + e.message, { err: true }));
