@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.20.1';
+const VERSIONE = '1.20.2';
 
 /* =========================================================
    Utilità
