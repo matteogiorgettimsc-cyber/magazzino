@@ -448,3 +448,7 @@ svg.grafico{width:100%;height:auto;display:block;touch-action:manipulation}
 .salva-riga{text-align:center}
 .salva-stato{color:var(--ink-faint);font-size:.86rem}
 .salva-stato.err{color:var(--red-dark);font-weight:650}
+
+/* passi numerati nelle impostazioni */
+.passi{margin:0;padding-left:22px;font-size:.9rem;color:var(--ink-soft);line-height:1.45}
+.passi li{margin:4px 0}

@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.19.0';
+const VERSIONE = '1.20.0';
 
 /* =========================================================
    Utilità
@@ -3647,6 +3647,12 @@ async function ricevi() {
   const archivi = SYNC_STORES.join(','), tutto = S.meta.syncArchivi !== archivi;
   const da = S.meta.syncDa && !tutto ? new Date(tsMs(S.meta.syncDa) - 15000).toISOString() : '1970-01-01T00:00:00Z';
   let cursore = null, max = S.meta.syncDa || null, n = 0;
+  // prima una domanda da una lettura sola: c'è qualcosa di più recente dell'ultima volta?
+  // (senza, dopo un invio grosso si rileggevano a ogni giro tutti i documenti degli ultimi 15 secondi)
+  if (!tutto && S.meta.syncDa) {
+    const ult = ((await chiamaFs(':runQuery', { structuredQuery: { from: [{ collectionId: 'dati' }], orderBy: [{ field: { fieldPath: 'srv' }, direction: 'DESCENDING' }], limit: 1 } })) || []).filter(x => x.document);
+    if (!ult.length || tsMs(ult[0].document.fields.srv.timestampValue) <= tsMs(S.meta.syncDa)) return 0;
+  }
   for (;;) {
     const q = {
       from: [{ collectionId: 'dati' }],
@@ -3808,6 +3814,19 @@ function cardNotifiche() {
       <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="push-prova">Prova una notifica</button><button class="btn ghost" type="button" data-act="push-off">Disattiva</button></div>`
     : `<button class="btn primary block" type="button" data-act="push-on">Attiva su questo telefono</button>`) + '</div>';
 }
+/* foglio Google collegato (dalla 1.20.0): lo script sta in foglio/Magazzino.gs e si incolla una volta nel foglio */
+function cardFoglio() {
+  return `<div class="card"><h2>Foglio Google collegato</h2>
+    <p class="muted small">Un Foglio Google nell'account del negozio, collegato all'app nei due sensi: i <b>listini</b> (prezzi, nomi, codici, note, prodotti nuovi) si cambiano anche dal foglio e arrivano qui; <b>magazzino, scadenze e riepilogo</b> del mese si aggiornano da soli. Si prepara una volta, dal PC.</p>
+    <ol class="passi">
+      <li>Entra in Google con l'account del negozio e apri <b>sheets.new</b> (un foglio nuovo). Dagli un nome.</li>
+      <li>Menu <b>Estensioni → Apps Script</b>: cancella quello che c'è, incolla il codice (qui sotto) e premi <b>Salva</b>.</li>
+      <li>Torna al foglio e ricarica la pagina: compare il menu <b>Magazzino</b>. Scegli <b>Collega all'app…</b> e dai il permesso (se Google dice «app non verificata»: Avanzate → Vai a…; è il vostro script).</li>
+      <li>Di nuovo <b>Magazzino → Collega all'app…</b>, scrivi la password del negozio: in un paio di minuti compaiono i fogli.</li>
+    </ol>
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="foglio-copia">Copia il codice</button><a class="btn" href="foglio/Magazzino.gs" target="_blank" rel="noopener">Apri il codice</a></div>
+    <div class="faint small">Il foglio si aggiorna ogni 10 minuti (o subito dal menu Magazzino). I fogli nascosti «_dati» e «_coda» servono allo script: non cancellarli.</div></div>`;
+}
 /* =========================================================
    IMPOSTAZIONI, BACKUP
    ========================================================= */
@@ -3822,6 +3841,7 @@ routes.impostazioni = () => {
       <button class="btn block" type="button" data-act="ripristina">Ripristina da un backup</button></div>
     ${cardSync()}
     ${cardNotifiche()}
+    ${cardFoglio()}
     <div class="card"><h2>Catalogo</h2>
       <dl class="kv"><dt>Prodotti</dt><dd>${S.prodotti.size}</dd><dt>Fornitori</dt><dd>${S.fornitori.size}</dd><dt>Con codice a barre</dt><dd>${[...S.prodotti.values()].filter(p => (p.codici || []).length).length}</dd><dt>Confezioni in negozio</dt><dd>${lottiAttivi().length}</dd></dl>
       <button class="btn block" type="button" data-act="import-catalogo">Carica catalogo dai listini</button>
@@ -4092,6 +4112,13 @@ A['sync-collega'] = async el => {
     toast(e.message, { err: true });
     if (document.contains(el)) { el.disabled = false; el.textContent = 'Collega questo dispositivo'; }
   }
+};
+A['foglio-copia'] = async () => {
+  try {
+    const r = await fetch('foglio/Magazzino.gs', { cache: 'no-store' }); if (!r.ok) throw new Error(r.status);
+    await navigator.clipboard.writeText(await r.text());
+    toast('Codice copiato: incollalo in Apps Script');
+  } catch (e) { window.open('foglio/Magazzino.gs', '_blank'); toast('Si apre il codice: selezionalo tutto e copialo', { ms: 6000 }); }
 };
 A['push-on'] = async el => {
   el.disabled = true; el.textContent = 'Un momento…';
