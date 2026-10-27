@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.20.5';
+const VERSIONE = '1.21.0';
 
 /* =========================================================
    Utilità
@@ -4129,10 +4129,38 @@ A['push-on'] = async el => {
   render();
 };
 A['push-off'] = async () => { try { await disattivaNotifiche(); toast('Notifiche disattivate su questo telefono'); } catch (e) { toast(e.message, { err: true }); } render(); };
+/* stesso testo della notifica del mattino: copia di testoScadenze in notifiche/scadenze.mjs (se cambi qui, cambia anche là) */
+function testoNotifica(voci) {
+  if (!voci.length) return null;
+  voci = voci.slice().sort((a, b) => a.d - b.d || a.nome.localeCompare(b.nome, 'it'));
+  const corto = n => { n = String(n || '').replace(/\s+/g, ' ').trim() || 'Senza nome'; return n.length > 26 ? n.slice(0, 25).trimEnd() + '…' : n; };
+  const gruppi = [[voci.filter(v => v.d < 0), n => n === 1 ? 'Scaduto' : 'Scaduti', false], [voci.filter(v => v.d === 0), () => 'Oggi', false],
+    [voci.filter(v => v.d === 1), () => 'Domani', false], [voci.filter(v => v.d > 1), () => 'Prossimi giorni', true]].filter(g => g[0].length);
+  const riga = ([vv, et, gg]) => {
+    let t = et(vv.length) + ': ', n = 0;
+    for (const v of vv) { const pezzo = (n ? ', ' : '') + corto(v.nome) + (gg ? ` (${v.d} gg)` : ''); if (n && (t + pezzo).length > 64) break; t += pezzo; n++; }
+    return t + (vv.length > n ? ` e altri ${vv.length - n}` : '');
+  };
+  const scad = voci.filter(v => v.d < 0).length, oggi = voci.filter(v => v.d === 0).length, presto = voci.length - scad - oggi;
+  const conta = [scad ? `${scad} scadut${scad === 1 ? 'o' : 'i'}` : '', oggi ? `${oggi} oggi` : '', presto ? `${presto} a breve` : ''].filter(Boolean).join(', ');
+  return { title: 'Scadenze: ' + conta, body: gruppi.map(riga).join('\n'), n: voci.length };
+}
+function vociScadenze() {
+  const per = new Map();
+  for (const l of S.lotti.values()) {
+    if (l.stato !== 'attivo' || !l.scadenza || l.gestito || !(l.quantita > 0)) continue;
+    const p = S.prodotti.get(l.prodottoId); if (!p) continue;
+    const d = daysUntil(l.scadenza), s = soglie(p.tipoScadenza === 'entro' ? 'entro' : 'preferibilmente');
+    if (d <= s[0] && (!per.has(l.prodottoId) || d < per.get(l.prodottoId).d)) per.set(l.prodottoId, { nome: p.nome, d });
+  }
+  return [...per.values()];
+}
 A['push-prova'] = async () => {
   try {
     const reg = await navigator.serviceWorker.ready;
-    await reg.showNotification(settings().negozio + ': prova', { body: 'Le notifiche arrivano. Ogni mattina qui trovi le scadenze.', icon: 'icons/icon-192.png', tag: 'prova', data: { url: '#scadenze' } });
+    const t = testoNotifica(vociScadenze()) || { title: 'Scadenze: niente da segnalare', body: 'Oggi non scade niente. Quando c\'è qualcosa, la notifica arriva ogni mattina verso le 8.' };
+    await reg.showNotification(t.title, { body: t.body, icon: 'icons/icon-192.png', badge: 'icons/badge-96.png', lang: 'it', tag: 'scadenze', renotify: true, data: { url: '#scadenze/urgenti' } });
+    toast('Così arriva ogni mattina verso le 8');
   } catch (e) { toast('Non riesco a mostrare la notifica: ' + e.message, { err: true }); }
 };
 A['sync-ora'] = async () => { await giro(); if (SYNC.stato === 'ok') toast('Sincronizzato'); else toast(testoStato(), { err: true }); render(); };

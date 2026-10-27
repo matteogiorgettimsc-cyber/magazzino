@@ -68,23 +68,34 @@ const scrivi = (st, id, set, del = false) => ({
 const giorni = (da, a) => Math.round((Date.parse(a + 'T12:00:00Z') - Date.parse(da + 'T12:00:00Z')) / 86400000);
 
 /* il testo della notifica: scaduti, oggi, e i «rossi» dei prossimi giorni (come nella pagina Scadenze) */
+/* testo della notifica: una riga per gruppo (scaduti, oggi, domani, prossimi giorni), ogni prodotto una volta sola.
+   La stessa funzione è in app.js (testoNotifica) per «Prova una notifica»: se cambi qui, cambia anche là. */
+export function testoScadenze(voci) {
+  if (!voci.length) return null;
+  voci = voci.slice().sort((a, b) => a.d - b.d || a.nome.localeCompare(b.nome, 'it'));
+  const corto = n => { n = String(n || '').replace(/\s+/g, ' ').trim() || 'Senza nome'; return n.length > 26 ? n.slice(0, 25).trimEnd() + '…' : n; };
+  const gruppi = [[voci.filter(v => v.d < 0), n => n === 1 ? 'Scaduto' : 'Scaduti', false], [voci.filter(v => v.d === 0), () => 'Oggi', false],
+    [voci.filter(v => v.d === 1), () => 'Domani', false], [voci.filter(v => v.d > 1), () => 'Prossimi giorni', true]].filter(g => g[0].length);
+  const riga = ([vv, et, gg]) => {
+    let t = et(vv.length) + ': ', n = 0;
+    for (const v of vv) { const pezzo = (n ? ', ' : '') + corto(v.nome) + (gg ? ` (${v.d} gg)` : ''); if (n && (t + pezzo).length > 64) break; t += pezzo; n++; }
+    return t + (vv.length > n ? ` e altri ${vv.length - n}` : '');
+  };
+  const scad = voci.filter(v => v.d < 0).length, oggi = voci.filter(v => v.d === 0).length, presto = voci.length - scad - oggi;
+  const conta = [scad ? `${scad} scadut${scad === 1 ? 'o' : 'i'}` : '', oggi ? `${oggi} oggi` : '', presto ? `${presto} a breve` : ''].filter(Boolean).join(', ');
+  return { title: 'Scadenze: ' + conta, body: gruppi.map(riga).join('\n'), n: voci.length };
+}
 export function componi(lotti, prodotti, settings, oggi) {
   const soglie = { preferibilmente: [7, 15, 30], entro: [2, 5, 10], ...((settings && settings.soglie) || {}) };
-  const voci = [];
+  const per = new Map();   // un prodotto una volta sola, con la confezione che scade prima
   for (const l of lotti) {
     if (l.stato !== 'attivo' || !l.scadenza || l.gestito || !(l.quantita > 0)) continue;
     const p = prodotti.get(l.prodottoId); if (!p) continue;
-    const d = giorni(oggi, l.scadenza), s = soglie[p.tipoScadenza === 'entro' ? 'entro' : 'preferibilmente'];
-    if (d <= s[0]) voci.push({ nome: p.nome, d });
+    const d = giorni(oggi, l.scadenza), s = soglie[p.tipoScadenza === 'entro' ? 'entro' : 'preferibilmente'] || soglie.preferibilmente;
+    if (d <= s[0] && (!per.has(l.prodottoId) || d < per.get(l.prodottoId).d)) per.set(l.prodottoId, { nome: p.nome, d });
   }
-  if (!voci.length) return null;
-  voci.sort((a, b) => a.d - b.d || a.nome.localeCompare(b.nome, 'it'));
-  const scad = voci.filter(v => v.d < 0).length, oggiN = voci.filter(v => v.d === 0).length, presto = voci.length - scad - oggiN;
-  const quando = d => d < 0 ? 'scaduto' : d === 0 ? 'oggi' : d === 1 ? 'domani' : `tra ${d} giorni`;
-  const conta = [scad ? `${scad} scadut${scad === 1 ? 'o' : 'i'}` : '', oggiN ? `${oggiN} scad${oggiN === 1 ? 'e' : 'ono'} oggi` : '', presto ? `${presto} nei prossimi giorni` : ''].filter(Boolean).join(' · ');
-  const nomi = voci.slice(0, 5).map(v => `${v.nome} (${quando(v.d)})`).join(', ') + (voci.length > 5 ? ` e altri ${voci.length - 5}` : '');
-  const neg = (settings && settings.negozio) || 'La Spesa Sfusa';
-  return { title: `${neg}: scadenze`, body: `${conta}\n${nomi}`, url: '#scadenze/urgenti', tag: 'scadenze-' + oggi, n: voci.length };
+  const t = testoScadenze([...per.values()]);
+  return t && { ...t, url: '#scadenze/urgenti', tag: 'scadenze' };
 }
 
 async function main() {
