@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.21.0';
+const VERSIONE = '1.22.0';
 
 /* =========================================================
    Utilità
@@ -51,12 +51,17 @@ function prezzoCalcolato(p) {
   return Math.ceil(acq * (1 + ric / 100) * (1 + iva / 100) * 10 - 1e-9) / 10;
 }
 /* sfuso: il magazzino si conta in kg (in litri per i liquidi); il prezzo di vendita è al kg, all'etto o al litro.
-   I prezzi restano salvati al kg (o al litro): l'etto è solo il modo di mostrarli, 1 etto = 1/10 di kg. */
+   I prezzi restano salvati al kg (o al litro): l'etto è solo il modo di mostrarli, 1 etto = 1/10 di kg.
+   Sfuso «al pezzo» (dalla 1.22.0, unita 'pz'): sfuso nel contenitore ma si vende a pezzi. Magazzino e prezzi a pezzo,
+   un'etichetta sola per il contenitore; per tutto il resto (banco, arrivi, cucina, spreco) è come un prodotto a pezzi.
+   isSfuso vuol dire «a peso o alla spina»: per lo sfuso al pezzo è falso. */
 const r3 = x => Math.round((+x || 0) * 1000) / 1000;
-const isSfuso = p => !!(p && p.sfuso);
+const isSfuso = p => !!(p && p.sfuso && p.unita !== 'pz');
+const sfusoPezzi = p => !!(p && p.sfuso && p.unita === 'pz');
 const UNITA = { kg: { al: 'al kg', corto: '/kg', f: 1 }, etto: { al: "all'etto", corto: '/etto', f: 0.1 }, l: { al: 'al litro', corto: '/l', f: 1 } };
 const unitaDi = p => isSfuso(p) && UNITA[p.unita] ? p.unita : 'kg';
 const inLitri = p => unitaDi(p) === 'l';
+const unitaScelta = p => sfusoPezzi(p) ? 'pz' : unitaDi(p);   // quella da mostrare nel campo «Si vende»
 function fmtKg(q) {
   q = r3(q);
   if (Math.abs(q) < 1) return `${Math.round(q * 1000)} g`;
@@ -540,10 +545,10 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
     <label class="field">Fornitore<select id="npForn"><option value="">— scegli —</option>${forn.map(f => `<option value="${esc(f.id)}" ${f.id === last ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></label>
     <label class="field">Formato <span class="hint">es. 500 g, 1 l, 6 pz</span><input type="text" id="npFormato" autocomplete="off"></label>
     <label class="field">Tipo di scadenza<select id="npTipo"><option value="preferibilmente">Preferibilmente entro (secchi, conserve)</option><option value="entro">Da consumarsi entro (freschi)</option></select></label>
-    <label class="check"><input type="checkbox" id="npSfuso"> Sfuso (a peso o alla spina)</label>
+    <label class="check"><input type="checkbox" id="npSfuso"> Sfuso (a peso, alla spina o a pezzo)</label>
     <div class="stack" id="npSaccoBox" hidden>
       ${campoUnita('npUnita', 'kg')}
-      <label class="field"><span data-sacco-lab>${testoSacco('kg')}</span> <span class="hint" data-sacco-hint>${hintSacco('kg')}</span><input type="text" inputmode="decimal" id="npSacco" autocomplete="off"></label>
+      <label class="field" data-sacco-campo><span data-sacco-lab>${testoSacco('kg')}</span> <span class="hint" data-sacco-hint>${hintSacco('kg')}</span><input type="text" inputmode="decimal" id="npSacco" autocomplete="off"></label>
     </div>
     ${code ? '' : `<label class="check"><input type="checkbox" id="npCrea"> Non ha il codice a barre: crealo e stampa le etichette</label>`}
     <button class="btn primary block" type="button" id="npSave">Crea prodotto</button>`, b => {
@@ -554,10 +559,10 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
       const n = b.querySelector('#npNome').value.trim();
       if (!n) { toast('Scrivi il nome del prodotto', { err: true }); return; }
       const fid = b.querySelector('#npForn').value;
-      const sf = b.querySelector('#npSfuso').checked, sacco = parseNum(b.querySelector('#npSacco').value);
+      const sf = b.querySelector('#npSfuso').checked, un = sf ? b.querySelector('#npUnita').value : undefined, sacco = un === 'pz' ? null : parseNum(b.querySelector('#npSacco').value);
       const crea = !code && b.querySelector('#npCrea').checked;
       const codici = code ? [code] : crea ? [await codiceInterno()] : [];
-      const p = { id: uid('p'), nome: n, fornitoreId: fid, categoria: '', formato: b.querySelector('#npFormato').value.trim(), prezzoAcquisto: null, iva: null, prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici, tipoScadenza: b.querySelector('#npTipo').value, note: '', origine: 'Creato nell\'app', sfuso: sf, unita: sf ? b.querySelector('#npUnita').value : undefined, pesoSacco: sf && sacco > 0 ? sacco : null };
+      const p = { id: uid('p'), nome: n, fornitoreId: fid, categoria: '', formato: b.querySelector('#npFormato').value.trim(), prezzoAcquisto: null, iva: null, prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici, tipoScadenza: b.querySelector('#npTipo').value, note: '', origine: 'Creato nell\'app', sfuso: sf, unita: un, pesoSacco: sf && sacco > 0 ? sacco : null };
       if (code) { const prima = byCode(code); if (prima) await save('prodotti', { ...prima, codici: prima.codici.filter(c => c !== code) }); }
       await save('prodotti', p); if (fid) await setMeta('ultimoFornitore', fid);
       closeModal(); toast(`Creato: ${p.nome}`); onDone && onDone(p);
@@ -566,10 +571,11 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
   });
 }
 /* campi dello sfuso, uguali nel nuovo prodotto e nella scheda */
-const campoUnita = (id, u) => `<label class="field">Si vende<select id="${id}">${[['kg', 'al kg'], ['etto', "all'etto"], ['l', 'al litro (detersivi alla spina)']].map(([v, t]) => `<option value="${v}" ${u === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
+const campoUnita = (id, u) => `<label class="field">Si vende<select id="${id}">${[['kg', 'al kg'], ['etto', "all'etto"], ['l', 'al litro (detersivi alla spina)'], ['pz', 'al pezzo']].map(([v, t]) => `<option value="${v}" ${u === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
 const testoSacco = u => u === 'l' ? 'Litri della tanica' : 'Peso del sacco in kg';
 const hintSacco = u => u === 'l' ? 'come arriva dal fornitore, es. 5 o 25' : 'come arriva dal fornitore, es. 5 · 1 per la frutta secca';
 function aggiornaTestiSacco(b, u) {
+  $$('[data-sacco-campo]', b).forEach(x => { x.hidden = u === 'pz'; });   // al pezzo: niente peso del sacco
   $$('[data-sacco-lab]', b).forEach(x => { x.textContent = testoSacco(u); });
   $$('[data-sacco-hint]', b).forEach(x => { x.textContent = hintSacco(u); });
 }
@@ -581,13 +587,13 @@ function etichettaPronta(pid, copie = null) {
   etiPronta = { id: pid, t: Date.now() };
   setTimeout(() => {
     const p = prodotto(pid); if (!p) return;
-    const apri = () => stampaModal([p.id], { titolo: isSfuso(p) ? 'Etichetta pronta' : 'Etichette pronte', copie: { [p.id]: copie ?? copieIniziali(p) } });
+    const apri = () => stampaModal([p.id], { titolo: p.sfuso ? 'Etichetta pronta' : 'Etichette pronte', copie: { [p.id]: copie ?? copieIniziali(p) } });
     if (modal.open) toast(`Codice creato per ${p.nome}`, { ms: 8000, action: { label: 'Stampa etichette', run: apri } });
     else apri();
   }, 350);
 }
 /* quante etichette proporre: una per lo sfuso (il contenitore), una per pezzo in negozio per gli altri */
-const copieIniziali = p => isSfuso(p) ? 1 : Math.min(48, Math.max(1, Math.round(giacenza(p.id)) || 1));
+const copieIniziali = p => p.sfuso ? 1 : Math.min(48, Math.max(1, Math.round(giacenza(p.id)) || 1));
 /* codice creato dall'app (29…): il prodotto non ha il codice del produttore e si riconosce dall'etichetta */
 const codiceNegozio = p => ((p && p.codici) || []).find(c => /^29\d{11}$/.test(c)) || null;
 async function creaCodiceEStampa(p, copie = null) {
@@ -600,9 +606,9 @@ function schedaRapida(p) {
   const lotti = lottiAttivi().filter(l => l.prodottoId === p.id).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
   const u = ultimoOrdine(p.id);
   openModal(`${mhead(p.nome)}
-    <div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${p.sfuso ? ' · sfuso' + (p.pesoSacco ? `, ${nomeSacco(p, 2)} da ${fmtSf(p, p.pesoSacco)}` : '') : ''}</div>
+    <div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${p.sfuso ? ' · sfuso' + (sfusoPezzi(p) ? ' a pezzo' : '') + (isSfuso(p) && p.pesoSacco ? `, ${nomeSacco(p, 2)} da ${fmtSf(p, p.pesoSacco)}` : '') : ''}</div>
     ${lotti.length ? `<div class="list">${lotti.map(l => rigaConfezione(l)).join('')}</div>` : '<div class="faint">Nessuna confezione registrata in negozio.</div>'}
-    ${u ? `<div class="faint">Ultimo ordine: ${p.sfuso ? fmtSacchi(u.qta, p) : fmtNum(u.qta)} il ${fmtDate(u.data)}</div>` : ''}
+    ${u ? `<div class="faint">Ultimo ordine: ${isSfuso(p) ? fmtSacchi(u.qta, p) : fmtNum(u.qta)} il ${fmtDate(u.data)}</div>` : ''}
     <div class="stack">
       <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn primary" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn primary" type="button" data-act="sr-inventario" data-id="${esc(p.id)}">Inventario</button></div>
       <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button><button class="btn" type="button" data-act="sr-cucina" data-id="${esc(p.id)}">Per la cucina</button></div>
@@ -900,11 +906,11 @@ routes.carico = arg => {
   } else {
     const info = inv ? null : infoOrdine(p);
     const pr = anteprimaScad();
-    const kgMode = p.sfuso && CS.unita === 'kg', virgola = kgMode && CS.field === 'qta';
+    const kgMode = isSfuso(p) && CS.unita === 'kg', virgola = kgMode && CS.field === 'qta';
     html += `<div class="card">
       <div class="row"><div class="spacer"><h2>${esc(p.nome)}</h2><div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>${tagTipo(p)}</div>
-      ${info ? `<div class="notice green"><span>In ordine: <b>${p.sfuso ? fmtSacchi(info.qta, p) : fmtNum(info.qta)}</b> · già arrivati <b>${fmtNum(r3(info.ric))}</b></span></div>` : ''}
-      ${p.sfuso && !p.pesoSacco && !inv && catDi(p) !== FV ? `<div class="notice"><span>Sfuso senza ${inLitri(p) ? 'litri della tanica' : 'peso del sacco'}: scrivi i <b>${nomeBase(p)}</b>. Per contare a ${nomeSacco(p, 2)}, scrivi ${inLitri(p) ? 'i litri della tanica' : 'il peso del sacco'} nella <a href="#prodotto/${encodeURIComponent(p.id)}"><b>scheda</b></a>.</span></div>` : ''}
+      ${info ? `<div class="notice green"><span>In ordine: <b>${isSfuso(p) ? fmtSacchi(info.qta, p) : fmtNum(info.qta)}</b> · già arrivati <b>${fmtNum(r3(info.ric))}</b></span></div>` : ''}
+      ${isSfuso(p) && !p.pesoSacco && !inv && catDi(p) !== FV ? `<div class="notice"><span>Sfuso senza ${inLitri(p) ? 'litri della tanica' : 'peso del sacco'}: scrivi i <b>${nomeBase(p)}</b>. Per contare a ${nomeSacco(p, 2)}, scrivi ${inLitri(p) ? 'i litri della tanica' : 'il peso del sacco'} nella <a href="#prodotto/${encodeURIComponent(p.id)}"><b>scheda</b></a>.</span></div>` : ''}
       <div class="kp-fields">
         <button type="button" class="kp-field ${CS.field === 'scad' ? 'on' : ''}" data-act="kp-field" data-f="scad" ${CS.senza ? 'disabled' : ''}><small>Scadenza</small><b>${CS.senza ? '—' : fmtScadDigits(CS.scad)}</b></button>
         <div class="kp-qta ${kgMode ? 'solo' : ''}">
@@ -913,7 +919,7 @@ routes.carico = arg => {
           ${kgMode ? '' : '<button type="button" class="kp-pm" data-act="qta+" aria-label="Più uno">+</button>'}
         </div>
       </div>
-      ${p.sfuso ? `<div class="sf-unita">${p.pesoSacco ? `<div class="segmented mini"><button type="button" data-act="unita" data-u="sacchi" class="${CS.unita === 'sacchi' ? 'on' : ''}">${inLitri(p) ? 'Taniche' : 'Sacchi'}</button><button type="button" data-act="unita" data-u="kg" class="${CS.unita === 'kg' ? 'on' : ''}">${inLitri(p) ? 'Litri' : 'Kg'}</button></div>` : ''}<span>${CS.unita === 'sacchi' ? `${fmtSacchi(parseInt(CS.qta, 10) || 0, p)} da ${fmtSf(p, p.pesoSacco)} = <b>${fmtSf(p, qtaCarico(p).q)}</b>` : `Scrivi i ${nomeBase(p)} con la virgola, es. 2,5`}</span></div>` : ''}
+      ${isSfuso(p) ? `<div class="sf-unita">${p.pesoSacco ? `<div class="segmented mini"><button type="button" data-act="unita" data-u="sacchi" class="${CS.unita === 'sacchi' ? 'on' : ''}">${inLitri(p) ? 'Taniche' : 'Sacchi'}</button><button type="button" data-act="unita" data-u="kg" class="${CS.unita === 'kg' ? 'on' : ''}">${inLitri(p) ? 'Litri' : 'Kg'}</button></div>` : ''}<span>${CS.unita === 'sacchi' ? `${fmtSacchi(parseInt(CS.qta, 10) || 0, p)} da ${fmtSf(p, p.pesoSacco)} = <b>${fmtSf(p, qtaCarico(p).q)}</b>` : `Scrivi i ${nomeBase(p)} con la virgola, es. 2,5`}</span></div>` : ''}
       <div class="date-preview ${pr.err ? 'err' : ''} ${pr.faint ? 'faint' : ''}">${esc(pr.t)}</div>
       <div class="keypad">${['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(k => `<button type="button" data-act="kp" data-k="${k}">${k}</button>`).join('')}
         ${virgola ? `<button type="button" data-act="kp" data-k=",">,</button><button type="button" data-act="kp" data-k="0">0</button><button type="button" data-act="kp" data-k="back" aria-label="Cancella">⌫</button>
@@ -925,7 +931,7 @@ routes.carico = arg => {
     const gia = lottiAttivi().filter(l => l.prodottoId === p.id).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
     if (gia.length) {
       html += `<div class="section-title"><h2>Già in negozio</h2><span class="count">${fq(p, gia.reduce((t, l) => t + (+l.quantita || 0), 0))}</span></div>
-        <div class="faint small">Per correggere una data o ${p.sfuso ? 'le quantità già caricate' : 'i pezzi già caricati'} tocca <b>Modifica</b>.</div>
+        <div class="faint small">Per correggere una data o ${isSfuso(p) ? 'le quantità già caricate' : 'i pezzi già caricati'} tocca <b>Modifica</b>.</div>
         <div class="list">${gia.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>`;
     }
   }
@@ -943,11 +949,11 @@ async function caricoScan(code) {
   const go = p2 => { CS = caricoPer(p2, CS.modo); render(); };
   if (CS.pid) {
     if (p && p.id === CS.pid) {
-      if (p.sfuso && CS.unita === 'kg') {
+      if (isSfuso(p) && CS.unita === 'kg') {
         if (!p.pesoSacco) { toast(`Scrivi i ${nomeBase(p)} con i tasti`, { err: true }); return; }
         CS.qta = fmtNum(r3((parseNum(CS.qta) || 0) + p.pesoSacco)); CS.qtaFresh = false; render(); toast(`${inLitri(p) ? 'Litri' : 'Kg'}: ${CS.qta}`); return;
       }
-      CS.qta = String((parseInt(CS.qta, 10) || 0) + 1); render(); toast(`${p.sfuso ? (inLitri(p) ? 'Taniche' : 'Sacchi') : 'Quantità'}: ${CS.qta}`); return;
+      CS.qta = String((parseInt(CS.qta, 10) || 0) + 1); render(); toast(`${isSfuso(p) ? (inLitri(p) ? 'Taniche' : 'Sacchi') : 'Quantità'}: ${CS.qta}`); return;
     }
     const pronto = CS.senza || parseScadenza(CS.scad);
     if (!pronto) { toast(`Prima scrivi la scadenza di ${prodotto(CS.pid).nome}, oppure premi Annulla`, { err: true }); return; }
@@ -958,7 +964,7 @@ async function caricoScan(code) {
 async function salvaCarico() {
   const p = prodotto(CS.pid); if (!p) return false;
   const qc = qtaCarico(p), qta = qc.q;
-  if (!(qta > 0)) { toast(p.sfuso && CS.unita === 'kg' ? `Scrivi quanti ${nomeBase(p)}` : 'La quantità deve essere almeno 1', { err: true }); return false; }
+  if (!(qta > 0)) { toast(isSfuso(p) && CS.unita === 'kg' ? `Scrivi quanti ${nomeBase(p)}` : 'La quantità deve essere almeno 1', { err: true }); return false; }
   let scad = null;
   if (!CS.senza) {
     const r = parseScadenza(CS.scad);
@@ -977,7 +983,7 @@ async function salvaCarico() {
     }
   }
   await save('lotti', l);
-  const cosa = p.sfuso ? `${qc.sacchi ? fmtSacchi(qc.sacchi, p) + ' (' + fmtSf(p, qta) + ')' : fmtSf(p, qta)} di ${p.nome}` : `${qta} × ${p.nome}`;
+  const cosa = isSfuso(p) ? `${qc.sacchi ? fmtSacchi(qc.sacchi, p) + ' (' + fmtSf(p, qta) + ')' : fmtSf(p, qta)} di ${p.nome}` : `${qta} × ${p.nome}`;
   toast(`Salvato: ${cosa}${scad ? ' · scade ' + fmtDate(scad) : ''}`, { action: { label: 'Annulla', run: () => annullaLotto(l.id) } });
   CS = nuovoCarico(CS.modo);
   render();
@@ -1806,7 +1812,7 @@ async function aggiungiOrdine(pid, qta = 1, { silent = false, auto = false } = {
   await save('ordini', { ...o, righe });
   if (!silent) {
     const u = ultimoOrdine(pid);
-    toast(`Da ordinare: ${p.nome}${u ? ` · ultima volta ${p.sfuso ? fmtSacchi(u.qta, p) : fmtNum(u.qta)} il ${fmtDate(u.data)}` : ''}`);
+    toast(`Da ordinare: ${p.nome}${u ? ` · ultima volta ${isSfuso(p) ? fmtSacchi(u.qta, p) : fmtNum(u.qta)} il ${fmtDate(u.data)}` : ''}`);
   }
 }
 function normTel(t) {
@@ -1832,7 +1838,7 @@ function ordiniHTML() {
       <a class="btn small ghost" href="#fornitore/${encodeURIComponent(o.fornitoreId)}">Contatti</a></header>
       ${o.righe.map(r => {
       const p = prodotto(r.prodottoId), u = ultimoOrdine(r.prodottoId);
-      return `<div class="item ord-row"><div class="main"><div class="name">${esc(p ? p.nome : '?')}${p && p.sfuso ? ` <span class="tag sfuso">${nomeSacco(p, 2)}${p.pesoSacco ? ' da ' + fmtSf(p, p.pesoSacco) : ''}</span>` : ''}${r.auto ? ' <span class="tag warn">sta finendo</span>' : ''}</div><div class="sub">${u ? `ultima volta ${p && p.sfuso ? fmtSacchi(u.qta, p) : fmtNum(u.qta)} il ${fmtDate(u.data)}` : 'mai ordinato nell\'app'}${p ? ' · in negozio ' + fq(p, giacenza(p.id)) : ''}</div></div>
+      return `<div class="item ord-row"><div class="main"><div class="name">${esc(p ? p.nome : '?')}${p && isSfuso(p) ? ` <span class="tag sfuso">${nomeSacco(p, 2)}${p.pesoSacco ? ' da ' + fmtSf(p, p.pesoSacco) : ''}</span>` : ''}${r.auto ? ' <span class="tag warn">sta finendo</span>' : ''}</div><div class="sub">${u ? `ultima volta ${p && p.sfuso ? fmtSacchi(u.qta, p) : fmtNum(u.qta)} il ${fmtDate(u.data)}` : 'mai ordinato nell\'app'}${p ? ' · in negozio ' + fq(p, giacenza(p.id)) : ''}</div></div>
         <div class="mini-stepper"><button type="button" data-act="riga-" data-o="${esc(o.id)}" data-p="${esc(r.prodottoId)}" aria-label="Meno">−</button><input type="number" inputmode="numeric" min="0" value="${r.qta}" data-riga="${esc(o.id)}|${esc(r.prodottoId)}" aria-label="Quantità"><button type="button" data-act="riga+" data-o="${esc(o.id)}" data-p="${esc(r.prodottoId)}" aria-label="Più">+</button></div>
         <button class="btn small ghost" type="button" data-act="riga-del" data-o="${esc(o.id)}" data-p="${esc(r.prodottoId)}" aria-label="Togli">×</button></div>`;
     }).join('')}
@@ -1976,11 +1982,12 @@ const aiutoScorta = p => isSfuso(p)
   : `Vuoto = ${settings().scortaMin}, come tutti gli altri prodotti. 0 = mai da solo. Si ordina la quantità dell'ultimo ordine (o 1).`;
 /* scheda prodotto: codici e etichetta si aggiornano senza perdere quello che si sta scrivendo */
 const codiciHtml = p => (p.codici || []).map(c => `<span class="tag" style="font-size:.9rem;padding:6px 10px">${esc(c)} <button type="button" data-act="p-codice-del" data-c="${esc(c)}" style="border:0;background:none;font-size:1rem;cursor:pointer" aria-label="Togli codice">×</button></span>`).join('') || '<span class="faint">Nessun codice: scansiona ora il prodotto per collegarlo.</span>';
-const infoSfuso = u => u === 'l' ? 'Magazzino in litri, prezzo al litro. Al banco si scansiona l\'etichetta e si scrivono i ml.'
+const infoSfuso = u => u === 'pz' ? 'Magazzino e prezzo a pezzo, un\'etichetta sola sul contenitore. Al banco ogni scansione è un pezzo: con + e − cambi quanti.'
+  : u === 'l' ? 'Magazzino in litri, prezzo al litro. Al banco si scansiona l\'etichetta e si scrivono i ml.'
   : `Magazzino in kg, prezzo ${UNITA[u].al}. Al banco si scansiona l'etichetta del contenitore e si scrivono i grammi.`;
 function boxEtichetta(p) {
   if (!(p.codici || []).length) return `<button class="btn block" type="button" data-act="p-crea-codice" data-id="${esc(p.id)}" id="pCrea">Crea il codice a barre e stampa ${p.sfuso ? "l'etichetta" : 'le etichette'}</button>
-    <div class="faint small">${p.sfuso ? 'Se il sacco ha già il suo codice, non serve: scansionalo adesso e si collega da solo.' : 'Per i prodotti senza codice a barre (fatti da voi o da piccoli produttori): un\'etichetta per pezzo. Se il prodotto ha già il suo codice, non serve: scansionalo adesso e si collega da solo.'}</div>`;
+    <div class="faint small">${p.sfuso ? 'Se il ' + (sfusoPezzi(p) ? 'cartone' : 'sacco') + ' ha già il suo codice, non serve: scansionalo adesso e si collega da solo.' : 'Per i prodotti senza codice a barre (fatti da voi o da piccoli produttori): un\'etichetta per pezzo. Se il prodotto ha già il suo codice, non serve: scansionalo adesso e si collega da solo.'}</div>`;
   if (p.sfuso) return `<button class="btn block" type="button" data-act="p-stampa-eti" data-id="${esc(p.id)}">Stampa l'etichetta</button>`;
   if (codiceNegozio(p)) return `<button class="btn block" type="button" data-act="p-stampa-eti" data-id="${esc(p.id)}">Stampa le etichette</button>`;
   return '';
@@ -1991,7 +1998,7 @@ function aggiornaCodici() {
   const e = $('#pEtiBox'); if (e) e.innerHTML = boxEtichetta(p);
 }
 const lottiScheda = p => { const lotti = lottiAttivi().filter(l => l.prodottoId === p.id).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
-  return lotti.length ? `<div class="faint small">Per cambiare la scadenza o ${p.sfuso ? 'i ' + nomeBase(p) : 'i pezzi'} tocca <b>Modifica</b>.</div><div class="list">${lotti.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>` : '<div class="empty">Nessuna confezione registrata.</div>'; };
+  return lotti.length ? `<div class="faint small">Per cambiare la scadenza o ${isSfuso(p) ? 'i ' + nomeBase(p) : 'i pezzi'} tocca <b>Modifica</b>.</div><div class="list">${lotti.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>` : '<div class="empty">Nessuna confezione registrata.</div>'; };
 routes.prodotto = id => {
   const p = prodotto(id);
   if (!p) return { title: 'Prodotto', html: '<div class="empty">Prodotto non trovato.</div>', back: '#catalogo', tab: 'catalogo' };
@@ -2015,11 +2022,11 @@ routes.prodotto = id => {
       <div class="stack" id="pEtiBox">${boxEtichetta(p)}</div>
     </div>
     <div class="card"><h3>Sfuso</h3>
-      <label class="check"><input type="checkbox" id="pSfuso" ${p.sfuso ? 'checked' : ''}> Sfuso (a peso o alla spina)</label>
+      <label class="check"><input type="checkbox" id="pSfuso" ${p.sfuso ? 'checked' : ''}> Sfuso (a peso, alla spina o a pezzo)</label>
       <div class="stack" id="pSfusoBox" ${p.sfuso ? '' : 'hidden'}>
-        ${campoUnita('pUnita', unitaDi(p))}
-        <label class="field"><span data-sacco-lab>${testoSacco(unitaDi(p))}</span> <span class="hint" data-sacco-hint>${hintSacco(unitaDi(p))}</span><input type="text" inputmode="decimal" id="pSacco" value="${p.pesoSacco ? fmtNum(p.pesoSacco) : ''}"></label>
-        <div class="faint small" id="pSfInfo">${infoSfuso(unitaDi(p))}</div>
+        ${campoUnita('pUnita', unitaScelta(p))}
+        <label class="field" data-sacco-campo ${sfusoPezzi(p) ? 'hidden' : ''}><span data-sacco-lab>${testoSacco(unitaDi(p))}</span> <span class="hint" data-sacco-hint>${hintSacco(unitaDi(p))}</span><input type="text" inputmode="decimal" id="pSacco" value="${p.pesoSacco ? fmtNum(p.pesoSacco) : ''}"></label>
+        <div class="faint small" id="pSfInfo">${infoSfuso(unitaScelta(p))}</div>
       </div></div>
     <div class="card"><h3>Riordino</h3>
       <label class="field"><span>Va da solo in «Da ordinare» quando ne restano</span>
@@ -2043,7 +2050,7 @@ routes.prodotto = id => {
     title: 'Scheda prodotto', html, back: '#catalogo', tab: 'catalogo',
     mount: b => {
       // com'era il prodotto quando si è aperta la scheda (resta uguale anche se la pagina si ridisegna)
-      if (!PSTATO || PSTATO.id !== p.id || current.fresh) PSTATO = { id: p.id, eraSfuso: !!p.sfuso, chiesto: false };
+      if (!PSTATO || PSTATO.id !== p.id || current.fresh) PSTATO = { id: p.id, eraSfuso: isSfuso(p), chiesto: false };
       const stato = PSTATO;
       autoSalva(b, () => leggiScheda(p.id, b, stato));
       // la scheda com'è nel modulo, anche prima di salvare
@@ -2074,7 +2081,7 @@ routes.prodotto = id => {
       let unitaPrima = b.querySelector('#pUnita').value;
       b.querySelector('#pUnita').addEventListener('change', e => {
         const m = b.querySelector('#pMan'), v = parseNum(m.value);
-        if (v != null && m.value.trim()) m.value = fmtNum(Math.round(v * UNITA[e.target.value].f / UNITA[unitaPrima].f * 100) / 100);
+        if (v != null && m.value.trim() && UNITA[e.target.value] && UNITA[unitaPrima]) m.value = fmtNum(Math.round(v * UNITA[e.target.value].f / UNITA[unitaPrima].f * 100) / 100);
         unitaPrima = e.target.value; unitaTesti();
       });
     },
@@ -2238,7 +2245,7 @@ routes.etichette = () => {
 function htmlEtichetta(p, anteprima = false) {
   const c = codiceEtichetta(p), pr = prezzoVendita(p);
   const prezzo = pr == null ? (anteprima ? '<span class="eti-manca">prezzo da scrivere</span>' : '')
-    : isSfuso(p) ? `${fmtEuro(perUnita(p, pr))} <small>${UNITA[unitaDi(p)].al}</small>` : `${fmtEuro(pr)}${p.formato ? ` <small>· ${esc(p.formato)}</small>` : ''}`;
+    : isSfuso(p) ? `${fmtEuro(perUnita(p, pr))} <small>${UNITA[unitaDi(p)].al}</small>` : sfusoPezzi(p) ? `${fmtEuro(pr)} <small>al pezzo</small>` : `${fmtEuro(pr)}${p.formato ? ` <small>· ${esc(p.formato)}</small>` : ''}`;
   const codice = c ? `${barcodeSVG(c)}<div class="eti-cod">${esc(c)}</div>` : (anteprima ? '<div class="eti-manca">il codice lo crea l\'app quando stampi</div>' : '');
   return `<div class="eti"><div class="eti-nome">${esc(p.nome)}</div><div class="eti-prezzo">${prezzo}</div>${codice}</div>`;
 }
@@ -2264,7 +2271,7 @@ function stampaModal(ids, { titolo = null, copie = null } = {}) {
       + (oltre ? ` Poi continua su altri fogli (in tutto ${fogli}).` : '') + '<br><span class="faint">Tocca il foglio per cambiare.</span>';
     b.querySelector('[data-x=stampa]').textContent = 'Stampa ' + testoScelte(n);
   };
-  const giac = uno && !isSfuso(p1) ? Math.round(giacenza(p1.id)) : 0;
+  const giac = uno && !p1.sfuso ? Math.round(giacenza(p1.id)) : 0;
   openModal(`${mhead(titolo || `Stampa ${testoScelte(lista().length)}`)}
     ${uno ? `<div class="eti-anteprima">${htmlEtichetta(p1, true)}</div>
       <div class="field" style="font-weight:600">Quante etichette?
@@ -3144,7 +3151,7 @@ const unitaListino = p => !isSfuso(p) ? 'pezzo' : ({ kg: 'kg', etto: 'etto', l: 
 const ordineCat = c => c === SENZA_CAT ? 999 : CATEGORIE_BASE.includes(c) ? CATEGORIE_BASE.indexOf(c) : 100;
 function rigaListino(p) {
   const ven = prezzoVendita(p);
-  const formato = [p.formato || '', isSfuso(p) ? 'sfuso' + (p.pesoSacco ? `, ${nomeSacco(p)} da ${fmtSf(p, p.pesoSacco)}` : '') : ''].filter(Boolean).join(' · ');
+  const formato = [p.formato || '', isSfuso(p) ? 'sfuso' + (p.pesoSacco ? `, ${nomeSacco(p)} da ${fmtSf(p, p.pesoSacco)}` : '') : sfusoPezzi(p) ? 'sfuso a pezzo' : ''].filter(Boolean).join(' · ');
   return [p.nome, formato, (p.codici || []).join(', '), unitaListino(p), { e: p.prezzoAcquisto != null ? perUnita(p, p.prezzoAcquisto) : null },
     p.iva != null ? +p.iva : '', p.prezzoAcquisto != null && p.prezzoManuale == null ? (+p.ricarico || 50) : '', { e: ven != null ? perUnita(p, ven) : null },
     p.prezzoManuale != null ? 'scritto a mano' : ven != null ? 'calcolato' : 'manca', p.note || ''];
@@ -4383,21 +4390,21 @@ function leggiScheda(id, b, stato) {
   const v = sel => (q(sel) ? q(sel).value : '');
   const nome = v('#pNome').replace(/\s+/g, ' ').trim(); if (!nome) return { errore: 'Il nome non può essere vuoto: non salvato' };
   const sfuso = q('#pSfuso').checked, saccoTxt = v('#pSacco').trim(), sacco = parseNum(saccoTxt);
-  const unita = sfuso ? v('#pUnita') : p.unita, fp = { sfuso, unita }, f = sfuso ? UNITA[unitaDi(fp)].f : 1;
+  const unita = sfuso ? v('#pUnita') : p.unita, fp = { sfuso, unita }, f = isSfuso(fp) ? UNITA[unitaDi(fp)].f : 1, pesato = isSfuso(fp);
   const manTxt = v('#pMan').trim(), manRaw = manTxt ? parseNum(manTxt) : null;
   if (manTxt && manRaw == null) return { errore: 'Il prezzo a mano non è un numero: non salvato' };
   const acqTxt = v('#pAcq').trim(), acq = acqTxt ? parseNum(acqTxt) : null;
   if (acqTxt && acq == null) return { errore: 'Il prezzo d\'acquisto non è un numero: non salvato' };
   const scTxt = v('#pScorta').trim(), sc = scTxt ? parseNum(scTxt) : null;
   if (scTxt && !(sc >= 0)) return { errore: 'La scorta minima non è un numero valido: non salvato' };
-  if (sfuso && saccoTxt && !(sacco > 0)) return { errore: `${inLitri(fp) ? 'I litri della tanica non sono' : 'Il peso del sacco non è'} un numero valido: non salvato` };
+  if (pesato && saccoTxt && !(sacco > 0)) return { errore: `${inLitri(fp) ? 'I litri della tanica non sono' : 'Il peso del sacco non è'} un numero valido: non salvato` };
   const cat = categoriaScelta(b, 'pCat');
   const dati = {
     nome, fornitoreId: v('#pForn'), formato: v('#pFormato').trim(), categoria: cat == null ? p.categoria : cat, tipoScadenza: v('#pTipo'),
     prezzoAcquisto: acq, iva: parseNum(v('#pIva')), ricarico: +v('#pRic'),
     prezzoManuale: manRaw != null ? Math.round(manRaw / f * 10000) / 10000 : null, note: v('#pNote').trim(),
-    scortaMin: sc == null ? null : (sfuso ? r3(sc) : Math.round(sc)),
-    sfuso, unita, pesoSacco: sfuso && sacco > 0 ? sacco : (sfuso ? null : p.pesoSacco ?? null)
+    scortaMin: sc == null ? null : (pesato ? r3(sc) : Math.round(sc)),
+    sfuso, unita, pesoSacco: pesato && sacco > 0 ? sacco : (sfuso ? null : p.pesoSacco ?? null)
   };
   return { salva: () => salvaScheda(id, dati, { sacco, manRaw, fp, f, stato }) };
 }
@@ -4405,7 +4412,7 @@ async function salvaScheda(id, dati, { sacco, manRaw, fp, f, stato }) {
   const p = prodotto(id); if (!p) return false;
   const quiDentro = () => current.name === 'prodotto' && current.arg === id && $('#pNome');
   let confezioni = [];
-  if (dati.sfuso && !stato.eraSfuso && !stato.chiesto && sacco > 0) {
+  if (isSfuso(dati) && !stato.eraSfuso && !stato.chiesto && sacco > 0) {
     // diventa sfuso: i prezzi del listino possono essere per il sacco intero, le confezioni contate a pezzi
     const intero = inLitri(fp) ? 'la tanica intera' : 'il sacco intero';
     if (dati.prezzoAcquisto != null || manRaw != null) {
@@ -4436,7 +4443,7 @@ async function salvaScheda(id, dati, { sacco, manRaw, fp, f, stato }) {
   if (!cambiato && !confezioni.length) return true;
   await save('prodotti', { ...cur, ...dati });
   if (confezioni.length) await saveMany('lotti', confezioni);
-  if (!dati.sfuso && cur.sfuso && lottiAttivi().some(l => l.prodottoId === id)) toast(`Le quantità erano in ${nomeBase(cur)}: controllale nelle confezioni`, { ms: 5000 });
+  if (isSfuso(dati) !== isSfuso(cur) && !confezioni.length && lottiAttivi().some(l => l.prodottoId === id)) toast(`Le quantità erano in ${isSfuso(cur) ? nomeBase(cur) : 'pezzi'}: controllale nelle confezioni`, { ms: 5000 });
   if (quiDentro()) {
     // si aggiorna solo quello che dipende dai dati salvati: i campi restano come li si sta scrivendo
     const np = prodotto(id), t = $('#pTitolo'), so = $('#pSotto'), g = $('#pGiac'), l = $('#pLotti');
@@ -4686,7 +4693,7 @@ async function init() {
   }
   setTimeout(() => controllaIscrizione().catch(() => { }), 4000);
   if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.vai) location.hash = e.data.vai; });
-  window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta, categorieDalCatalogo, ANN, salvaOra: () => paginaSalva ? paginaSalva() : Promise.resolve() };
+  window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta, categorieDalCatalogo, ANN, salvaOra: () => paginaSalva ? paginaSalva() : Promise.resolve(), T: { fogliListini, copieIniziali, htmlEtichetta, nuovoProdottoModal } };
 }
 init();
 })();

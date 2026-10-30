@@ -252,7 +252,7 @@ function stato_(copia) {
 }
 
 /* ---------------- prezzi, come nell'app ---------------- */
-function unita_(p) { return !p.sfuso ? { nome: 'pezzo', f: 1 } : (FV_UNITA[p.unita] || FV_UNITA.kg); }
+function unita_(p) { return !p.sfuso || p.unita === 'pz' ? { nome: 'pezzo', f: 1 } : (FV_UNITA[p.unita] || FV_UNITA.kg); }   // sfuso al pezzo: come un prodotto a pezzi
 function calcolato_(p) { if (p.prezzoAcquisto == null || p.iva == null) return null; var ric = p.ricarico || 50; return Math.ceil(p.prezzoAcquisto * (1 + ric / 100) * (1 + p.iva / 100) * 10 - 1e-9) / 10; }
 function vendita_(p) { return p.prezzoManuale != null ? p.prezzoManuale : calcolato_(p); }
 function per_(p, x) { return x == null ? '' : Math.round(x * unita_(p).f * 100) / 100; }
@@ -362,7 +362,7 @@ function magazzino_(s) {
   attivi_(s).forEach(function (l) { var p = s.prodotti[l.prodottoId]; if (!p) return; var e = per[p.id] = per[p.id] || { p: p, q: 0, n: 0, scad: null }; e.q += l.quantita; e.n++; if (l.scadenza && (!e.scad || l.scadenza < e.scad)) e.scad = l.scadenza; });
   var righe = Object.keys(per).map(function (k) { return per[k]; })
     .sort(function (a, b) { return ordineCat_(catDi_(a.p) || 'Senza categoria') - ordineCat_(catDi_(b.p) || 'Senza categoria') || (catDi_(a.p)).localeCompare(catDi_(b.p), 'it') || a.p.nome.localeCompare(b.p.nome, 'it'); })
-    .map(function (e) { var u = e.p.sfuso ? (e.p.unita === 'l' ? 'litri' : 'kg') : 'pz'; return [e.p.nome, catDi_(e.p) || 'Senza categoria', nomeForn_(s, e.p.fornitoreId), Math.round(e.q * 1000) / 1000, u, e.n, data_(e.scad), e.p.prezzoAcquisto != null ? Math.round(e.p.prezzoAcquisto * e.q * 100) / 100 : '']; });
+    .map(function (e) { var u = !e.p.sfuso || e.p.unita === 'pz' ? 'pz' : e.p.unita === 'l' ? 'litri' : 'kg'; return [e.p.nome, catDi_(e.p) || 'Senza categoria', nomeForn_(s, e.p.fornitoreId), Math.round(e.q * 1000) / 1000, u, e.n, data_(e.scad), e.p.prezzoAcquisto != null ? Math.round(e.p.prezzoAcquisto * e.q * 100) / 100 : '']; });
   var tot = righe.reduce(function (t, r) { return t + (+r[7] || 0); }, 0);
   scriviTabella_(foglio_('Magazzino', true), 'Magazzino', 'Quello che c\'è in negozio adesso, dall\'app · valore al prezzo d\'acquisto: ' + tot.toFixed(2).replace('.', ',') + ' €',
     ['Prodotto', 'Categoria', 'Fornitore', 'In negozio', 'Unità', 'Confezioni', 'Prossima scadenza', 'Valore al costo €'], righe, { formati: ['', '', '', '0.###', '', '0', 'dd/mm/yyyy', EURO], larghezze: [260, 180, 180, 90, 60, 90, 120, 120] });
@@ -371,7 +371,7 @@ function scadenze_(s) {
   var oggi = oggi_(), t0 = data_(oggi).getTime();
   var righe = attivi_(s).filter(function (l) { return l.scadenza; }).sort(function (a, b) { return a.scadenza.localeCompare(b.scadenza); }).map(function (l) {
     var p = s.prodotti[l.prodottoId] || { nome: '?', sfuso: false }, g = Math.round((data_(l.scadenza).getTime() - t0) / 86400000);
-    return [data_(l.scadenza), g, p.nome, Math.round(l.quantita * 1000) / 1000, p.sfuso ? (p.unita === 'l' ? 'litri' : 'kg') : 'pz', nomeForn_(s, p.fornitoreId), g < 0 ? 'scaduto' : g === 0 ? 'scade oggi' : g === 1 ? 'domani' : 'tra ' + g + ' giorni', l.gestito ? (l.nota || 'gestito') : ''];
+    return [data_(l.scadenza), g, p.nome, Math.round(l.quantita * 1000) / 1000, !p.sfuso || p.unita === 'pz' ? 'pz' : p.unita === 'l' ? 'litri' : 'kg', nomeForn_(s, p.fornitoreId), g < 0 ? 'scaduto' : g === 0 ? 'scade oggi' : g === 1 ? 'domani' : 'tra ' + g + ' giorni', l.gestito ? (l.nota || 'gestito') : ''];
   });
   scriviTabella_(foglio_('Scadenze', true), 'Scadenze', 'Le confezioni in negozio, dalla scadenza più vicina · dall\'app', ['Scadenza', 'Giorni', 'Prodotto', 'Quantità', 'Unità', 'Fornitore', 'Quando', 'Gestito'], righe,
     { formati: ['dd/mm/yyyy', '0', '', '0.###', '', '', '', ''], larghezze: [100, 60, 260, 80, 60, 180, 110, 160] });
