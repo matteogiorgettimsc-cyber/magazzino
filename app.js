@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.22.0';
+const VERSIONE = '1.22.1';
 
 /* =========================================================
    Utilità
@@ -1001,8 +1001,9 @@ async function annullaLotto(id) {
 /* =========================================================
    SCADENZE
    ========================================================= */
-let SZ = { filtro: 'urgenti', q: '' };
-const FILTRI = [['urgenti', 'Urgenti'], ['scaduti', 'Scaduti'], ['30', 'Entro 30 giorni'], ['tutti', 'Tutti'], ['gestiti', 'Gestiti']];
+/* «In scadenza» (dalla 1.22.1, la prima): tutti i colori, gialli compresi, senza i gestiti; «Urgenti» solo scaduti, rossi e arancioni */
+let SZ = { filtro: 'inscadenza', q: '' };
+const FILTRI = [['inscadenza', 'In scadenza'], ['urgenti', 'Urgenti'], ['scaduti', 'Scaduti'], ['tutti', 'Tutti'], ['gestiti', 'Gestiti']];
 const FASCE = [['scaduto', 'Scaduti'], ['rosso', 'Scadono a brevissimo'], ['arancio', 'Scadono presto'], ['giallo', 'Entro il mese'], ['ok', 'Più avanti']];
 function lottiFiltrati() {
   const q = norm(SZ.q);
@@ -1013,7 +1014,7 @@ function lottiFiltrati() {
     if (SZ.filtro === 'gestiti') { if (!l.gestito) return false; }
     else if (SZ.filtro === 'urgenti') { if (l.gestito || !['scaduto', 'rosso', 'arancio'].includes(f)) return false; }
     else if (SZ.filtro === 'scaduti') { if (f !== 'scaduto') return false; }
-    else if (SZ.filtro === '30') { if (f === 'ok') return false; }
+    else if (SZ.filtro === 'inscadenza') { if (l.gestito || f === 'ok') return false; }
     return true;
   }).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
 }
@@ -1034,7 +1035,7 @@ function rigaLotto(l) {
 function listaScadenzeHTML() {
   const ls = lottiFiltrati();
   if (!ls.length) {
-    const msg = SZ.q ? 'Nessun prodotto caricato con questo nome.' : SZ.filtro === 'urgenti' ? 'Niente di urgente. Ottimo!' : 'Niente da mostrare.';
+    const msg = SZ.q ? 'Nessun prodotto caricato con questo nome.' : SZ.filtro === 'urgenti' ? 'Niente di urgente. Ottimo!' : SZ.filtro === 'inscadenza' ? 'Niente in scadenza. Ottimo!' : 'Niente da mostrare.';
     const altri = !SZ.q && SZ.filtro !== 'tutti' && lottiAttivi().length;
     return `<div class="empty">${msg}${altri ? `<div style="margin-top:10px"><button class="btn small" type="button" data-act="sz-filtro" data-f="tutti">Vedi tutti i prodotti caricati</button></div>` : ''}</div>`;
   }
@@ -1048,6 +1049,7 @@ function listaScadenzeHTML() {
   return html;
 }
 routes.scadenze = arg => {
+  if (arg === '30') arg = 'inscadenza';   // vecchio filtro «Entro 30 giorni»
   if (current.fresh && arg && FILTRI.some(f => f[0] === arg)) SZ.filtro = arg;
   const html = `${segScad('s')}<div class="chips">${FILTRI.map(([k, l]) => `<button class="chip ${SZ.filtro === k ? 'on' : ''}" type="button" data-act="sz-filtro" data-f="${k}">${l}</button>`).join('')}</div>
     <div class="row"><input type="search" id="szQ" placeholder="Cerca un prodotto" value="${esc(SZ.q)}" autocomplete="off"><button class="btn small" type="button" data-act="sz-condividi">Condividi</button></div>
@@ -1058,10 +1060,10 @@ routes.scadenze = arg => {
     onScan: code => { const p = byCode(code); if (p) { SZ.q = p.nome; SZ.filtro = 'tutti'; render(); } else collegaCodice(code, p2 => { SZ.q = p2.nome; SZ.filtro = 'tutti'; render(); }); }
   };
 };
-function testoScadenze() {
-  const ls = lottiAttivi().filter(l => l.scadenza && ['scaduto', 'rosso', 'arancio'].includes(fascia(l))).sort((a, b) => a.scadenza.localeCompare(b.scadenza));
-  if (!ls.length) return 'Nessun prodotto in scadenza a breve.';
-  return `Scadenze ${fmtDate(todayISO())}:\n` + ls.map(l => { const p = prodotto(l.prodottoId); return `- ${fmtDate(l.scadenza)} ${p ? p.nome : '?'} (${fq(p, l.quantita)})${l.gestito ? ' – ' + (l.nota || 'gestito') : ''}`; }).join('\n');
+function testoScadenze() {   // quello che si vede nella pagina (filtro e ricerca)
+  const ls = lottiFiltrati().filter(l => l.scadenza);
+  if (!ls.length) return 'Nessun prodotto in scadenza.';
+  return `Scadenze ${fmtDate(todayISO())}${SZ.q ? '' : ' · ' + ((FILTRI.find(x => x[0] === SZ.filtro) || ['', ''])[1])}:\n` + ls.map(l => { const p = prodotto(l.prodottoId); return `- ${fmtDate(l.scadenza)} ${p ? p.nome : '?'} (${fq(p, l.quantita)})${l.gestito ? ' – ' + (l.nota || 'gestito') : ''}`; }).join('\n');
 }
 
 /* =========================================================
