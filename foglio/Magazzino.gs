@@ -253,6 +253,10 @@ function stato_(copia) {
 
 /* ---------------- prezzi, come nell'app ---------------- */
 function unita_(p) { return !p.sfuso || p.unita === 'pz' ? { nome: 'pezzo', f: 1 } : (FV_UNITA[p.unita] || FV_UNITA.kg); }   // sfuso al pezzo: come un prodotto a pezzi
+function maiuscolo_(t) {   // come nell'app: nome e formato in maiuscolo, unità di misura in minuscolo (500 g, 1,5 l, 6 pz)
+  return String(t).toUpperCase().replace(/(\d)(\s?)(KG|HG|GR|G|MG|ML|CL|DL|LT|L|PZ|CC|MM|CM|M)(?![A-ZÀ-ÖØ-Þ0-9])/g, function (m, n, sp, u) { return n + sp + u.toLowerCase(); })
+    .replace(/(\d)\s?X\s?(?=\d)/g, function (m) { return m.toLowerCase(); });
+}
 function ivaFornitore_(s, fid) {   // la più frequente tra i suoi prodotti (come nell'app): la prendono i prodotti nuovi
   var c = {}, best = null;
   for (var id in s.prodotti) { var p = s.prodotti[id]; if (p.fornitoreId === fid && p.iva != null && p.iva !== '') c[+p.iva] = (c[+p.iva] || 0) + 1; }
@@ -428,8 +432,9 @@ var CAMPI = {};
 CAMPI[COL.nome] = 'nome'; CAMPI[COL.formato] = 'formato'; CAMPI[COL.codici] = 'codici'; CAMPI[COL.acq] = 'prezzoAcquisto'; CAMPI[COL.iva] = 'iva'; CAMPI[COL.ric] = 'ricarico'; CAMPI[COL.vendita] = 'prezzoManuale'; CAMPI[COL.note] = 'note';
 function valoreCampo_(p, campo, v, s) {
   var f = unita_(p).f, x;
-  if (campo === 'nome') { x = String(v).replace(/\s+/g, ' ').trim(); if (!x) throw new Error('Il nome non può essere vuoto'); return x; }
-  if (campo === 'formato' || campo === 'note') return String(v == null ? '' : v).trim();
+  if (campo === 'nome') { x = maiuscolo_(String(v).replace(/\s+/g, ' ').trim()); if (!x) throw new Error('Il nome non può essere vuoto'); return x; }
+  if (campo === 'formato') return maiuscolo_(String(v == null ? '' : v).trim());
+  if (campo === 'note') return String(v == null ? '' : v).trim();
   if (campo === 'codici') {
     var cs = String(v == null ? '' : v).split(/[,;\s]+/).map(function (c) { return c.trim(); }).filter(Boolean);
     cs.forEach(function (c) { for (var id in s.prodotti) if (id !== p.id && (s.prodotti[id].codici || []).indexOf(c) >= 0) throw new Error('Il codice ' + c + ' è già di «' + s.prodotti[id].nome + '»'); });

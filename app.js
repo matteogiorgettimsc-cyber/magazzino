@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.23.0';
+const VERSIONE = '1.24.0';
 
 /* =========================================================
    Utilità
@@ -43,6 +43,26 @@ function parseScadenza(raw) {
   const dt = new Date(yy, mm - 1, dd);
   if (dt.getMonth() !== mm - 1 || dt.getDate() !== dd) return null;
   return { iso: `${yy}-${pad(mm)}-${pad(dd)}`, fine };
+}
+/* maiuscolo (dalla 1.24.0): nome e formato dei prodotti in maiuscolo, le unità di misura in minuscolo
+   (500 g, 1,5 l, 6 pz, 6x100 g). Il nome del fornitore resta come lo si scrive. */
+const RE_UNITA = /(\d)(\s?)(KG|HG|GR|G|MG|ML|CL|DL|LT|L|PZ|CC|MM|CM|M)(?![A-ZÀ-ÖØ-Þ0-9])/g;
+function maiuscolo(t) {
+  if (t == null) return t;
+  return String(t).toUpperCase().replace(RE_UNITA, (m, n, sp, u) => n + sp + u.toLowerCase()).replace(/(\d)\s?X\s?(?=\d)/g, m => m.toLowerCase());
+}
+/* una volta sola (alla prima apertura della 1.24.0): i prodotti già caricati passano in maiuscolo.
+   Da lì in poi ci pensano i campi (scheda, nuovo prodotto, frutta, foglio Google) */
+async function nomiMaiuscoli() {
+  if (S.meta.maiuscolo) return 0;
+  const nuovi = [];
+  for (const p of S.prodotti.values()) {
+    const n = maiuscolo(p.nome || ''), f = maiuscolo(p.formato || '');
+    if (n !== (p.nome || '') || f !== (p.formato || '')) nuovi.push({ ...p, nome: n, formato: f });
+  }
+  if (nuovi.length) await saveMany('prodotti', nuovi);
+  await setMeta('maiuscolo', 1);
+  return nuovi.length;
 }
 /* IVA del fornitore (dalla 1.23.0): la più frequente tra i suoi prodotti. I prodotti restano come sono:
    serve a segnalare in verde chi ha la stessa del fornitore e in rosso chi ne ha una diversa (o non ce l'ha),
@@ -564,9 +584,9 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
   const last = fornitoreId || S.meta.ultimoFornitore || '';
   openModal(`${mhead('Nuovo prodotto')}
     ${code ? `<div class="faint">Codice: ${esc(code)}</div>` : ''}
-    <label class="field">Nome<input type="text" id="npNome" value="${esc(nome)}" autocomplete="off"></label>
+    <label class="field">Nome<input type="text" id="npNome" value="${esc(maiuscolo(nome))}" autocomplete="off" autocapitalize="characters" data-maiusc></label>
     <label class="field">Fornitore<select id="npForn"><option value="">— scegli —</option>${forn.map(f => `<option value="${esc(f.id)}" ${f.id === last ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></label>
-    <label class="field">Formato <span class="hint">es. 500 g, 1 l, 6 pz</span><input type="text" id="npFormato" autocomplete="off"></label>
+    <label class="field">Formato <span class="hint">es. 500 g, 1 l, 6 pz</span><input type="text" id="npFormato" autocomplete="off" autocapitalize="characters" data-maiusc></label>
     <label class="field">Tipo di scadenza<select id="npTipo"><option value="preferibilmente">Preferibilmente entro (secchi, conserve)</option><option value="entro">Da consumarsi entro (freschi)</option></select></label>
     <label class="check"><input type="checkbox" id="npSfuso"> Sfuso (a peso, alla spina o a pezzo)</label>
     <div class="stack" id="npSaccoBox" hidden>
@@ -579,16 +599,17 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
     b.querySelector('#npSfuso').addEventListener('change', e => { b.querySelector('#npSaccoBox').hidden = !e.target.checked; const c = b.querySelector('#npCrea'); if (c) c.checked = e.target.checked; });
     b.querySelector('#npUnita').addEventListener('change', e => aggiornaTestiSacco(b, e.target.value));
     b.querySelector('#npSave').onclick = async () => {
-      const n = b.querySelector('#npNome').value.trim();
+      const n = maiuscolo(b.querySelector('#npNome').value.replace(/\s+/g, ' ').trim());
       if (!n) { toast('Scrivi il nome del prodotto', { err: true }); return; }
       const fid = b.querySelector('#npForn').value;
       const sf = b.querySelector('#npSfuso').checked, un = sf ? b.querySelector('#npUnita').value : undefined, sacco = un === 'pz' ? null : parseNum(b.querySelector('#npSacco').value);
       const crea = !code && b.querySelector('#npCrea').checked;
       const codici = code ? [code] : crea ? [await codiceInterno()] : [];
-      const p = { id: uid('p'), nome: n, fornitoreId: fid, categoria: '', formato: b.querySelector('#npFormato').value.trim(), prezzoAcquisto: null, iva: (ivaFornitore(fid) || {}).iva ?? null, prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici, tipoScadenza: b.querySelector('#npTipo').value, note: '', origine: 'Creato nell\'app', sfuso: sf, unita: un, pesoSacco: sf && sacco > 0 ? sacco : null };
+      const dc = deduciCategoria(n, fid);
+      const p = { id: uid('p'), nome: n, fornitoreId: fid, categoria: dc ? dc.c : '', catAuto: dc ? true : undefined, formato: maiuscolo(b.querySelector('#npFormato').value.trim()), prezzoAcquisto: null, iva: (ivaFornitore(fid) || {}).iva ?? null, prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici, tipoScadenza: b.querySelector('#npTipo').value, note: '', origine: 'Creato nell\'app', sfuso: sf, unita: un, pesoSacco: sf && sacco > 0 ? sacco : null };
       if (code) { const prima = byCode(code); if (prima) await save('prodotti', { ...prima, codici: prima.codici.filter(c => c !== code) }); }
       await save('prodotti', p); if (fid) await setMeta('ultimoFornitore', fid);
-      closeModal(); toast(`Creato: ${p.nome}`); onDone && onDone(p);
+      closeModal(); toast(`Creato: ${p.nome}${dc ? ' · categoria ' + dc.c : ''}`); onDone && onDone(p);
       if (crea) etichettaPronta(p.id);
     };
   });
@@ -763,7 +784,7 @@ function fvNuovoModal() {
   const forn = [...S.fornitori.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
   let kg = true;
   openModal(`${mhead('Nuovo frutto o verdura')}
-    <label class="field">Nome <span class="hint">es. Mele Golden, Zucchine</span><input type="text" id="fvNome" autocomplete="off"></label>
+    <label class="field">Nome <span class="hint">es. Mele Golden, Zucchine</span><input type="text" id="fvNome" autocomplete="off" autocapitalize="characters" data-maiusc></label>
     <div class="field" style="font-weight:600">Si vende<div class="segmented" id="fvModo"><button type="button" class="on" data-m="kg">Al kg</button><button type="button" data-m="pz">A pezzo</button></div></div>
     <div class="btn-grid" style="grid-template-columns:1fr 1fr">
       <label class="field"><span>Vendita € <span class="hint" data-u>al kg</span></span><input type="text" inputmode="decimal" id="fvPrezzo" autocomplete="off" placeholder="es. 2,40"></label>
@@ -776,7 +797,7 @@ function fvNuovoModal() {
     b.querySelector('#fvNome').focus();
     $$('#fvModo [data-m]', b).forEach(x => x.onclick = () => { kg = x.dataset.m === 'kg'; $$('#fvModo [data-m]', b).forEach(y => y.classList.toggle('on', y === x)); $$('[data-u]', b).forEach(u => { u.textContent = kg ? 'al kg' : 'al pezzo'; }); });
     b.querySelector('[data-x=ok]').onclick = async () => {
-      const nome = b.querySelector('#fvNome').value.replace(/\s+/g, ' ').trim();
+      const nome = maiuscolo(b.querySelector('#fvNome').value.replace(/\s+/g, ' ').trim());
       if (!nome) { toast('Scrivi il nome', { err: true }); return; }
       const doppio = prodottiFV().find(p => p.nome.toLowerCase() === nome.toLowerCase());
       if (doppio && !(await confirmBox(`«${doppio.nome}» c'è già nel reparto. Ne creo un altro?`, { ok: 'Crea lo stesso' }))) return;
@@ -908,8 +929,10 @@ function fmtScadDigits(d) {
 }
 function anteprimaScad() {
   if (CS.senza) return { t: 'Senza scadenza', err: false };
-  const d = CS.scad;
-  if (!d.length) return { t: 'Scrivi la data con i tasti qui sotto', err: false, faint: true };
+  return anteprimaData(CS.scad, 'Scrivi la data con i tasti qui sotto');
+}
+function anteprimaData(d, vuota = '') {
+  if (!d.length) return { t: vuota, err: false, faint: true };
   if (d.length === 4) {
     const r = parseScadenza(d), anno = +d.slice(2), ora = new Date().getFullYear() % 100;
     if (r && anno >= ora - 1) return { t: `Solo mese e anno: fine ${fmtDateLong(r.iso).split(' ').slice(1).join(' ')} · oppure continua a scrivere`, err: false };
@@ -984,6 +1007,21 @@ async function caricoScan(code) {
   }
   if (p) go(p); else collegaCodice(code, go);
 }
+/* una confezione nuova in negozio: all'arrivo si segna anche nell'ordine aperto */
+async function aggiungiConfezione(p, { modo, qta, sacchi = null, ordine = qta, scad = null }) {
+  const l = { id: uid('l'), prodottoId: p.id, quantita: qta, scadenza: scad, arrivo: todayISO(), creato: Date.now(), stato: 'attivo', gestito: false, nota: '', ordineId: null, origine: modo, sprechi: [] };
+  if (sacchi) l.sacchi = sacchi;
+  if (modo === 'arrivo') l.qtaIniziale = qta;   // per il confronto con le fatture
+  if (modo === 'arrivo') {
+    const info = infoOrdine(p);
+    if (info) {
+      const righe = info.o.righe.map(r => r.prodottoId === p.id ? { ...r, ricevuto: r3((r.ricevuto || 0) + ordine) } : r);
+      await save('ordini', { ...info.o, righe }); l.ordineId = info.o.id; l.ordineQta = ordine;
+    }
+  }
+  await save('lotti', l);
+  return l;
+}
 async function salvaCarico() {
   const p = prodotto(CS.pid); if (!p) return false;
   const qc = qtaCarico(p), qta = qc.q;
@@ -995,17 +1033,7 @@ async function salvaCarico() {
     scad = r.iso;
     if (daysUntil(scad) < 0 && !(await confirmBox(`La data ${fmtDate(scad)} è già passata. Salvo lo stesso?`, { ok: 'Salva' }))) return false;
   }
-  const l = { id: uid('l'), prodottoId: p.id, quantita: qta, scadenza: scad, arrivo: todayISO(), creato: Date.now(), stato: 'attivo', gestito: false, nota: '', ordineId: null, origine: CS.modo, sprechi: [] };
-  if (qc.sacchi) l.sacchi = qc.sacchi;
-  if (CS.modo === 'arrivo') l.qtaIniziale = qta;   // per il confronto con le fatture
-  if (CS.modo === 'arrivo') {
-    const info = infoOrdine(p);
-    if (info) {
-      const righe = info.o.righe.map(r => r.prodottoId === p.id ? { ...r, ricevuto: r3((r.ricevuto || 0) + qc.ordine) } : r);
-      await save('ordini', { ...info.o, righe }); l.ordineId = info.o.id; l.ordineQta = qc.ordine;
-    }
-  }
-  await save('lotti', l);
+  const l = await aggiungiConfezione(p, { modo: CS.modo, qta, sacchi: qc.sacchi, ordine: qc.ordine, scad });
   const cosa = isSfuso(p) ? `${qc.sacchi ? fmtSacchi(qc.sacchi, p) + ' (' + fmtSf(p, qta) + ')' : fmtSf(p, qta)} di ${p.nome}` : `${qta} × ${p.nome}`;
   toast(`Salvato: ${cosa}${scad ? ' · scade ' + fmtDate(scad) : ''}`, { action: { label: 'Annulla', run: () => annullaLotto(l.id) } });
   CS = nuovoCarico(CS.modo);
@@ -2025,6 +2053,80 @@ function aggiornaCodici() {
 }
 const lottiScheda = p => { const lotti = lottiAttivi().filter(l => l.prodottoId === p.id).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
   return lotti.length ? `<div class="faint small">Per cambiare la scadenza o ${isSfuso(p) ? 'i ' + nomeBase(p) : 'i pezzi'} tocca <b>Modifica</b>.</div><div class="list">${lotti.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>` : '<div class="empty">Nessuna confezione registrata.</div>'; };
+/* scheda prodotto: scadenze e pezzi senza andare in Arrivi o Inventario (dalla 1.24.0).
+   Più righe = colli con scadenze diverse, salvati insieme come confezioni separate. */
+const pcSacchi = p => isSfuso(p) && p.pesoSacco > 0;
+const pcNomeQta = (p, u) => !isSfuso(p) ? 'Pezzi' : u === 'sacchi' ? (inLitri(p) ? 'Taniche' : 'Sacchi') : (inLitri(p) ? 'Litri' : 'Kg');
+const pcRiga = (p, u, togli) => `<div class="pc-riga">
+    <label class="field"><span class="pc-qlab">${pcNomeQta(p, u)}</span><input type="text" inputmode="${isSfuso(p) && u !== 'sacchi' ? 'decimal' : 'numeric'}" class="pc-qta" autocomplete="off"></label>
+    <label class="field pc-scad-campo">Scadenza<input type="text" inputmode="numeric" class="pc-scad" maxlength="10" placeholder="gg mm aa" autocomplete="off"><small class="pc-ante faint"></small></label>
+    ${togli ? '<button type="button" class="btn small ghost pc-togli" aria-label="Togli questa riga">✕</button>' : '<span></span>'}</div>`;
+function cardCarica(p) {
+  const u = pcSacchi(p) ? 'sacchi' : 'kg';
+  return `<div class="card stack" id="pCarica">
+    <div class="segmented" id="pcModo"><button type="button" data-m="arrivo" class="on">Arrivo merce</button><button type="button" data-m="inventario">Inventario</button></div>
+    <div class="faint small" id="pcAiuto">Merce appena arrivata: si segna anche nell'ordine aperto.</div>
+    ${pcSacchi(p) ? `<div class="segmented mini" id="pcUnita"><button type="button" data-u="sacchi" class="on">${inLitri(p) ? 'Taniche' : 'Sacchi'} da ${fmtSf(p, p.pesoSacco)}</button><button type="button" data-u="kg">${inLitri(p) ? 'Litri' : 'Kg'}</button></div>` : ''}
+    <div class="stack" id="pcRighe" data-u="${u}">${pcRiga(p, u, false)}</div>
+    <div class="row wrap"><button class="btn small" type="button" id="pcAltra">+ Altra scadenza</button><label class="check"><input type="checkbox" id="pcSenza"> Senza scadenza</label></div>
+    <button class="btn primary block" type="button" id="pcSalva">Aggiungi in negozio</button></div>`;
+}
+function montaCarica(b, pid) {
+  const box = b.querySelector('#pCarica'); if (!box) return;
+  const p0 = prodotto(pid); if (!p0) return;
+  let modo = 'arrivo';
+  const righe = () => box.querySelector('#pcRighe'), unita = () => righe().dataset.u;
+  const metti = u => {
+    righe().dataset.u = u;
+    $$('#pcUnita [data-u]', box).forEach(x => x.classList.toggle('on', x.dataset.u === u));
+    $$('.pc-qlab', box).forEach(x => { x.textContent = pcNomeQta(p0, u); });
+    $$('.pc-qta', box).forEach(x => { x.inputMode = isSfuso(p0) && u !== 'sacchi' ? 'decimal' : 'numeric'; });
+  };
+  $$('#pcModo [data-m]', box).forEach(x => x.onclick = () => {
+    modo = x.dataset.m; $$('#pcModo [data-m]', box).forEach(y => y.classList.toggle('on', y === x));
+    box.querySelector('#pcAiuto').textContent = modo === 'arrivo' ? 'Merce appena arrivata: si segna anche nell\'ordine aperto.' : 'Merce che c\'era già in negozio e non era ancora nell\'app.';
+    if (pcSacchi(p0)) metti(modo === 'arrivo' ? 'sacchi' : 'kg');   // come in Arrivi e Inventario
+  });
+  $$('#pcUnita [data-u]', box).forEach(x => x.onclick = () => metti(x.dataset.u));
+  box.querySelector('#pcAltra').onclick = () => {
+    righe().insertAdjacentHTML('beforeend', pcRiga(p0, unita(), true));
+    box.querySelector('#pcSenza').checked = false; $$('.pc-scad-campo', box).forEach(x => { x.hidden = false; });
+    const r = righe().lastElementChild; r.querySelector('.pc-qta').focus();
+  };
+  box.addEventListener('click', e => { const t = e.target.closest('.pc-togli'); if (t) t.closest('.pc-riga').remove(); });
+  box.addEventListener('input', e => {
+    if (!e.target.classList.contains('pc-scad')) return;
+    const d = e.target.value.replace(/\D/g, '').slice(0, 8), a = anteprimaData(d), sm = e.target.parentElement.querySelector('.pc-ante');
+    sm.textContent = a.t; sm.classList.toggle('err', !!a.err);
+  });
+  box.querySelector('#pcSenza').onchange = e => { $$('.pc-scad-campo', box).forEach(x => { x.hidden = e.target.checked; }); };
+  box.querySelector('#pcSalva').onclick = async () => {
+    const p = prodotto(pid); if (!p) return;
+    const u = unita(), senza = box.querySelector('#pcSenza').checked, dati = [];
+    const rr = $$('.pc-riga', box);
+    for (let i = 0; i < rr.length; i++) {
+      const qt = rr[i].querySelector('.pc-qta').value.trim(), st = rr[i].querySelector('.pc-scad').value.replace(/\D/g, '');
+      if (!qt && !st && rr.length > 1) continue;   // riga lasciata vuota
+      const dove = rr.length > 1 ? `Riga ${i + 1}: ` : '';
+      let qta, sacchi = null, ordine;
+      if (!isSfuso(p)) { qta = parseInt(qt, 10); ordine = qta; if (!(qta >= 1) || String(qta) !== qt.replace(/^0+(?=\d)/, '')) { toast(dove + 'scrivi quanti pezzi (un numero intero)', { err: true }); return; } }
+      else if (u === 'sacchi') { const n = parseInt(qt, 10); if (!(n >= 1)) { toast(dove + `scrivi quant${inLitri(p) ? 'e taniche' : 'i sacchi'}`, { err: true }); return; } sacchi = n; ordine = n; qta = r3(n * p.pesoSacco); }
+      else { qta = r3(parseNum(qt) || 0); if (!(qta > 0)) { toast(dove + `scrivi quanti ${nomeBase(p)}`, { err: true }); return; } ordine = p.pesoSacco ? r3(qta / p.pesoSacco) : qta; }
+      let scad = null;
+      if (!senza) { const r = st.length === 4 || st.length === 6 || st.length === 8 ? parseScadenza(st) : null; if (!r) { toast(dove + 'scrivi la scadenza, per esempio 280527 (o spunta «Senza scadenza»)', { err: true }); return; } scad = r.iso; }
+      dati.push({ qta, sacchi, ordine, scad });
+    }
+    if (!dati.length) { toast('Scrivi quanti e la scadenza', { err: true }); return; }
+    const passate = dati.filter(x => x.scad && daysUntil(x.scad) < 0);
+    if (passate.length && !(await confirmBox(`${passate.length === 1 ? 'La data ' + fmtDate(passate[0].scad) + ' è' : 'Alcune date sono'} già passat${passate.length === 1 ? 'a' : 'e'}. Salvo lo stesso?`, { ok: 'Salva' }))) return;
+    if (paginaSalva) await paginaSalva();
+    const ids = [];
+    for (const x of dati) ids.push((await aggiungiConfezione(p, { modo, ...x })).id);
+    const testo = dati.map(x => (x.sacchi ? fmtSacchi(x.sacchi, p) : fq(p, x.qta)) + (x.scad ? ' · scade ' + fmtDate(x.scad) : '')).join(' + ');
+    toast(`${modo === 'arrivo' ? 'Arrivati' : 'Contati'}: ${testo}`, { ms: 6000, action: { label: 'Annulla', run: async () => { for (const id of ids) await annullaLotto(id); } } });
+    render();
+  };
+}
 routes.prodotto = id => {
   const p = prodotto(id);
   if (!p) return { title: 'Prodotto', html: '<div class="empty">Prodotto non trovato.</div>', back: '#catalogo', tab: 'catalogo' };
@@ -2033,15 +2135,16 @@ routes.prodotto = id => {
   const html = `<div><h2 style="margin:0" id="pTitolo">${esc(p.nome)}</h2><div class="faint" id="pSotto">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>
     <div class="section-title"><h2>In negozio</h2><span class="count" id="pGiac">${fq(p, giacenza(p.id))}</span></div>
     <div class="stack" id="pLotti">${lottiScheda(p)}</div>
-    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn" type="button" data-act="sr-inventario" data-id="${esc(p.id)}">Inventario</button><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button><button class="btn" type="button" data-act="sr-cucina" data-id="${esc(p.id)}">Per la cucina</button></div>
+    ${cardCarica(p)}
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button><button class="btn" type="button" data-act="sr-cucina" data-id="${esc(p.id)}">Per la cucina</button></div>
     <div class="section-title"><h2>Dati del prodotto</h2></div>
     <div class="faint small salva-stato">Ogni modifica si salva da sola.</div>
     <div class="stack" data-auto>
     <div class="card">
-      <label class="field">Nome<textarea id="pNome" rows="2" style="min-height:0">${esc(p.nome)}</textarea></label>
+      <label class="field">Nome<textarea id="pNome" rows="2" style="min-height:0" autocapitalize="characters" data-maiusc>${esc(p.nome)}</textarea></label>
       <label class="field">Fornitore<select id="pForn"><option value="">— nessuno —</option>${forn.map(f => `<option value="${esc(f.id)}" ${p.fornitoreId === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></label>
-      <label class="field">Categoria${campoCategoria('pCat', p.categoria)}</label>
-      <label class="field">Formato<input type="text" id="pFormato" value="${esc(p.formato)}"></label>
+      <label class="field">Categoria${p.catAuto && catDi(p) ? ' <span class="hint" id="pCatAuto">scelta dall\'app: se non va, cambiala</span>' : ''}${campoCategoria('pCat', p.categoria)}</label>
+      <label class="field">Formato<input type="text" id="pFormato" value="${esc(p.formato)}" autocapitalize="characters" data-maiusc></label>
       <label class="field">Tipo di scadenza<select id="pTipo"><option value="preferibilmente" ${p.tipoScadenza !== 'entro' ? 'selected' : ''}>Preferibilmente entro (secchi, conserve)</option><option value="entro" ${p.tipoScadenza === 'entro' ? 'selected' : ''}>Da consumarsi entro (freschi)</option></select></label>
       <div class="field" style="font-weight:600">Codici a barre
         <div class="row wrap" id="pCodici">${codiciHtml(p)}</div></div>
@@ -2079,6 +2182,7 @@ routes.prodotto = id => {
       if (!PSTATO || PSTATO.id !== p.id || current.fresh) PSTATO = { id: p.id, eraSfuso: isSfuso(p), chiesto: false };
       const stato = PSTATO;
       autoSalva(b, () => leggiScheda(p.id, b, stato));
+      montaCarica(b, p.id);
       // la scheda com'è nel modulo, anche prima di salvare
       const forma = () => ({ sfuso: b.querySelector('#pSfuso').checked, unita: b.querySelector('#pUnita').value });
       const upd = () => {
@@ -3361,6 +3465,10 @@ function campoCategoria(id, valore) {
     <input type="text" id="${id}" value="" placeholder="scrivi la categoria nuova" autocomplete="off" hidden>`;
 }
 const categoriaScelta = (root, id) => { const sel = root.querySelector('#' + id + 'Sel'); if (!sel) return null; return sel.value === '__altra' ? root.querySelector('#' + id).value.replace(/\s+/g, ' ').trim() : sel.value; };
+document.addEventListener('focusout', e => {   // nome e formato: maiuscolo quando si esce dal campo (unità in minuscolo)
+  const t = e.target; if (!t.matches || !t.matches('[data-maiusc]')) return;
+  const v = maiuscolo(t.value); if (v !== t.value) t.value = v;
+});
 document.addEventListener('change', e => {
   const sel = e.target.closest('[data-cat-sel]'); if (!sel) return;
   const inp = document.getElementById(sel.dataset.catSel); if (!inp) return;
@@ -3368,6 +3476,56 @@ document.addEventListener('change', e => {
   if (!inp.hidden) setTimeout(() => inp.focus(), 30);
 }, true);
 function categoriaDalNome(nome) { const n = norm(nome); for (const [c, re] of REGOLE_CAT) if (re.test(n)) return c; return ''; }
+/* categoria dedotta dall'app (dalla 1.24.0), in quest'ordine:
+   1. i prodotti simili già con la categoria (parole in comune; quelle rare contano di più), se è una categoria inventata in negozio;
+   2. le parole del nome (le regole qui sopra);
+   3. i prodotti simili, per le categorie di base;
+   4. la categoria di quasi tutti i prodotti dello stesso fornitore (almeno 3, il 70%).
+   Impara solo dalle categorie scelte in negozio o dal catalogo, non da quelle dedotte (catAuto). */
+const PAROLE_VUOTE = new Set(['con', 'per', 'del', 'della', 'delle', 'dei', 'degli', 'dello', 'alla', 'alle', 'allo', 'agli', 'senza', 'una', 'uno', 'kg', 'gr', 'ml', 'pz', 'confezione', 'conf', 'busta', 'vasetto', 'barattolo', 'bottiglia', 'sacco']);
+const paroleNome = n => [...new Set(norm(n).split(' ').filter(w => w.length >= 3 && !/\d/.test(w) && !PAROLE_VUOTE.has(w)))];
+function contestoCategorie() {
+  const idx = new Map(), forn = new Map(); let n = 0;
+  for (const p of S.prodotti.values()) {
+    const c = catDi(p); if (!c || c === SENZA_CAT || p.catAuto) continue;
+    n++;
+    for (const w of paroleNome(p.nome)) { let m = idx.get(w); if (!m) idx.set(w, m = new Map()); m.set(c, (m.get(c) || 0) + 1); }
+    if (p.fornitoreId) { let m = forn.get(p.fornitoreId); if (!m) forn.set(p.fornitoreId, m = new Map()); m.set(c, (m.get(c) || 0) + 1); }
+  }
+  return { idx, forn, n };
+}
+function deduciCategoria(nome, fornitoreId, ctx = contestoCategorie()) {
+  const simile = simili(nome, ctx);
+  if (simile && !CATEGORIE_BASE.includes(simile)) return { c: simile, come: 'simili' };   // una categoria inventata in negozio (es. «Senza glutine») vince sulle regole
+  const r = categoriaDalNome(nome); if (r) return { c: r, come: 'nome' };
+  if (simile) return { c: simile, come: 'simili' };
+  const fm = fornitoreId && ctx.forn.get(fornitoreId);
+  if (fm) {
+    let tot = 0; for (const k of fm.values()) tot += k;
+    const [c, k] = [...fm.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (tot >= 3 && k / tot >= 0.7) return { c, come: 'fornitore' };
+  }
+  return null;
+}
+function simili(nome, ctx) {
+  const punti = new Map();
+  for (const w of paroleNome(nome)) {
+    const m = ctx.idx.get(w); if (!m) continue;
+    let df = 0; for (const k of m.values()) df += k;
+    const peso = Math.log(1 + ctx.n / df);
+    for (const [c, k] of m) punti.set(c, (punti.get(c) || 0) + peso * k / df);
+  }
+  const ord = [...punti.entries()].sort((a, b) => b[1] - a[1]);
+  return ord.length && ord[0][1] >= 2 && ord[0][1] >= 1.5 * ((ord[1] || [])[1] || 0) ? ord[0][0] : null;
+}
+/* all'avvio: ai prodotti senza categoria la scrive l'app, solo dove manca (le categorie già scritte non si toccano) */
+async function categorieMancanti() {
+  const senza = [...S.prodotti.values()].filter(p => !catDi(p)); if (!senza.length) return 0;
+  const ctx = contestoCategorie(), nuovi = [];
+  for (const p of senza) { const d = deduciCategoria(p.nome, p.fornitoreId, ctx); if (d) nuovi.push({ ...p, categoria: d.c, catAuto: true }); }
+  if (nuovi.length) await saveMany('prodotti', nuovi);
+  return nuovi.length;
+}
 /* le categorie preparate per il catalogo iniziale (file categorie_catalogo.js): si scrivono una volta sola,
    solo nei prodotti che non ne hanno una o che hanno ancora l'appunto del listino in quel campo */
 const impronta = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
@@ -3971,7 +4129,7 @@ $('#fileInput').addEventListener('change', async e => {
     if (fileMode === 'catalogo') {
       if (data.app !== 'spesasfusa-catalogo' || !Array.isArray(data.prodotti)) throw new Error('Questo file non è un catalogo dell\'app');
       const fs = (data.fornitori || []).filter(x => !S.fornitori.has(x.id)).map(x => ({ id: x.id, nome: x.nome, daNominare: !!x.daNominare, metodo: x.metodo || '', telefono: x.telefono || '', email: x.email || '', sito: x.sito || '', note: x.note || '' }));
-      const ps = data.prodotti.filter(x => !S.prodotti.has(x.id)).map(x => ({ id: x.id, nome: x.nome, fornitoreId: x.fornitoreId || '', categoria: x.categoria || '', formato: x.formato || '', prezzoAcquisto: x.prezzoAcquisto ?? null, iva: x.iva ?? null, prezzoVendita: x.prezzoVendita ?? null, prezzoManuale: null, ricarico: x.ricarico || 50, codici: x.codici || (x.barcode ? [x.barcode] : []), tipoScadenza: x.tipoScadenza || 'preferibilmente', note: x.note || '', origine: x.origine || '' }));
+      const ps = data.prodotti.filter(x => !S.prodotti.has(x.id)).map(x => ({ id: x.id, nome: maiuscolo(x.nome), fornitoreId: x.fornitoreId || '', categoria: x.categoria || '', formato: maiuscolo(x.formato || ''), prezzoAcquisto: x.prezzoAcquisto ?? null, iva: x.iva ?? null, prezzoVendita: x.prezzoVendita ?? null, prezzoManuale: null, ricarico: x.ricarico || 50, codici: x.codici || (x.barcode ? [x.barcode] : []), tipoScadenza: x.tipoScadenza || 'preferibilmente', note: x.note || '', origine: x.origine || '' }));
       await saveMany('fornitori', fs); await saveMany('prodotti', ps);
       toast(`Catalogo caricato: ${ps.length} prodotti, ${fs.length} fornitori`);
     } else if (fileMode === 'ripristina') {
@@ -4430,7 +4588,7 @@ function leggiScheda(id, b, stato) {
   const p = prodotto(id), q = sel => b.querySelector(sel);
   if (!p || !q('#pNome') || current.name !== 'prodotto' || current.arg !== id) return null;
   const v = sel => (q(sel) ? q(sel).value : '');
-  const nome = v('#pNome').replace(/\s+/g, ' ').trim(); if (!nome) return { errore: 'Il nome non può essere vuoto: non salvato' };
+  const nome = maiuscolo(v('#pNome').replace(/\s+/g, ' ').trim()); if (!nome) return { errore: 'Il nome non può essere vuoto: non salvato' };
   const sfuso = q('#pSfuso').checked, saccoTxt = v('#pSacco').trim(), sacco = parseNum(saccoTxt);
   const unita = sfuso ? v('#pUnita') : p.unita, fp = { sfuso, unita }, f = isSfuso(fp) ? UNITA[unitaDi(fp)].f : 1, pesato = isSfuso(fp);
   const manTxt = v('#pMan').trim(), manRaw = manTxt ? parseNum(manTxt) : null;
@@ -4442,7 +4600,7 @@ function leggiScheda(id, b, stato) {
   if (pesato && saccoTxt && !(sacco > 0)) return { errore: `${inLitri(fp) ? 'I litri della tanica non sono' : 'Il peso del sacco non è'} un numero valido: non salvato` };
   const cat = categoriaScelta(b, 'pCat');
   const dati = {
-    nome, fornitoreId: v('#pForn'), formato: v('#pFormato').trim(), categoria: cat == null ? p.categoria : cat, tipoScadenza: v('#pTipo'),
+    nome, fornitoreId: v('#pForn'), formato: maiuscolo(v('#pFormato').trim()), categoria: cat == null ? p.categoria : cat, catAuto: cat == null || cat === catDi(p) ? (p.catAuto ?? null) : null, tipoScadenza: v('#pTipo'),
     prezzoAcquisto: acq, iva: parseNum(v('#pIva')), ricarico: +v('#pRic'),
     prezzoManuale: manRaw != null ? Math.round(manRaw / f * 10000) / 10000 : null, note: v('#pNote').trim(),
     scortaMin: sc == null ? null : (pesato ? r3(sc) : Math.round(sc)),
@@ -4713,7 +4871,11 @@ async function init() {
   avviaSync();
   setTimeout(function primoControllo() {
     if (syncAttiva() && !SYNC.ultimo && SYNC.stato !== 'offline' && SYNC.stato !== 'errore' && SYNC.stato !== 'accesso' && (primoControllo.n = (primoControllo.n || 0) + 1) < 30) { setTimeout(primoControllo, 1000); return; }
-    categorieDalCatalogo().then(n => { if (n) { if (['categorie', 'categoria', 'catalogo', 'cruscotto'].includes(current.name)) render(); } }).catch(e => console.error(e))
+    // sistemazioni dei dati, una dopo l'altra: categorie del catalogo, maiuscolo, categorie che mancano
+    const aggiorna = n => { if (n && ['categorie', 'categoria', 'catalogo', 'cruscotto', 'fornitore', 'frutta', 'etichette'].includes(current.name)) render(); };
+    categorieDalCatalogo().then(aggiorna).catch(e => console.error(e))
+      .then(() => nomiMaiuscoli()).then(aggiorna).catch(e => console.error(e))
+      .then(() => categorieMancanti()).then(aggiorna).catch(e => console.error(e))
       .finally(() => controlloScorte().catch(e => console.error(e)));
   }, 1200);
   if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => { persistito = p; if (!p) navigator.storage.persist().then(v => { persistito = v; }); });

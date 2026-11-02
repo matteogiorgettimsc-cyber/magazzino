@@ -459,3 +459,11 @@ svg.grafico{width:100%;height:auto;display:block;touch-action:manipulation}
 .iva-f b{font-size:.95rem;padding:1px 8px;border-radius:20px}
 .iva-f.uguale b{color:var(--green);background:var(--accent-soft)}
 .iva-f.diversa b{color:var(--red-dark);background:var(--red-soft)}
+
+/* scheda prodotto: scadenze e pezzi (1.24.0) */
+#pCarica .segmented{width:100%}
+.pc-riga{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) auto;gap:8px;align-items:start}
+.pc-riga .field{margin:0}
+.pc-riga .pc-togli{margin-top:22px}
+.pc-ante{display:block;min-height:1.1em;font-size:.78rem;margin-top:2px}
+.pc-ante.err{color:var(--red)}
