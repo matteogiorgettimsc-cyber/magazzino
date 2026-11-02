@@ -253,6 +253,12 @@ function stato_(copia) {
 
 /* ---------------- prezzi, come nell'app ---------------- */
 function unita_(p) { return !p.sfuso || p.unita === 'pz' ? { nome: 'pezzo', f: 1 } : (FV_UNITA[p.unita] || FV_UNITA.kg); }   // sfuso al pezzo: come un prodotto a pezzi
+function ivaFornitore_(s, fid) {   // la più frequente tra i suoi prodotti (come nell'app): la prendono i prodotti nuovi
+  var c = {}, best = null;
+  for (var id in s.prodotti) { var p = s.prodotti[id]; if (p.fornitoreId === fid && p.iva != null && p.iva !== '') c[+p.iva] = (c[+p.iva] || 0) + 1; }
+  for (var k in c) if (best == null || c[k] > c[best] || (c[k] === c[best] && +k < +best)) best = k;
+  return best == null ? null : +best;
+}
 function calcolato_(p) { if (p.prezzoAcquisto == null || p.iva == null) return null; var ric = p.ricarico || 50; return Math.ceil(p.prezzoAcquisto * (1 + ric / 100) * (1 + p.iva / 100) * 10 - 1e-9) / 10; }
 function vendita_(p) { return p.prezzoManuale != null ? p.prezzoManuale : calcolato_(p); }
 function per_(p, x) { return x == null ? '' : Math.round(x * unita_(p).f * 100) / 100; }
@@ -469,7 +475,7 @@ function quandoModifichi(e) {
         if (!String(v[COL.nome - 1] || '').trim()) continue;
         var cat = ''; for (var k = riga - 1; k >= PRIMA; k--) { var a = String(sh.getRange(k, 1).getValue() || ''); if (a.indexOf('CAT:') === 0) { cat = a.slice(4); break; } }
         if (cat === 'Senza categoria') cat = '';
-        p = { id: nuovoId_(), nome: '', fornitoreId: fid === '-' ? '' : fid, categoria: cat, formato: '', prezzoAcquisto: null, iva: null, prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici: [], tipoScadenza: 'preferibilmente', note: '', origine: 'Creato nel foglio' };
+        p = { id: nuovoId_(), nome: '', fornitoreId: fid === '-' ? '' : fid, categoria: cat, formato: '', prezzoAcquisto: null, iva: fid === '-' ? null : ivaFornitore_(s, fid), prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici: [], tipoScadenza: 'preferibilmente', note: '', origine: 'Creato nel foglio' };
         nuovo = true;
       }
       // in una sola cella: se prima c'era un valore diverso da quello dell'app, il foglio si era spostato → non si salva

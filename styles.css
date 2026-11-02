@@ -452,3 +452,10 @@ svg.grafico{width:100%;height:auto;display:block;touch-action:manipulation}
 /* passi numerati nelle impostazioni */
 .passi{margin:0;padding-left:22px;font-size:.9rem;color:var(--ink-soft);line-height:1.45}
 .passi li{margin:4px 0}
+
+/* IVA del fornitore (1.23.0): verde se il prodotto ha la stessa, rosso se è diversa o manca */
+.iva-lab{gap:8px;align-items:baseline}
+.iva-f{font-size:.82rem;font-weight:600;color:var(--ink-soft);white-space:nowrap}
+.iva-f b{font-size:.95rem;padding:1px 8px;border-radius:20px}
+.iva-f.uguale b{color:var(--green);background:var(--accent-soft)}
+.iva-f.diversa b{color:var(--red-dark);background:var(--red-soft)}

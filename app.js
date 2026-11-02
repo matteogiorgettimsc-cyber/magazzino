@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.22.1';
+const VERSIONE = '1.23.0';
 
 /* =========================================================
    Utilità
@@ -44,6 +44,29 @@ function parseScadenza(raw) {
   if (dt.getMonth() !== mm - 1 || dt.getDate() !== dd) return null;
   return { iso: `${yy}-${pad(mm)}-${pad(dd)}`, fine };
 }
+/* IVA del fornitore (dalla 1.23.0): la più frequente tra i suoi prodotti. I prodotti restano come sono:
+   serve a segnalare in verde chi ha la stessa del fornitore e in rosso chi ne ha una diversa (o non ce l'ha),
+   e a darla ai prodotti nuovi. */
+const ALIQUOTE = [4, 5, 10, 22];
+const haIva = p => p && p.iva != null && p.iva !== '';
+function ivePerFornitore() {
+  const m = new Map(), out = new Map();
+  for (const p of S.prodotti.values()) {
+    if (!p.fornitoreId || !haIva(p)) continue;
+    const e = m.get(p.fornitoreId) || new Map(); e.set(+p.iva, (e.get(+p.iva) || 0) + 1); m.set(p.fornitoreId, e);
+  }
+  for (const [fid, e] of m) {
+    const [iva, quanti] = [...e.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0];
+    out.set(fid, { iva, quanti, su: [...e.values()].reduce((a, b) => a + b, 0) });
+  }
+  return out;
+}
+const ivaFornitore = fid => (fid && ivePerFornitore().get(fid)) || null;
+const ivaDiversa = (iva, f) => !!f && (iva == null || iva === '' || +iva !== f.iva);
+/* nella scheda: il numero del fornitore, verde se il prodotto ha la stessa IVA, rosso se è diversa o manca */
+const chipIva = (iva, f) => f ? `<span class="iva-f ${ivaDiversa(iva, f) ? 'diversa' : 'uguale'}" data-iva-f title="IVA della maggior parte dei prodotti del fornitore (${f.quanti} su ${f.su})">fornitore <b>${fmtNum(f.iva)}%</b></span>` : '<span data-iva-f></span>';
+const opzioniIva = iva => [...new Set([...ALIQUOTE, ...(iva != null && iva !== '' ? [+iva] : [])])].sort((a, b) => a - b)
+  .map(v => `<option value="${v}" ${iva != null && iva !== '' && +iva === v ? 'selected' : ''}>${fmtNum(v)}%</option>`).join('');
 function prezzoCalcolato(p) {
   const acq = p.prezzoAcquisto, iva = p.iva;
   if (acq == null || iva == null) return null;
@@ -562,7 +585,7 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
       const sf = b.querySelector('#npSfuso').checked, un = sf ? b.querySelector('#npUnita').value : undefined, sacco = un === 'pz' ? null : parseNum(b.querySelector('#npSacco').value);
       const crea = !code && b.querySelector('#npCrea').checked;
       const codici = code ? [code] : crea ? [await codiceInterno()] : [];
-      const p = { id: uid('p'), nome: n, fornitoreId: fid, categoria: '', formato: b.querySelector('#npFormato').value.trim(), prezzoAcquisto: null, iva: null, prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici, tipoScadenza: b.querySelector('#npTipo').value, note: '', origine: 'Creato nell\'app', sfuso: sf, unita: un, pesoSacco: sf && sacco > 0 ? sacco : null };
+      const p = { id: uid('p'), nome: n, fornitoreId: fid, categoria: '', formato: b.querySelector('#npFormato').value.trim(), prezzoAcquisto: null, iva: (ivaFornitore(fid) || {}).iva ?? null, prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici, tipoScadenza: b.querySelector('#npTipo').value, note: '', origine: 'Creato nell\'app', sfuso: sf, unita: un, pesoSacco: sf && sacco > 0 ? sacco : null };
       if (code) { const prima = byCode(code); if (prima) await save('prodotti', { ...prima, codici: prima.codici.filter(c => c !== code) }); }
       await save('prodotti', p); if (fid) await setMeta('ultimoFornitore', fid);
       closeModal(); toast(`Creato: ${p.nome}`); onDone && onDone(p);
@@ -1912,6 +1935,7 @@ function catListHTML() {
   if (!res.total) return `<div class="empty">Nessun prodotto.</div>`;
   const prima = new Map();
   for (const l of lottiAttivi()) if (l.scadenza) { const x = prima.get(l.prodottoId); if (!x || l.scadenza < x) prima.set(l.prodottoId, l.scadenza); }
+  const IF = ivePerFornitore();
   const testa = sel
     ? `<div class="row wrap"><b class="spacer" id="selN">${testoSel(sel.size, 'prodotto', 'prodotti')}</b><button class="btn small" type="button" data-act="cat-sel-tutti">Tutti i ${res.total}</button><button class="btn small" type="button" data-act="cat-sel-nessuno">Nessuno</button><button class="btn small" type="button" data-act="cat-categoria">Categoria…</button></div>`
     : `<div class="row"><span class="faint spacer">${res.total} prodotti</span><button class="btn small" type="button" data-act="cat-sel">Seleziona</button></div>`;
@@ -1920,7 +1944,7 @@ function catListHTML() {
     const pv = prezzoVendita(p);
     const corpo = `<div class="main"><div class="name">${esc(p.nome)}</div>
       <div class="sub">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${g ? ' · in negozio ' + fq(p, g) : ''}${s ? ' · scade ' + fmtDate(s) : ''}</div></div>
-      ${p.sfuso ? '<span class="tag sfuso">sfuso</span>' : ''}${(p.codici || []).length ? '<span class="tag ok">codice</span>' : ''}
+      ${p.sfuso ? '<span class="tag sfuso">sfuso</span>' : ''}${(p.codici || []).length ? '<span class="tag ok">codice</span>' : ''}${haIva(p) && ivaDiversa(p.iva, IF.get(p.fornitoreId)) ? `<span class="tag red" title="IVA diversa da quella del fornitore">IVA ${fmtNum(+p.iva)}%</span>` : ''}
       ${pv == null ? '<span class="tag warn">senza prezzo</span>' : `<span class="prezzo cat-prezzo">${prezzoBreve(p)}${p.prezzoManuale != null ? '<small>a mano</small>' : ''}</span>`}`;
     return sel ? `<label class="item sel-riga"><input type="checkbox" data-sel="${esc(p.id)}" ${sel.has(p.id) ? 'checked' : ''}>${corpo}</label>`
       : `<a class="item" href="#prodotto/${encodeURIComponent(p.id)}">${corpo}<span class="chev">›</span></a>`;
@@ -2037,7 +2061,7 @@ routes.prodotto = id => {
     <div class="card"><h3>Prezzi</h3>
       <div class="btn-grid" style="grid-template-columns:1fr 1fr">
         <label class="field"><span>Acquisto €<span class="u-base">${alBase(p)}</span></span><input type="text" inputmode="decimal" id="pAcq" value="${p.prezzoAcquisto != null ? fmtNum(p.prezzoAcquisto) : ''}"></label>
-        <label class="field">IVA<select id="pIva"><option value="">—</option>${[4, 10, 22].map(v => `<option value="${v}" ${p.iva === v ? 'selected' : ''}>${v}%</option>`).join('')}</select></label>
+        <label class="field"><span class="row iva-lab"><span class="spacer">IVA</span>${chipIva(p.iva, ivaFornitore(p.fornitoreId))}</span><select id="pIva"><option value="">—</option>${opzioniIva(p.iva)}</select></label>
         <label class="field">Ricarico<select id="pRic"><option value="50" ${p.ricarico !== 40 ? 'selected' : ''}>50%</option><option value="40" ${p.ricarico === 40 ? 'selected' : ''}>40% (eccezione)</option></select></label>
         <label class="field"><span>Prezzo a mano €<span class="u-kg">${alKg(p)}</span></span><input type="text" inputmode="decimal" id="pMan" value="${p.prezzoManuale != null ? fmtNum(Math.round(p.prezzoManuale * (isSfuso(p) ? UNITA[unitaDi(p)].f : 1) * 1000) / 1000) : ''}" placeholder="vuoto = calcolato"></label></div>
       <dl class="kv"><dt>Prezzo calcolato</dt><dd id="pCalc">${fmtEuro(perUnita(p, calc))}<span class="u-kg">${alKg(p)}</span></dd></dl>
@@ -2074,6 +2098,8 @@ routes.prodotto = id => {
         upd();
       };
       ['#pAcq', '#pIva', '#pRic', '#pMan'].forEach(s => b.querySelector(s).addEventListener('input', upd));
+      const coloraIva = () => { const c = b.querySelector('[data-iva-f]'); if (c) c.outerHTML = chipIva(b.querySelector('#pIva').value, ivaFornitore(b.querySelector('#pForn').value)); };
+      b.querySelector('#pIva').addEventListener('change', coloraIva); b.querySelector('#pForn').addEventListener('change', coloraIva);
       b.querySelector('#pSfuso').addEventListener('change', e => {
         b.querySelector('#pSfusoBox').hidden = !e.target.checked;
         unitaTesti();
@@ -2128,6 +2154,19 @@ routes.fornitori = () => {
     })
   };
 };
+function cardIvaFornitore(f) {
+  const fi = ivaFornitore(f.id), suoi = [...S.prodotti.values()].filter(p => p.fornitoreId === f.id).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+  if (!suoi.length) return '';
+  if (!fi) return `<div class="card"><h3>IVA</h3><div class="faint small">Nessun suo prodotto ha ancora l'IVA: scrivila nella scheda dei prodotti.</div></div>`;
+  const diverse = suoi.filter(p => haIva(p) && +p.iva !== fi.iva), senza = suoi.filter(p => !haIva(p));
+  const riga = (p, dx) => `<a class="item" href="#prodotto/${encodeURIComponent(p.id)}"><div class="main"><div class="name">${esc(p.nome)}</div></div>${dx}<span class="chev">›</span></a>`;
+  const max = 30, lista = (ps, dx) => `<div class="list">${ps.slice(0, max).map(p => riga(p, dx(p))).join('')}</div>${ps.length > max ? `<div class="faint small">e altri ${ps.length - max}</div>` : ''}`;
+  return `<div class="card"><h3>IVA</h3>
+    <div class="row"><span class="spacer">IVA dei suoi prodotti</span><span class="iva-f uguale"><b>${fmtNum(fi.iva)}%</b></span></div>
+    <div class="faint small">È quella della maggior parte dei suoi prodotti (${fi.quanti} su ${fi.su} con l'IVA scritta). Nella scheda di ogni prodotto il numero del fornitore è <span class="iva-f uguale"><b>verde</b></span> se l'IVA è la stessa, <span class="iva-f diversa"><b>rosso</b></span> se è diversa o manca. I prodotti nuovi di questo fornitore partono con il ${fmtNum(fi.iva)}%.</div>
+    ${diverse.length ? `<div class="section-title"><h2>Con IVA diversa</h2><span class="count">${diverse.length}</span></div><div class="faint small">Se sono eccezioni vere va bene così; se no, correggi l'IVA nella scheda.</div>${lista(diverse, p => `<span class="tag red">${fmtNum(+p.iva)}%</span>`)}` : '<div class="faint small">Nessun prodotto con un\'IVA diversa.</div>'}
+    ${senza.length ? `<div class="section-title"><h2>Senza IVA</h2><span class="count">${senza.length}</span></div><div class="faint small">Senza IVA il prezzo di vendita non si calcola.</div>${lista(senza, () => '<span class="tag warn">manca</span>')}` : ''}</div>`;
+}
 routes.fornitore = id => {
   const f = fornitore(id);
   if (!f) return { title: 'Fornitore', html: '<div class="empty">Fornitore non trovato.</div>', back: '#fornitori', tab: 'catalogo' };
@@ -2141,6 +2180,7 @@ routes.fornitore = id => {
       <label class="field">Sito per gli ordini<input type="url" id="fSito" value="${esc(f.sito)}" placeholder="es. www.fornitore.it"></label>
       <label class="field">Note <span class="hint">giorni di consegna, ordine minimo, trasporto</span><textarea id="fNote" style="min-height:80px">${esc(f.note)}</textarea></label>
       <div class="faint small salva-stato" aria-live="polite">Ogni modifica si salva da sola.</div></div>
+    ${cardIvaFornitore(f)}
     <a class="btn block" href="#catalogo/${encodeURIComponent(f.id)}">Vedi i ${n} prodotti</a>
     ${n ? `<button class="btn block" type="button" data-act="listino-excel" data-id="${esc(f.id)}">Scarica il listino in Excel</button>` : ''}
     <button class="btn danger block" type="button" data-act="f-elimina" data-id="${esc(f.id)}">Elimina fornitore</button>`;
