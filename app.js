@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.24.0';
+const VERSIONE = '1.25.0';
 
 /* =========================================================
    Utilità
@@ -83,6 +83,13 @@ function ivePerFornitore() {
 }
 const ivaFornitore = fid => (fid && ivePerFornitore().get(fid)) || null;
 const ivaDiversa = (iva, f) => !!f && (iva == null || iva === '' || +iva !== f.iva);
+/* all'avvio (dalla 1.25.0): nei prodotti senza IVA si scrive quella del fornitore; quelle già scritte non si toccano */
+async function iveMancanti() {
+  const IF = ivePerFornitore(), nuovi = [];
+  for (const p of S.prodotti.values()) { const f = !haIva(p) && IF.get(p.fornitoreId); if (f) nuovi.push({ ...p, iva: f.iva }); }
+  if (nuovi.length) await saveMany('prodotti', nuovi);
+  return nuovi.length;
+}
 /* nella scheda: il numero del fornitore, verde se il prodotto ha la stessa IVA, rosso se è diversa o manca */
 const chipIva = (iva, f) => f ? `<span class="iva-f ${ivaDiversa(iva, f) ? 'diversa' : 'uguale'}" data-iva-f title="IVA della maggior parte dei prodotti del fornitore (${f.quanti} su ${f.su})">fornitore <b>${fmtNum(f.iva)}%</b></span>` : '<span data-iva-f></span>';
 const opzioniIva = iva => [...new Set([...ALIQUOTE, ...(iva != null && iva !== '' ? [+iva] : [])])].sort((a, b) => a - b)
@@ -2164,7 +2171,8 @@ routes.prodotto = id => {
     <div class="card"><h3>Prezzi</h3>
       <div class="btn-grid" style="grid-template-columns:1fr 1fr">
         <label class="field"><span>Acquisto €<span class="u-base">${alBase(p)}</span></span><input type="text" inputmode="decimal" id="pAcq" value="${p.prezzoAcquisto != null ? fmtNum(p.prezzoAcquisto) : ''}"></label>
-        <label class="field"><span class="row iva-lab"><span class="spacer">IVA</span>${chipIva(p.iva, ivaFornitore(p.fornitoreId))}</span><select id="pIva"><option value="">—</option>${opzioniIva(p.iva)}</select></label>
+        ${(() => { const fi = ivaFornitore(p.fornitoreId), v = haIva(p) ? p.iva : fi ? fi.iva : null;   // senza IVA: già quella del fornitore (dalla 1.25.0)
+          return `<label class="field"><span class="row iva-lab"><span class="spacer">IVA</span>${chipIva(v, fi)}</span><select id="pIva"><option value="">—</option>${opzioniIva(v)}</select></label>`; })()}
         <label class="field">Ricarico<select id="pRic"><option value="50" ${p.ricarico !== 40 ? 'selected' : ''}>50%</option><option value="40" ${p.ricarico === 40 ? 'selected' : ''}>40% (eccezione)</option></select></label>
         <label class="field"><span>Prezzo a mano €<span class="u-kg">${alKg(p)}</span></span><input type="text" inputmode="decimal" id="pMan" value="${p.prezzoManuale != null ? fmtNum(Math.round(p.prezzoManuale * (isSfuso(p) ? UNITA[unitaDi(p)].f : 1) * 1000) / 1000) : ''}" placeholder="vuoto = calcolato"></label></div>
       <dl class="kv"><dt>Prezzo calcolato</dt><dd id="pCalc">${fmtEuro(perUnita(p, calc))}<span class="u-kg">${alKg(p)}</span></dd></dl>
@@ -2203,7 +2211,13 @@ routes.prodotto = id => {
       };
       ['#pAcq', '#pIva', '#pRic', '#pMan'].forEach(s => b.querySelector(s).addEventListener('input', upd));
       const coloraIva = () => { const c = b.querySelector('[data-iva-f]'); if (c) c.outerHTML = chipIva(b.querySelector('#pIva').value, ivaFornitore(b.querySelector('#pForn').value)); };
-      b.querySelector('#pIva').addEventListener('change', coloraIva); b.querySelector('#pForn').addEventListener('change', coloraIva);
+      let fornPrima = b.querySelector('#pForn').value;
+      b.querySelector('#pIva').addEventListener('change', coloraIva);
+      b.querySelector('#pForn').addEventListener('change', () => {   // (prima del salvataggio automatico, che ascolta più in alto)
+        const sel = b.querySelector('#pIva'), vec = ivaFornitore(fornPrima), nuo = ivaFornitore(b.querySelector('#pForn').value);
+        if (nuo && (!sel.value || (vec && +sel.value === vec.iva))) { if (![...sel.options].some(o => +o.value === nuo.iva && o.value)) sel.insertAdjacentHTML('beforeend', `<option value="${nuo.iva}">${fmtNum(nuo.iva)}%</option>`); sel.value = String(nuo.iva); upd(); }
+        fornPrima = b.querySelector('#pForn').value; coloraIva();
+      });
       b.querySelector('#pSfuso').addEventListener('change', e => {
         b.querySelector('#pSfusoBox').hidden = !e.target.checked;
         unitaTesti();
@@ -2258,6 +2272,13 @@ routes.fornitori = () => {
     })
   };
 };
+function cardEtiFornitore(f) {
+  const ps = etichetteDi(f.id), sf = ps.filter(p => p.sfuso).length, pz = ps.length - sf;
+  return `<div class="card"><h3>Etichette</h3>
+    ${ps.length ? `<div class="faint small">${[sf ? `${sf} contenitor${sf === 1 ? 'e' : 'i'} dello sfuso` : '', pz ? `${pz} prodott${pz === 1 ? 'o' : 'i'} senza codice del produttore` : ''].filter(Boolean).join(' · ')}</div>
+      <a class="btn primary block" href="#etichette/${encodeURIComponent(f.id)}~f">Stampa le etichette di ${esc(f.nome)}</a>`
+      : '<div class="faint small">Nessuna etichetta da stampare: servono per lo sfuso e per i prodotti senza codice a barre.</div>'}</div>`;
+}
 function cardIvaFornitore(f) {
   const fi = ivaFornitore(f.id), suoi = [...S.prodotti.values()].filter(p => p.fornitoreId === f.id).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
   if (!suoi.length) return '';
@@ -2284,6 +2305,7 @@ routes.fornitore = id => {
       <label class="field">Sito per gli ordini<input type="url" id="fSito" value="${esc(f.sito)}" placeholder="es. www.fornitore.it"></label>
       <label class="field">Note <span class="hint">giorni di consegna, ordine minimo, trasporto</span><textarea id="fNote" style="min-height:80px">${esc(f.note)}</textarea></label>
       <div class="faint small salva-stato" aria-live="polite">Ogni modifica si salva da sola.</div></div>
+    ${cardEtiFornitore(f)}
     ${cardIvaFornitore(f)}
     <a class="btn block" href="#catalogo/${encodeURIComponent(f.id)}">Vedi i ${n} prodotti</a>
     ${n ? `<button class="btn block" type="button" data-act="listino-excel" data-id="${esc(f.id)}">Scarica il listino in Excel</button>` : ''}
@@ -2352,19 +2374,41 @@ async function codiceInterno() {
 const codiceEtichetta = p => { const cs = p.codici || []; return cs.find(c => /^\d{13}$/.test(c)) || cs.find(c => /^\d{8}$|^\d{12}$/.test(c)) || cs[0] || null; };
 
 /* si ricordano solo quelle tolte: un prodotto appena diventato sfuso (o con il codice appena creato) è già spuntato */
-let ETI = { tolte: new Set(), copie: new Map() };
-const prodottiEtichette = () => [...S.prodotti.values()].filter(p => p.sfuso || codiceNegozio(p)).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+/* etichette per fornitore (dalla 1.25.0): prima si sceglie il fornitore, poi le sue etichette.
+   ETI.forn: id del fornitore, '-' = senza fornitore, 'tutti' = tutti insieme, null = da scegliere */
+let ETI = { tolte: new Set(), copie: new Map(), forn: null };
+const tutteEtichette = () => [...S.prodotti.values()].filter(p => p.sfuso || codiceNegozio(p)).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+const fornEti = p => p.fornitoreId && fornitore(p.fornitoreId) ? p.fornitoreId : '-';
+const etichetteDi = fid => tutteEtichette().filter(p => fid === 'tutti' || fornEti(p) === fid);
+const prodottiEtichette = () => ETI.forn ? etichetteDi(ETI.forn) : tutteEtichette();
 const etiScelte = () => prodottiEtichette().filter(p => !ETI.tolte.has(p.id));
 const copieDi = id => ETI.copie.get(id) || 1;
 const totEtichette = () => etiScelte().reduce((t, p) => t + copieDi(p.id), 0);
 const testoScelte = n => n === 1 ? '1 etichetta' : `${n} etichette`;
 const rigaEti = p => `<div class="item eti-riga${ETI.tolte.has(p.id) ? ' tolta' : ''}"><label class="eti-sel"><input type="checkbox" data-eti="${esc(p.id)}" ${ETI.tolte.has(p.id) ? '' : 'checked'}><div class="eti-anteprima">${htmlEtichetta(p, true)}</div></label>
   <div class="eti-copie" role="group" aria-label="Quante etichette di ${esc(p.nome)}"><button type="button" data-act="eti-copie" data-id="${esc(p.id)}" data-d="1" aria-label="Una in più">+</button><b>×${copieDi(p.id)}</b><button type="button" data-act="eti-copie" data-id="${esc(p.id)}" data-d="-1" aria-label="Una in meno" ${copieDi(p.id) <= 1 ? 'disabled' : ''}>−</button></div></div>`;
-routes.etichette = () => {
+function sceltaFornitoreEti() {
+  const per = new Map();
+  for (const p of tutteEtichette()) { const k = fornEti(p); per.set(k, (per.get(k) || 0) + 1); }
+  const voci = [...per.entries()].map(([fid, n]) => ({ fid, n, nome: fid === '-' ? 'Senza fornitore' : nomeForn(fid) }))
+    .sort((a, b) => (a.fid === '-') - (b.fid === '-') || a.nome.localeCompare(b.nome, 'it'));
+  const nuovo = '<button class="btn block" type="button" data-act="eti-nuovo">+ Crea il codice per un prodotto che non ce l\'ha</button>';
+  if (!voci.length) return `<div class="empty">Ancora nessuna etichetta.<br>Servono per lo sfuso (contenitori) e per i prodotti che non hanno il codice a barre: l'app crea il codice e stampa le etichette.</div>${nuovo}<a class="btn block" href="#catalogo">Vai al Catalogo</a>`;
+  return `<div class="notice"><span>Le etichette si stampano per fornitore: scegli di chi.</span></div>
+    <div class="list">${voci.map(v => `<a class="item" href="#etichette/${encodeURIComponent(v.fid)}"><div class="main"><div class="name">${esc(v.nome)}</div></div><span class="count">${v.n}</span><span class="chev">›</span></a>`).join('')}</div>
+    ${voci.length > 1 ? '<a class="btn block" href="#etichette/tutti">Tutti i fornitori insieme</a>' : ''}
+    ${nuovo}`;
+}
+routes.etichette = arg => {
+  const [fa, da] = String(arg || '').split('~');   // «~f»: aperta dalla scheda del fornitore, «indietro» torna lì
+  ETI.forn = fa || null;
+  if (!ETI.forn) return { title: 'Etichette', html: sceltaFornitoreEti(), back: '#catalogo', tab: 'catalogo' };
   const lista = prodottiEtichette(), sfusi = lista.filter(p => p.sfuso), pezzi = lista.filter(p => !p.sfuso);
+  const chi = ETI.forn === 'tutti' ? 'Tutti i fornitori' : ETI.forn === '-' ? 'Senza fornitore' : nomeForn(ETI.forn);
+  const testa = `<div class="row"><b class="spacer">${esc(chi)}</b><a class="btn small" href="#etichette">Cambia fornitore</a></div>`;
   const n = totEtichette();
   const nuovo = '<button class="btn block" type="button" data-act="eti-nuovo">+ Crea il codice per un prodotto che non ce l\'ha</button>';
-  const html = lista.length ? `<div class="notice"><span>Per fogli A4 di etichette adesive <b>70 × 37 mm</b> (24 per foglio). Qui sotto vedi come vengono: togli la spunta a quelle che non ti servono, e con + e − scegli quante.</span></div>
+  const html = testa + (lista.length ? `<div class="notice"><span>Per fogli A4 di etichette adesive <b>70 × 37 mm</b> (24 per foglio). Qui sotto vedi come vengono: togli la spunta a quelle che non ti servono, e con + e − scegli quante.</span></div>
     <div class="row"><button class="btn small" type="button" data-act="eti-tutte">Tutte</button><button class="btn small" type="button" data-act="eti-nessuna">Nessuna</button><span class="spacer"></span><span class="faint" id="etiN">${testoScelte(n)}</span></div>
     <div class="stack" id="etiList">
     ${sfusi.length ? `<div class="section-title"><h2>Contenitori dello sfuso</h2><span class="count">${sfusi.length}</span></div><div class="list">${sfusi.map(rigaEti).join('')}</div>` : ''}
@@ -2372,9 +2416,9 @@ routes.etichette = () => {
     </div>
     ${nuovo}
     <button class="btn primary block" type="button" data-act="eti-stampa" id="etiStampa"${n ? '' : ' disabled'}>Stampa ${testoScelte(n)}</button>`
-    : `<div class="empty">Ancora nessuna etichetta.<br>Servono per lo sfuso (contenitori) e per i prodotti che non hanno il codice a barre: l'app crea il codice e stampa le etichette.</div>${nuovo}<a class="btn block" href="#catalogo">Vai al Catalogo</a>`;
+    : `<div class="empty">Nessuna etichetta per questo fornitore.<br>Servono per lo sfuso (contenitori) e per i prodotti che non hanno il codice a barre.</div>${nuovo}`);
   return {
-    title: 'Etichette', html, back: '#catalogo', tab: 'catalogo',
+    title: 'Etichette', html, back: da === 'f' && fornitore(ETI.forn) ? '#fornitore/' + encodeURIComponent(ETI.forn) : '#etichette', tab: 'catalogo',
     mount: b => {
       const l = b.querySelector('#etiList'); if (!l) return;
       l.addEventListener('change', e => {
@@ -4876,6 +4920,7 @@ async function init() {
     categorieDalCatalogo().then(aggiorna).catch(e => console.error(e))
       .then(() => nomiMaiuscoli()).then(aggiorna).catch(e => console.error(e))
       .then(() => categorieMancanti()).then(aggiorna).catch(e => console.error(e))
+      .then(() => iveMancanti()).then(aggiorna).catch(e => console.error(e))
       .finally(() => controlloScorte().catch(e => console.error(e)));
   }, 1200);
   if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => { persistito = p; if (!p) navigator.storage.persist().then(v => { persistito = v; }); });
