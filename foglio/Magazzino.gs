@@ -252,7 +252,9 @@ function stato_(copia) {
 }
 
 /* ---------------- prezzi, come nell'app ---------------- */
-function unita_(p) { return !p.sfuso || p.unita === 'pz' ? { nome: 'pezzo', f: 1 } : (FV_UNITA[p.unita] || FV_UNITA.kg); }   // sfuso al pezzo: come un prodotto a pezzi
+function aKg_(p) { return !!p.acquistoKg && !(p.sfuso && p.unita !== 'pz'); }   // arriva a kg, si vende a pezzi (come nell'app)
+function costoUnita_(p) { if (p.prezzoAcquisto == null) return null; if (!aKg_(p)) return p.prezzoAcquisto; return p.pesoPezzo > 0 ? p.prezzoAcquisto * p.pesoPezzo / 1000 : null; }
+function unita_(p) { if (aKg_(p)) return { nome: 'pezzo (acquisto al kg)', f: 1 }; return !p.sfuso || p.unita === 'pz' ? { nome: 'pezzo', f: 1 } : (FV_UNITA[p.unita] || FV_UNITA.kg); }   // sfuso al pezzo: come un prodotto a pezzi
 function maiuscolo_(t) {   // come nell'app: nome e formato in maiuscolo, unità di misura in minuscolo (500 g, 1,5 l, 6 pz)
   return String(t).toUpperCase().replace(/(\d)(\s?)(KG|HG|GR|G|MG|ML|CL|DL|LT|L|PZ|CC|MM|CM|M)(?![A-ZÀ-ÖØ-Þ0-9])/g, function (m, n, sp, u) { return n + sp + u.toLowerCase(); })
     .replace(/(\d)\s?X\s?(?=\d)/g, function (m) { return m.toLowerCase(); });
@@ -263,7 +265,7 @@ function ivaFornitore_(s, fid) {   // la più frequente tra i suoi prodotti (com
   for (var k in c) if (best == null || c[k] > c[best] || (c[k] === c[best] && +k < +best)) best = k;
   return best == null ? null : +best;
 }
-function calcolato_(p) { if (p.prezzoAcquisto == null || p.iva == null) return null; var ric = p.ricarico || 50; return Math.ceil(p.prezzoAcquisto * (1 + ric / 100) * (1 + p.iva / 100) * 10 - 1e-9) / 10; }
+function calcolato_(p) { var acq = costoUnita_(p); if (acq == null || p.iva == null) return null; var ric = p.ricarico || 50; return Math.ceil(acq * (1 + ric / 100) * (1 + p.iva / 100) * 10 - 1e-9) / 10; }
 function vendita_(p) { return p.prezzoManuale != null ? p.prezzoManuale : calcolato_(p); }
 function per_(p, x) { return x == null ? '' : Math.round(x * unita_(p).f * 100) / 100; }
 function per3_(p, x) { return x == null ? '' : Math.round(x * unita_(p).f * 1000) / 1000; }
@@ -372,7 +374,7 @@ function magazzino_(s) {
   attivi_(s).forEach(function (l) { var p = s.prodotti[l.prodottoId]; if (!p) return; var e = per[p.id] = per[p.id] || { p: p, q: 0, n: 0, scad: null }; e.q += l.quantita; e.n++; if (l.scadenza && (!e.scad || l.scadenza < e.scad)) e.scad = l.scadenza; });
   var righe = Object.keys(per).map(function (k) { return per[k]; })
     .sort(function (a, b) { return ordineCat_(catDi_(a.p) || 'Senza categoria') - ordineCat_(catDi_(b.p) || 'Senza categoria') || (catDi_(a.p)).localeCompare(catDi_(b.p), 'it') || a.p.nome.localeCompare(b.p.nome, 'it'); })
-    .map(function (e) { var u = !e.p.sfuso || e.p.unita === 'pz' ? 'pz' : e.p.unita === 'l' ? 'litri' : 'kg'; return [e.p.nome, catDi_(e.p) || 'Senza categoria', nomeForn_(s, e.p.fornitoreId), Math.round(e.q * 1000) / 1000, u, e.n, data_(e.scad), e.p.prezzoAcquisto != null ? Math.round(e.p.prezzoAcquisto * e.q * 100) / 100 : '']; });
+    .map(function (e) { var u = !e.p.sfuso || e.p.unita === 'pz' ? 'pz' : e.p.unita === 'l' ? 'litri' : 'kg'; return [e.p.nome, catDi_(e.p) || 'Senza categoria', nomeForn_(s, e.p.fornitoreId), Math.round(e.q * 1000) / 1000, u, e.n, data_(e.scad), costoUnita_(e.p) != null ? Math.round(costoUnita_(e.p) * e.q * 100) / 100 : '']; });
   var tot = righe.reduce(function (t, r) { return t + (+r[7] || 0); }, 0);
   scriviTabella_(foglio_('Magazzino', true), 'Magazzino', 'Quello che c\'è in negozio adesso, dall\'app · valore al prezzo d\'acquisto: ' + tot.toFixed(2).replace('.', ',') + ' €',
     ['Prodotto', 'Categoria', 'Fornitore', 'In negozio', 'Unità', 'Confezioni', 'Prossima scadenza', 'Valore al costo €'], righe, { formati: ['', '', '', '0.###', '', '0', 'dd/mm/yyyy', EURO], larghezze: [260, 180, 180, 90, 60, 90, 120, 120] });
