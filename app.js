@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.27.4';
+const VERSIONE = '1.28.0';
 
 /* =========================================================
    Utilità
@@ -2470,16 +2470,17 @@ const codiceEtichetta = p => { const cs = p.codici || []; return cs.find(c => /^
 /* si ricordano solo quelle tolte: un prodotto appena diventato sfuso (o con il codice appena creato) è già spuntato */
 /* etichette per fornitore (dalla 1.25.0): prima si sceglie il fornitore, poi le sue etichette.
    ETI.forn: id del fornitore, '-' = senza fornitore, 'tutti' = tutti insieme, null = da scegliere */
-let ETI = { tolte: new Set(), copie: new Map(), forn: null };
+let ETI = { tolte: new Set(), copie: new Map(), forn: null, scelti: new Set() };   // scelti: fornitori spuntati per stamparli insieme (dalla 1.28.0)
 const tutteEtichette = () => [...S.prodotti.values()].filter(p => p.sfuso || codiceNegozio(p)).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
 const fornEti = p => p.fornitoreId && fornitore(p.fornitoreId) ? p.fornitoreId : '-';
-const etichetteDi = fid => tutteEtichette().filter(p => fid === 'tutti' || fornEti(p) === fid);
+const etichetteDi = fid => { const ids = String(fid).split(','); return tutteEtichette().filter(p => fid === 'tutti' || ids.includes(fornEti(p))); };
+const nomeFornEti = fid => fid === '-' ? 'Senza fornitore' : nomeForn(fid);
 const prodottiEtichette = () => ETI.forn ? etichetteDi(ETI.forn) : tutteEtichette();
 const etiScelte = () => prodottiEtichette().filter(p => !ETI.tolte.has(p.id));
 const copieDi = id => ETI.copie.get(id) || 1;
 const totEtichette = () => etiScelte().reduce((t, p) => t + copieDi(p.id), 0);
 const testoScelte = n => n === 1 ? '1 etichetta' : `${n} etichette`;
-const rigaEti = p => `<div class="item eti-riga${ETI.tolte.has(p.id) ? ' tolta' : ''}"><label class="eti-sel"><input type="checkbox" data-eti="${esc(p.id)}" ${ETI.tolte.has(p.id) ? '' : 'checked'}><div class="eti-anteprima">${htmlEtichetta(p, true)}</div></label>
+const rigaEti = (p, conForn) => `<div class="item eti-riga${ETI.tolte.has(p.id) ? ' tolta' : ''}"><label class="eti-sel"><input type="checkbox" data-eti="${esc(p.id)}" ${ETI.tolte.has(p.id) ? '' : 'checked'}><div class="eti-anteprima">${htmlEtichetta(p, true)}</div>${conForn ? `<div class="faint small eti-di">${esc(nomeFornEti(fornEti(p)))}</div>` : ''}</label>
   <div class="eti-copie" role="group" aria-label="Quante etichette di ${esc(p.nome)}"><button type="button" data-act="eti-copie" data-id="${esc(p.id)}" data-d="1" aria-label="Una in più">+</button><b>×${copieDi(p.id)}</b><button type="button" data-act="eti-copie" data-id="${esc(p.id)}" data-d="-1" aria-label="Una in meno" ${copieDi(p.id) <= 1 ? 'disabled' : ''}>−</button></div></div>`;
 function sceltaFornitoreEti() {
   const per = new Map();
@@ -2488,25 +2489,41 @@ function sceltaFornitoreEti() {
     .sort((a, b) => (a.fid === '-') - (b.fid === '-') || a.nome.localeCompare(b.nome, 'it'));
   const nuovo = '<button class="btn block" type="button" data-act="eti-nuovo">+ Crea il codice per un prodotto che non ce l\'ha</button>';
   if (!voci.length) return `<div class="empty">Ancora nessuna etichetta.<br>Servono per lo sfuso (contenitori) e per i prodotti che non hanno il codice a barre: l'app crea il codice e stampa le etichette.</div>${nuovo}<a class="btn block" href="#catalogo">Vai al Catalogo</a>`;
-  return `<div class="notice"><span>Le etichette si stampano per fornitore: scegli di chi.</span></div>
-    <div class="list">${voci.map(v => `<a class="item" href="#etichette/${encodeURIComponent(v.fid)}"><div class="main"><div class="name">${esc(v.nome)}</div></div><span class="count">${v.n}</span><span class="chev">›</span></a>`).join('')}</div>
+  for (const f of [...ETI.scelti]) if (!per.has(f)) ETI.scelti.delete(f);
+  return `<div class="notice"><span>Tocca un fornitore per le sue etichette, oppure <b>spunta più fornitori</b> per stamparli insieme sullo stesso foglio.</span></div>
+    <div class="list" id="etiForn">${voci.map(v => `<div class="item eti-forn"><label class="eti-fsel" aria-label="Stampa insieme: ${esc(v.nome)}"><input type="checkbox" data-eti-f="${esc(v.fid)}" ${ETI.scelti.has(v.fid) ? 'checked' : ''}></label><a class="main" href="#etichette/${encodeURIComponent(v.fid)}"><div class="name">${esc(v.nome)}</div></a><span class="count">${v.n}</span><a class="chev" href="#etichette/${encodeURIComponent(v.fid)}" aria-hidden="true" tabindex="-1">›</a></div>`).join('')}</div>
+    <button class="btn primary block" type="button" id="etiInsieme" data-act="eti-insieme" ${ETI.scelti.size ? '' : 'disabled'}>${testoInsieme(per)}</button>
     ${voci.length > 1 ? '<a class="btn block" href="#etichette/tutti">Tutti i fornitori insieme</a>' : ''}
     ${nuovo}`;
+}
+function testoInsieme(per) {
+  if (!ETI.scelti.size) return 'Spunta i fornitori da stampare insieme';
+  let n = 0; for (const f of ETI.scelti) n += per.get(f) || 0;
+  return `Insieme: ${ETI.scelti.size} fornitor${ETI.scelti.size === 1 ? 'e' : 'i'} · ${n} etichett${n === 1 ? 'a' : 'e'}`;
 }
 routes.etichette = arg => {
   const [fa, da] = String(arg || '').split('~');   // «~f»: aperta dalla scheda del fornitore, «indietro» torna lì
   ETI.forn = fa || null;
-  if (!ETI.forn) return { title: 'Etichette', html: sceltaFornitoreEti(), back: '#catalogo', tab: 'catalogo' };
+  if (!ETI.forn) return { title: 'Etichette', html: sceltaFornitoreEti(), back: '#catalogo', tab: 'catalogo', mount: b => {
+    const l = b.querySelector('#etiForn'); if (!l) return;
+    l.addEventListener('change', e => {
+      const c = e.target.closest('[data-eti-f]'); if (!c) return;
+      if (c.checked) ETI.scelti.add(c.dataset.etiF); else ETI.scelti.delete(c.dataset.etiF);
+      const per = new Map(); for (const p of tutteEtichette()) { const k = fornEti(p); per.set(k, (per.get(k) || 0) + 1); }
+      const bt = b.querySelector('#etiInsieme'); bt.textContent = testoInsieme(per); bt.disabled = !ETI.scelti.size;
+    });
+  } };
+  const piu = ETI.forn.includes(',');
   const lista = prodottiEtichette(), sfusi = lista.filter(p => p.sfuso), pezzi = lista.filter(p => !p.sfuso);
-  const chi = ETI.forn === 'tutti' ? 'Tutti i fornitori' : ETI.forn === '-' ? 'Senza fornitore' : nomeForn(ETI.forn);
+  const chi = ETI.forn === 'tutti' ? 'Tutti i fornitori' : piu ? ETI.forn.split(',').map(nomeFornEti).join(' + ') : nomeFornEti(ETI.forn);
   const testa = `<div class="row"><b class="spacer">${esc(chi)}</b><a class="btn small" href="#etichette">Cambia fornitore</a></div>`;
   const n = totEtichette();
   const nuovo = '<button class="btn block" type="button" data-act="eti-nuovo">+ Crea il codice per un prodotto che non ce l\'ha</button>';
   const html = testa + (lista.length ? `<div class="notice"><span>Per fogli A4 di etichette adesive <b>70 × 37 mm</b> (24 per foglio). Qui sotto vedi come vengono: togli la spunta a quelle che non ti servono, e con + e − scegli quante.</span></div>
     <div class="row"><button class="btn small" type="button" data-act="eti-tutte">Tutte</button><button class="btn small" type="button" data-act="eti-nessuna">Nessuna</button><span class="spacer"></span><span class="faint" id="etiN">${testoScelte(n)}</span></div>
     <div class="stack" id="etiList">
-    ${sfusi.length ? `<div class="section-title"><h2>Contenitori dello sfuso</h2><span class="count">${sfusi.length}</span></div><div class="list">${sfusi.map(rigaEti).join('')}</div>` : ''}
-    ${pezzi.length ? `<div class="section-title"><h2>Prodotti senza codice del produttore</h2><span class="count">${pezzi.length}</span></div><div class="faint small">Il codice l'ha creato l'app: un'etichetta su ogni pezzo, così al Banco si scansiona.</div><div class="list">${pezzi.map(rigaEti).join('')}</div>` : ''}
+    ${sfusi.length ? `<div class="section-title"><h2>Contenitori dello sfuso</h2><span class="count">${sfusi.length}</span></div><div class="list">${sfusi.map(p => rigaEti(p, piu || ETI.forn === 'tutti')).join('')}</div>` : ''}
+    ${pezzi.length ? `<div class="section-title"><h2>Prodotti senza codice del produttore</h2><span class="count">${pezzi.length}</span></div><div class="faint small">Il codice l'ha creato l'app: un'etichetta su ogni pezzo, così al Banco si scansiona.</div><div class="list">${pezzi.map(p => rigaEti(p, piu || ETI.forn === 'tutti')).join('')}</div>` : ''}
     </div>
     ${nuovo}
     <button class="btn primary block" type="button" data-act="eti-stampa" id="etiStampa"${n ? '' : ' disabled'}>Stampa ${testoScelte(n)}</button>`
@@ -2538,12 +2555,34 @@ window.addEventListener('afterprint', () => { const st = document.getElementById
 /* finestra di stampa: anteprima e da quale etichetta del foglio partire.
    L'app ricorda dove si è fermata, così un foglio iniziato si rimette nella stampante e si continua. */
 const ETI_FOGLIO = 24, MAX_COPIE = 240;   // al massimo 10 fogli alla volta
-function stampaModal(ids, { titolo = null, copie = null } = {}) {
+/* riempire il foglio (dalla 1.28.0): le caselle che restano vuote sull'ultimo foglio si possono riempire con etichette di
+   altri fornitori. Prima quelle «da stampare»: prodotti arrivati negli ultimi 30 giorni dopo l'ultima stampa della loro etichetta. */
+function etichetteDaProporre(escludi) {
+  const arr = new Map();
+  for (const l of S.lotti.values()) if ((l.origine || 'arrivo') === 'arrivo' && l.arrivo && l.stato !== 'eliminato' && (!arr.has(l.prodottoId) || l.arrivo > arr.get(l.prodottoId))) arr.set(l.prodottoId, l.arrivo);
+  const da = p => { const a = arr.get(p.id); return !!a && a > (p.etiStampata || '') && daysUntil(a) >= -30; };
+  return tutteEtichette().filter(p => !escludi.has(p.id)).map(p => ({ p, da: da(p), f: nomeFornEti(fornEti(p)) }))
+    .sort((a, b) => (b.da - a.da) || a.f.localeCompare(b.f, 'it') || a.p.nome.localeCompare(b.p.nome, 'it'));
+}
+function stampaModal(ids, { titolo = null, copie = null, start: inizio = null } = {}) {
   ids = ids.filter(id => S.prodotti.has(id)); if (!ids.length) return;
   const uno = ids.length === 1, p1 = prodotto(ids[0]), quante = id => Math.max(1, Math.min(MAX_COPIE, Math.round((copie && copie[id]) || 1)));
   let q = quante(ids[0]), n;
   const lista = () => uno ? Array(q).fill(ids[0]) : ids.flatMap(id => Array(quante(id)).fill(id));
-  let start = Math.min(ETI_FOGLIO - 1, Math.max(0, parseInt(S.meta.etiPosizione, 10) || 0));
+  let start = inizio != null ? inizio : Math.min(ETI_FOGLIO - 1, Math.max(0, parseInt(S.meta.etiPosizione, 10) || 0));
+  const vuote = () => (ETI_FOGLIO - (start + n) % ETI_FOGLIO) % ETI_FOGLIO;
+  const copieOra = () => uno ? { [ids[0]]: q } : Object.fromEntries(ids.map(id => [id, quante(id)]));
+  const riempi = b => {   // l'elenco per riempire le caselle vuote
+    const box = b.querySelector('#spAltre'), cerca = norm(box.querySelector('#spCerca').value || ''), scelte = new Set($$('[data-agg]:checked', box).map(x => x.dataset.agg));
+    const tutte = etichetteDaProporre(new Set(ids)), mostra = cerca ? tutte.filter(x => norm(x.p.nome + ' ' + x.f).includes(cerca)) : tutte.filter(x => x.da || scelte.has(x.p.id)).concat(tutte.filter(x => !x.da && !scelte.has(x.p.id)).slice(0, Math.max(0, 25 - tutte.filter(x => x.da).length)));
+    box.querySelector('#spLista').innerHTML = mostra.length ? mostra.slice(0, 60).map(x => `<label class="item sp-agg"><input type="checkbox" data-agg="${esc(x.p.id)}" ${scelte.has(x.p.id) ? 'checked' : ''}><div class="main"><div class="name">${esc(x.p.nome)}</div><div class="sub">${esc(x.f)}${x.da ? ' · <b>arrivato da poco</b>' : ''}</div></div></label>`).join('')
+      : '<div class="faint small">Nessuna etichetta da aggiungere.</div>';
+    contaAgg(b);
+  };
+  const contaAgg = b => {
+    const k = $$('#spAltre [data-agg]:checked', b).length, v = vuote(), bt = b.querySelector('[data-x=aggiungi]');
+    bt.disabled = !k; bt.textContent = k ? `Aggiungi ${k} al foglio${k > v ? ` (${k - v} su un altro foglio)` : ''}` : `Spunta quelle da aggiungere (ne entrano ${v})`;
+  };
   const draw = b => {
     n = lista().length;
     b.querySelector('#spGrid').innerHTML = Array.from({ length: ETI_FOGLIO }, (_, i) => {
@@ -2554,6 +2593,8 @@ function stampaModal(ids, { titolo = null, copie = null } = {}) {
     b.querySelector('#spInfo').innerHTML = (start === 0 ? 'Foglio nuovo: parte dalla <b>prima</b> etichetta.' : `${start === 1 ? 'La prima è già usata' : `Le prime ${start} sono già usate`}: parte dalla <b>n. ${start + 1}</b>.`)
       + (oltre ? ` Poi continua su altri fogli (in tutto ${fogli}).` : '') + '<br><span class="faint">Tocca il foglio per cambiare.</span>';
     b.querySelector('[data-x=stampa]').textContent = 'Stampa ' + testoScelte(n);
+    const v = vuote(), r = b.querySelector('#spRiempi');
+    r.hidden = !v; if (v) r.querySelector('#spVuote').innerHTML = `Restano <b>${v}</b> caselle vuote sull'ultimo foglio.`;
   };
   const giac = uno && !p1.sfuso ? Math.round(giacenza(p1.id)) : 0;
   openModal(`${mhead(titolo || `Stampa ${testoScelte(lista().length)}`)}
@@ -2564,6 +2605,12 @@ function stampaModal(ids, { titolo = null, copie = null } = {}) {
       : `<div class="faint">${ids.slice(0, 4).map(id => esc(prodotto(id).nome) + (quante(id) > 1 ? ' ×' + quante(id) : '')).join(' · ')}${ids.length > 4 ? ` e altri ${ids.length - 4}` : ''}</div>`}
     <div class="sp-foglio"><div class="sp-grid" id="spGrid" role="group" aria-label="Foglio di etichette"></div>
       <div class="sp-testo"><b>Dove sul foglio?</b><span id="spInfo"></span><button class="btn small" type="button" data-x="nuovo">Foglio nuovo</button></div></div>
+    <div class="stack sp-riempi" id="spRiempi" hidden>
+      <div class="row"><span class="spacer" id="spVuote"></span><button class="btn small" type="button" data-x="riempi">Riempile</button></div>
+      <div class="stack" id="spAltre" hidden><div class="faint small">Etichette di altri fornitori: prima quelle arrivate da poco.</div>
+        <input type="search" id="spCerca" placeholder="Cerca prodotto o fornitore" autocomplete="off">
+        <div class="list" id="spLista"></div>
+        <button class="btn block" type="button" data-x="aggiungi" disabled>Aggiungi</button></div></div>
     <button class="btn primary block" type="button" data-x="stampa">Stampa</button>
     <div class="faint small" style="text-align:center">Si apre la stampa del telefono: scegli la stampante oppure «Salva come PDF». A4, margini «Nessuno», scala 100%.</div>`, b => {
     b.querySelector('#spGrid').addEventListener('click', e => { const c = e.target.closest('[data-pos]'); if (!c) return; start = +c.dataset.pos; draw(b); });
@@ -2579,6 +2626,13 @@ function stampaModal(ids, { titolo = null, copie = null } = {}) {
       if (g) g.onclick = () => metti(giac); if (u) u.onclick = () => metti(1);
     }
     b.querySelector('[data-x=stampa]').onclick = () => stampaEtichette(lista(), start);
+    b.querySelector('[data-x=riempi]').onclick = () => { const a = b.querySelector('#spAltre'); a.hidden = !a.hidden; if (!a.hidden) riempi(b); };
+    b.querySelector('#spCerca').addEventListener('input', () => riempi(b));
+    b.querySelector('#spLista').addEventListener('change', () => contaAgg(b));
+    b.querySelector('[data-x=aggiungi]').onclick = () => {
+      const agg = $$('#spAltre [data-agg]:checked', b).map(x => x.dataset.agg); if (!agg.length) return;
+      stampaModal([...ids, ...agg], { titolo, copie: { ...copieOra(), ...Object.fromEntries(agg.map(id => [id, 1])) }, start });
+    };
     draw(b);
   });
 }
@@ -2595,7 +2649,8 @@ function stampaEtichette(ids, start = 0) {
     codeIndex.set(code, np.id); nuovi.push(np); pronti.set(id, np);
   }
   const lista = ids.map(id => pronti.get(id)).filter(Boolean);
-  if (nuovi.length) { setMeta('ultimoCodiceInterno', n); saveMany('prodotti', nuovi); }
+  if (nuovi.length) setMeta('ultimoCodiceInterno', n);
+  saveMany('prodotti', [...pronti.values()].map(p => ({ ...p, etiStampata: todayISO() })));   // nuovi codici e data dell'ultima stampa
   setMeta('etiPosizione', (start + lista.length) % ETI_FOGLIO);
   const celle = [...Array(start).fill('<div class="eti"></div>'), ...lista.map(p => htmlEtichetta(p))];
   const fogli = [];
@@ -4822,6 +4877,7 @@ A['eti-nuovo'] = () => pickerModal({ title: 'Quale prodotto non ha il codice a b
   if ((p.codici || []).length && !p.sfuso && !codiceNegozio(p)) { toast(`${p.nome} ha già il codice ${codiceEtichetta(p)}: l'etichetta non serve`, { err: true }); return; }
   creaCodiceEStampa(p);
 } });
+A['eti-insieme'] = () => { if (ETI.scelti.size) location.hash = '#etichette/' + [...ETI.scelti].map(encodeURIComponent).join(','); };
 A['eti-stampa'] = () => {
   const ps = etiScelte();
   if (!ps.length) { toast('Spunta almeno un\'etichetta', { err: true }); return; }

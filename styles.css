@@ -467,3 +467,13 @@ svg.grafico{width:100%;height:auto;display:block;touch-action:manipulation}
 .pc-riga .pc-togli{margin-top:22px}
 .pc-ante{display:block;min-height:1.1em;font-size:.78rem;margin-top:2px}
 .pc-ante.err{color:var(--red)}
+
+/* etichette (1.28.0): più fornitori insieme, riempire il foglio */
+.eti-forn{gap:8px}
+.eti-forn .main{text-decoration:none;color:inherit}
+.eti-fsel{display:flex;align-items:center;padding:4px}
+.eti-fsel input,.sp-agg input{width:22px;height:22px;flex:0 0 auto}
+.eti-di{margin-top:2px}
+.sp-riempi{border-top:1px solid var(--line);padding-top:10px}
+.sp-agg{gap:10px;align-items:center;cursor:pointer}
+#spLista{max-height:40vh;overflow:auto}
