@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.27.0';
+const VERSIONE = '1.27.1';
 
 /* =========================================================
    Utilità
@@ -2205,9 +2205,6 @@ routes.prodotto = id => {
         <div class="stack" id="pPesoBox" ${p.acquistoKg ? '' : 'hidden'}>
           <label class="field"><span>Peso medio di un pezzo <span class="hint">grammi</span></span><input type="text" inputmode="decimal" id="pPesoPz" value="${p.pesoPezzo ? fmtNum(p.pesoPezzo) : ''}" placeholder="es. 25"></label>
           <div class="faint small" id="pKgInfo">${infoKg(p, p.prezzoAcquisto)}</div></div></div>
-      <div class="stack" id="pSaccoPrezzo" ${isSfuso(p) && p.pesoSacco > 0 ? '' : 'hidden'}>
-        <label class="field"><span>Acquisto € <span id="pAcqSacLab">${isSfuso(p) && p.pesoSacco > 0 ? `per ${nomeSacco(p)} da ${fmtSf(p, p.pesoSacco)}` : ''}</span></span><input type="text" inputmode="decimal" id="pAcqSacco" value="${isSfuso(p) && p.pesoSacco > 0 && p.prezzoAcquisto != null ? fmtNum(Math.round(p.prezzoAcquisto * p.pesoSacco * 100) / 100) : ''}"></label>
-        <div class="faint small">Se il fornitore ti dà il prezzo ${isSfuso(p) && inLitri(p) ? 'della dama o tanica intera' : 'del sacco intero'}, scrivilo qui: quello ${isSfuso(p) && inLitri(p) ? 'al litro' : 'al kg'} si calcola da solo (es. 45 € per 5 l = 9 € al litro).</div></div>
       <div class="btn-grid" style="grid-template-columns:1fr 1fr">
         <label class="field"><span>Acquisto €<span class="u-acq">${aKg(p) ? ' al kg' : alBase(p)}</span></span><input type="text" inputmode="decimal" id="pAcq" value="${p.prezzoAcquisto != null ? fmtNum(p.prezzoAcquisto) : ''}"></label>
         ${(() => { const fi = ivaFornitore(p.fornitoreId), v = haIva(p) ? p.iva : fi ? fi.iva : null;   // senza IVA: già quella del fornitore (dalla 1.25.0)
@@ -2252,22 +2249,20 @@ routes.prodotto = id => {
         upd();
       };
       ['#pAcq', '#pIva', '#pRic', '#pMan', '#pPesoPz'].forEach(s => b.querySelector(s).addEventListener('input', upd));
-      /* acquisto per sacco o dama intera ↔ al kg o al litro (dalla 1.27.0) */
-      const sacPrezzo = () => {
-        const fp = forma(), sac = parseNum(b.querySelector('#pSacco').value), vis = isSfuso(fp) && sac > 0;
-        b.querySelector('#pSaccoPrezzo').hidden = !vis; if (!vis) return null;
-        const pp = { ...fp, nome: b.querySelector('#pNome').value, categoria: p.categoria };
-        b.querySelector('#pAcqSacLab').textContent = `per ${nomeSacco(pp)} da ${fmtSf(fp, sac)}`;
-        b.querySelector('#pSaccoPrezzo .faint').textContent = `Se il fornitore ti dà il prezzo ${inLitri(fp) ? 'della ' + nomeSacco(pp) + ' intera' : 'del sacco intero'}, scrivilo qui: quello ${inLitri(fp) ? 'al litro' : 'al kg'} si calcola da solo (es. 45 € per ${fmtSf(fp, sac)} = ${fmtEuro(45 / sac)} ${inLitri(fp) ? 'al litro' : 'al kg'}).`;
-        return sac;
-      };
-      const daBase = () => { const sac = sacPrezzo(), a = parseNum(b.querySelector('#pAcq').value); if (sac) b.querySelector('#pAcqSacco').value = a != null ? fmtNum(Math.round(a * sac * 100) / 100) : ''; };
-      b.querySelector('#pAcq').addEventListener('input', daBase);
-      ['#pSacco', '#pSfuso', '#pUnita', '#pNome'].forEach(x => { b.querySelector(x).addEventListener('input', daBase); b.querySelector(x).addEventListener('change', daBase); });
-      b.querySelector('#pAcqSacco').addEventListener('input', e => {
-        const sac = sacPrezzo(), v = parseNum(e.target.value); if (!sac) return;
-        b.querySelector('#pAcq').value = v != null ? fmtNum(Math.round(v / sac * 10000) / 10000) : '';
-        upd();
+      /* prezzo d'acquisto della dama (o del sacco) intera: si chiede se dividerlo per i litri (o i kg) scritti dal negozio (dalla 1.27.1) */
+      b.querySelector('#pAcq').addEventListener('change', async e => {
+        const fp = forma(), sac = parseNum(b.querySelector('#pSacco').value), v = parseNum(e.target.value);
+        if (!isSfuso(fp) || !(sac > 1) || !(v > 0)) return;
+        const pp = { ...fp, nome: b.querySelector('#pNome').value, categoria: p.categoria }, cont = nomeSacco(pp), base = inLitri(fp) ? 'litro' : 'kg';
+        stato.attesaDama = true;   // finché non risponde, il salvataggio automatico aspetta
+        const diviso = Math.round(v / sac * 10000) / 10000;
+        const r = await sceltaBox(`${fmtEuro(v)} è il prezzo ${cont === 'sacco' ? 'del sacco intero' : 'della ' + cont + ' intera'} da ${fmtSf(fp, sac)}?`,
+          { si: `Sì: lo divido per ${fmtNum(sac)} (${fmtEuro(diviso)} al ${base})`, no: `No, è già al ${base}`, title: 'Prezzo d\'acquisto' });
+        stato.attesaDama = false;
+        if (!(current.name === 'prodotto' && current.arg === p.id && b.querySelector('#pNome'))) return;
+        if (r) { e.target.value = fmtNum(diviso); upd(); }
+        e.target.dispatchEvent(new Event('input', { bubbles: true }));
+        if (paginaSalva) paginaSalva();
       });
       b.querySelector('#pAcqKg').addEventListener('change', upd);
       const coloraIva = () => { const c = b.querySelector('[data-iva-f]'); if (c) c.outerHTML = chipIva(b.querySelector('#pIva').value, ivaFornitore(b.querySelector('#pForn').value)); };
@@ -4698,6 +4693,7 @@ let PSTATO = null;
 function leggiScheda(id, b, stato) {
   const p = prodotto(id), q = sel => b.querySelector(sel);
   if (!p || !q('#pNome') || current.name !== 'prodotto' || current.arg !== id) return null;
+  if (stato && stato.attesaDama) return null;   // c'è la domanda sul prezzo della dama: si salva dopo la risposta
   const v = sel => (q(sel) ? q(sel).value : '');
   const nome = maiuscolo(v('#pNome').replace(/\s+/g, ' ').trim()); if (!nome) return { errore: 'Il nome non può essere vuoto: non salvato' };
   const sfuso = q('#pSfuso').checked, saccoTxt = v('#pSacco').trim(), sacco = parseNum(saccoTxt);
