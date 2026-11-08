@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.26.0';
+const VERSIONE = '1.27.0';
 
 /* =========================================================
    Utilità
@@ -151,7 +151,10 @@ const prezzoBreve = p => { const pr = prezzoVendita(p); return pr == null ? '–
 const alBase = p => isSfuso(p) ? (inLitri(p) ? ' al litro' : ' al kg') : ''; // prezzo d'acquisto
 const nomeBase = p => inLitri(p) ? 'litri' : 'kg';
 const perUnita = (p, pr) => pr == null ? null : isSfuso(p) ? Math.round(pr * UNITA[unitaDi(p)].f * 100) / 100 : pr;   // €/kg → €/etto
-const nomeSacco = (p, n = 1) => inLitri(p) ? (+n === 1 ? 'tanica' : 'taniche') : (+n === 1 ? 'sacco' : 'sacchi');
+/* il contenitore del fornitore: sacco per lo sfuso a peso; per i liquidi dama (olio, aceto, vino) o tanica (detersivi) */
+const daDama = p => /\b(OLI|OLIO|ACETO|VINO)\b/.test(String((p && p.nome) || '').toUpperCase()) || /olio|aceto|condiment|vino/i.test((p && p.categoria) || '');
+const nomeSacco = (p, n = 1) => inLitri(p) ? (daDama(p) ? (+n === 1 ? 'dama' : 'dame') : (+n === 1 ? 'tanica' : 'taniche')) : (+n === 1 ? 'sacco' : 'sacchi');
+const Nome = s => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtSacchi = (n, p) => `${fmtNum(n)} ${nomeSacco(p, n)}`;
 function beep() {
   try { if (navigator.vibrate) navigator.vibrate(40); } catch (e) { }
@@ -640,9 +643,9 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
   });
 }
 /* campi dello sfuso, uguali nel nuovo prodotto e nella scheda */
-const campoUnita = (id, u) => `<label class="field">Si vende<select id="${id}">${[['kg', 'al kg'], ['etto', "all'etto"], ['l', 'al litro (detersivi alla spina)'], ['pz', 'al pezzo']].map(([v, t]) => `<option value="${v}" ${u === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
-const testoSacco = u => u === 'l' ? 'Litri della tanica' : 'Peso del sacco in kg';
-const hintSacco = u => u === 'l' ? 'come arriva dal fornitore, es. 5 o 25' : 'come arriva dal fornitore, es. 5 · 1 per la frutta secca';
+const campoUnita = (id, u) => `<label class="field">Si vende<select id="${id}">${[['kg', 'al kg'], ['etto', "all'etto"], ['l', 'al litro (olio, detersivi alla spina…)'], ['pz', 'al pezzo']].map(([v, t]) => `<option value="${v}" ${u === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
+const testoSacco = u => u === 'l' ? 'Litri della dama o tanica' : 'Peso del sacco in kg';
+const hintSacco = u => u === 'l' ? 'come arriva dal fornitore, es. 5 o 10' : 'come arriva dal fornitore, es. 5 · 1 per la frutta secca';
 function aggiornaTestiSacco(b, u) {
   $$('[data-sacco-campo]', b).forEach(x => { x.hidden = u === 'pz'; });   // al pezzo: niente peso del sacco
   $$('[data-sacco-lab]', b).forEach(x => { x.textContent = testoSacco(u); });
@@ -986,16 +989,16 @@ routes.carico = arg => {
     html += `<div class="card">
       <div class="row"><div class="spacer"><h2>${esc(p.nome)}</h2><div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>${tagTipo(p)}</div>
       ${info ? `<div class="notice green"><span>In ordine: <b>${fmtOrd(p, info.qta)}</b> · già arrivati <b>${aKg(p) ? fmtOrd(p, r3(info.ric)) : fmtNum(r3(info.ric))}</b></span></div>` : ''}
-      ${isSfuso(p) && !p.pesoSacco && !inv && catDi(p) !== FV ? `<div class="notice"><span>Sfuso senza ${inLitri(p) ? 'litri della tanica' : 'peso del sacco'}: scrivi i <b>${nomeBase(p)}</b>. Per contare a ${nomeSacco(p, 2)}, scrivi ${inLitri(p) ? 'i litri della tanica' : 'il peso del sacco'} nella <a href="#prodotto/${encodeURIComponent(p.id)}"><b>scheda</b></a>.</span></div>` : ''}
+      ${isSfuso(p) && !p.pesoSacco && !inv && catDi(p) !== FV ? `<div class="notice"><span>Sfuso senza ${inLitri(p) ? 'litri della ' + nomeSacco(p) : 'peso del sacco'}: scrivi i <b>${nomeBase(p)}</b>. Per contare a ${nomeSacco(p, 2)}, scrivi ${inLitri(p) ? 'i litri della ' + nomeSacco(p) : 'il peso del sacco'} nella <a href="#prodotto/${encodeURIComponent(p.id)}"><b>scheda</b></a>.</span></div>` : ''}
       <div class="kp-fields">
         <button type="button" class="kp-field ${CS.field === 'scad' ? 'on' : ''}" data-act="kp-field" data-f="scad" ${CS.senza ? 'disabled' : ''}><small>Scadenza</small><b>${CS.senza ? '—' : fmtScadDigits(CS.scad)}</b></button>
         <div class="kp-qta ${kgMode ? 'solo' : ''}">
           ${kgMode ? '' : '<button type="button" class="kp-pm" data-act="qta-" aria-label="Meno uno">−</button>'}
-          <button type="button" class="kp-field ${CS.field === 'qta' ? 'on' : ''}" data-act="kp-field" data-f="qta"><small>${{ pz: 'Pezzi', sacchi: inLitri(p) ? 'Taniche' : 'Sacchi', kg: inLitri(p) ? 'Litri' : 'Kg' }[CS.unita]}</small><b>${esc(CS.qta || '0')}</b></button>
+          <button type="button" class="kp-field ${CS.field === 'qta' ? 'on' : ''}" data-act="kp-field" data-f="qta"><small>${{ pz: 'Pezzi', sacchi: Nome(nomeSacco(p, 2)), kg: inLitri(p) ? 'Litri' : 'Kg' }[CS.unita]}</small><b>${esc(CS.qta || '0')}</b></button>
           ${kgMode ? '' : '<button type="button" class="kp-pm" data-act="qta+" aria-label="Più uno">+</button>'}
         </div>
       </div>
-      ${isSfuso(p) ? `<div class="sf-unita">${p.pesoSacco ? `<div class="segmented mini"><button type="button" data-act="unita" data-u="sacchi" class="${CS.unita === 'sacchi' ? 'on' : ''}">${inLitri(p) ? 'Taniche' : 'Sacchi'}</button><button type="button" data-act="unita" data-u="kg" class="${CS.unita === 'kg' ? 'on' : ''}">${inLitri(p) ? 'Litri' : 'Kg'}</button></div>` : ''}<span>${CS.unita === 'sacchi' ? `${fmtSacchi(parseInt(CS.qta, 10) || 0, p)} da ${fmtSf(p, p.pesoSacco)} = <b>${fmtSf(p, qtaCarico(p).q)}</b>` : `Scrivi i ${nomeBase(p)} con la virgola, es. 2,5`}</span></div>` : ''}
+      ${isSfuso(p) ? `<div class="sf-unita">${p.pesoSacco ? `<div class="segmented mini"><button type="button" data-act="unita" data-u="sacchi" class="${CS.unita === 'sacchi' ? 'on' : ''}">${Nome(nomeSacco(p, 2))}</button><button type="button" data-act="unita" data-u="kg" class="${CS.unita === 'kg' ? 'on' : ''}">${inLitri(p) ? 'Litri' : 'Kg'}</button></div>` : ''}<span>${CS.unita === 'sacchi' ? `${fmtSacchi(parseInt(CS.qta, 10) || 0, p)} da ${fmtSf(p, p.pesoSacco)} = <b>${fmtSf(p, qtaCarico(p).q)}</b>` : `Scrivi i ${nomeBase(p)} con la virgola, es. 2,5`}</span></div>` : ''}
       ${kgPezzo(p) ? `<div class="sf-unita"><div class="segmented mini"><button type="button" data-act="unita" data-u="kg" class="${CS.unita === 'kg' ? 'on' : ''}">Kg</button><button type="button" data-act="unita" data-u="pz" class="${CS.unita !== 'kg' ? 'on' : ''}">Pezzi</button></div><span>${CS.unita === 'kg' ? (qtaCarico(p).kg > 0 ? `${fmtNum(qtaCarico(p).kg)} kg ≈ <b>${qtaCarico(p).q} pezzi</b> da ${fmtNum(p.pesoPezzo)} g` : `Scrivi i kg arrivati, es. 2,5: diventano pezzi (${fmtNum(p.pesoPezzo)} g l'uno)`) : `Si contano i pezzi`}</span></div>` : ''}
       <div class="date-preview ${pr.err ? 'err' : ''} ${pr.faint ? 'faint' : ''}">${esc(pr.t)}</div>
       <div class="keypad">${['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(k => `<button type="button" data-act="kp" data-k="${k}">${k}</button>`).join('')}
@@ -1030,7 +1033,7 @@ async function caricoScan(code) {
         if (!p.pesoSacco) { toast(`Scrivi i ${nomeBase(p)} con i tasti`, { err: true }); return; }
         CS.qta = fmtNum(r3((parseNum(CS.qta) || 0) + p.pesoSacco)); CS.qtaFresh = false; render(); toast(`${inLitri(p) ? 'Litri' : 'Kg'}: ${CS.qta}`); return;
       }
-      CS.qta = String((parseInt(CS.qta, 10) || 0) + 1); render(); toast(`${isSfuso(p) ? (inLitri(p) ? 'Taniche' : 'Sacchi') : 'Quantità'}: ${CS.qta}`); return;
+      CS.qta = String((parseInt(CS.qta, 10) || 0) + 1); render(); toast(`${isSfuso(p) ? Nome(nomeSacco(p, 2)) : 'Quantità'}: ${CS.qta}`); return;
     }
     const pronto = CS.senza || parseScadenza(CS.scad);
     if (!pronto) { toast(`Prima scrivi la scadenza di ${prodotto(CS.pid).nome}, oppure premi Annulla`, { err: true }); return; }
@@ -2064,12 +2067,12 @@ function valeHtml(p, calc, man) {
 const unitaScorta = p => isSfuso(p) ? nomeBase(p) : 'pezzi';
 const segnapostoScorta = p => isSfuso(p) ? 'nessuna' : String(settings().scortaMin);
 const aiutoScorta = p => isSfuso(p)
-  ? `Scrivi i ${nomeBase(p)}: quando in negozio ne restano così pochi, va in «Da ordinare» (${inLitri(p) ? 'una tanica' : 'un sacco'}, o quanti l'ultima volta). Vuoto = mai da solo.`
+  ? `Scrivi i ${nomeBase(p)}: quando in negozio ne restano così pochi, va in «Da ordinare» (${inLitri(p) ? 'una ' + nomeSacco(p) : 'un sacco'}, o quanti l'ultima volta). Vuoto = mai da solo.`
   : `Vuoto = ${settings().scortaMin}, come tutti gli altri prodotti. 0 = mai da solo. Si ordina la quantità dell'ultimo ordine (o 1).`;
 /* scheda prodotto: codici e etichetta si aggiornano senza perdere quello che si sta scrivendo */
 const codiciHtml = p => (p.codici || []).map(c => `<span class="tag" style="font-size:.9rem;padding:6px 10px">${esc(c)} <button type="button" data-act="p-codice-del" data-c="${esc(c)}" style="border:0;background:none;font-size:1rem;cursor:pointer" aria-label="Togli codice">×</button></span>`).join('') || '<span class="faint">Nessun codice: scansiona ora il prodotto per collegarlo.</span>';
 const infoSfuso = u => u === 'pz' ? 'Magazzino e prezzo a pezzo, un\'etichetta sola sul contenitore. Al banco ogni scansione è un pezzo: con + e − cambi quanti.'
-  : u === 'l' ? 'Magazzino in litri, prezzo al litro. Al banco si scansiona l\'etichetta e si scrivono i ml.'
+  : u === 'l' ? 'Magazzino in litri, prezzo al litro (olio, detersivi…). Al banco si scansiona l\'etichetta e si scrivono i ml.'
   : `Magazzino in kg, prezzo ${UNITA[u].al}. Al banco si scansiona l'etichetta del contenitore e si scrivono i grammi.`;
 function boxEtichetta(p) {
   if (!(p.codici || []).length) return `<button class="btn block" type="button" data-act="p-crea-codice" data-id="${esc(p.id)}" id="pCrea">Crea il codice a barre e stampa ${p.sfuso ? "l'etichetta" : 'le etichette'}</button>
@@ -2088,7 +2091,7 @@ const lottiScheda = p => { const lotti = lottiAttivi().filter(l => l.prodottoId 
 /* scheda prodotto: scadenze e pezzi senza andare in Arrivi o Inventario (dalla 1.24.0).
    Più righe = colli con scadenze diverse, salvati insieme come confezioni separate. */
 const pcSacchi = p => isSfuso(p) && p.pesoSacco > 0;
-const pcNomeQta = (p, u) => !isSfuso(p) ? (u === 'kg' && kgPezzo(p) ? 'Kg' : 'Pezzi') : u === 'sacchi' ? (inLitri(p) ? 'Taniche' : 'Sacchi') : (inLitri(p) ? 'Litri' : 'Kg');
+const pcNomeQta = (p, u) => !isSfuso(p) ? (u === 'kg' && kgPezzo(p) ? 'Kg' : 'Pezzi') : u === 'sacchi' ? Nome(nomeSacco(p, 2)) : (inLitri(p) ? 'Litri' : 'Kg');
 const pcRiga = (p, u, togli) => `<div class="pc-riga">
     <label class="field"><span class="pc-qlab">${pcNomeQta(p, u)}</span><input type="text" inputmode="${(isSfuso(p) && u !== 'sacchi') || (kgPezzo(p) && u === 'kg') ? 'decimal' : 'numeric'}" class="pc-qta" autocomplete="off"></label>
     <label class="field pc-scad-campo">Scadenza<input type="text" inputmode="numeric" class="pc-scad" maxlength="10" placeholder="gg mm aa" autocomplete="off"><small class="pc-ante faint"></small></label>
@@ -2099,7 +2102,7 @@ function cardCarica(p) {
     <div class="segmented" id="pcModo"><button type="button" data-m="arrivo" class="on">Arrivo merce</button><button type="button" data-m="inventario">Inventario</button></div>
     <div class="faint small" id="pcAiuto">Merce appena arrivata: si segna anche nell'ordine aperto.</div>
     ${kgPezzo(p) ? `<div class="segmented mini" id="pcUnita"><button type="button" data-u="kg" class="on">Kg (pezzi da ${fmtNum(p.pesoPezzo)} g)</button><button type="button" data-u="pz">Pezzi</button></div>` : ''}
-    ${pcSacchi(p) ? `<div class="segmented mini" id="pcUnita"><button type="button" data-u="sacchi" class="on">${inLitri(p) ? 'Taniche' : 'Sacchi'} da ${fmtSf(p, p.pesoSacco)}</button><button type="button" data-u="kg">${inLitri(p) ? 'Litri' : 'Kg'}</button></div>` : ''}
+    ${pcSacchi(p) ? `<div class="segmented mini" id="pcUnita"><button type="button" data-u="sacchi" class="on">${Nome(nomeSacco(p, 2))} da ${fmtSf(p, p.pesoSacco)}</button><button type="button" data-u="kg">${inLitri(p) ? 'Litri' : 'Kg'}</button></div>` : ''}
     <div class="stack" id="pcRighe" data-u="${u}">${pcRiga(p, u, false)}</div>
     <div class="row wrap"><button class="btn small" type="button" id="pcAltra">+ Altra scadenza</button><label class="check"><input type="checkbox" id="pcSenza"> Senza scadenza</label></div>
     <button class="btn primary block" type="button" id="pcSalva">Aggiungi in negozio</button></div>`;
@@ -2146,7 +2149,7 @@ function montaCarica(b, pid) {
       let qta, sacchi = null, kg = null, ordine;
       if (!isSfuso(p) && kgPezzo(p) && u === 'kg') { kg = r3(parseNum(qt) || 0); if (!(kg > 0)) { toast(dove + 'scrivi quanti kg sono arrivati', { err: true }); return; } qta = pezziDaKg(p, kg); ordine = kg; }
       else if (!isSfuso(p)) { qta = parseInt(qt, 10); ordine = kgPezzo(p) ? r3(qta * kgPezzo(p)) : qta; if (!(qta >= 1) || String(qta) !== qt.replace(/^0+(?=\d)/, '')) { toast(dove + 'scrivi quanti pezzi (un numero intero)', { err: true }); return; } }
-      else if (u === 'sacchi') { const n = parseInt(qt, 10); if (!(n >= 1)) { toast(dove + `scrivi quant${inLitri(p) ? 'e taniche' : 'i sacchi'}`, { err: true }); return; } sacchi = n; ordine = n; qta = r3(n * p.pesoSacco); }
+      else if (u === 'sacchi') { const n = parseInt(qt, 10); if (!(n >= 1)) { toast(dove + `scrivi quant${inLitri(p) ? 'e ' + nomeSacco(p, 2) : 'i sacchi'}`, { err: true }); return; } sacchi = n; ordine = n; qta = r3(n * p.pesoSacco); }
       else { qta = r3(parseNum(qt) || 0); if (!(qta > 0)) { toast(dove + `scrivi quanti ${nomeBase(p)}`, { err: true }); return; } ordine = p.pesoSacco ? r3(qta / p.pesoSacco) : qta; }
       let scad = null;
       if (!senza) { const r = st.length === 4 || st.length === 6 || st.length === 8 ? parseScadenza(st) : null; if (!r) { toast(dove + 'scrivi la scadenza, per esempio 280527 (o spunta «Senza scadenza»)', { err: true }); return; } scad = r.iso; }
@@ -2202,6 +2205,9 @@ routes.prodotto = id => {
         <div class="stack" id="pPesoBox" ${p.acquistoKg ? '' : 'hidden'}>
           <label class="field"><span>Peso medio di un pezzo <span class="hint">grammi</span></span><input type="text" inputmode="decimal" id="pPesoPz" value="${p.pesoPezzo ? fmtNum(p.pesoPezzo) : ''}" placeholder="es. 25"></label>
           <div class="faint small" id="pKgInfo">${infoKg(p, p.prezzoAcquisto)}</div></div></div>
+      <div class="stack" id="pSaccoPrezzo" ${isSfuso(p) && p.pesoSacco > 0 ? '' : 'hidden'}>
+        <label class="field"><span>Acquisto € <span id="pAcqSacLab">${isSfuso(p) && p.pesoSacco > 0 ? `per ${nomeSacco(p)} da ${fmtSf(p, p.pesoSacco)}` : ''}</span></span><input type="text" inputmode="decimal" id="pAcqSacco" value="${isSfuso(p) && p.pesoSacco > 0 && p.prezzoAcquisto != null ? fmtNum(Math.round(p.prezzoAcquisto * p.pesoSacco * 100) / 100) : ''}"></label>
+        <div class="faint small">Se il fornitore ti dà il prezzo ${isSfuso(p) && inLitri(p) ? 'della dama o tanica intera' : 'del sacco intero'}, scrivilo qui: quello ${isSfuso(p) && inLitri(p) ? 'al litro' : 'al kg'} si calcola da solo (es. 45 € per 5 l = 9 € al litro).</div></div>
       <div class="btn-grid" style="grid-template-columns:1fr 1fr">
         <label class="field"><span>Acquisto €<span class="u-acq">${aKg(p) ? ' al kg' : alBase(p)}</span></span><input type="text" inputmode="decimal" id="pAcq" value="${p.prezzoAcquisto != null ? fmtNum(p.prezzoAcquisto) : ''}"></label>
         ${(() => { const fi = ivaFornitore(p.fornitoreId), v = haIva(p) ? p.iva : fi ? fi.iva : null;   // senza IVA: già quella del fornitore (dalla 1.25.0)
@@ -2246,6 +2252,23 @@ routes.prodotto = id => {
         upd();
       };
       ['#pAcq', '#pIva', '#pRic', '#pMan', '#pPesoPz'].forEach(s => b.querySelector(s).addEventListener('input', upd));
+      /* acquisto per sacco o dama intera ↔ al kg o al litro (dalla 1.27.0) */
+      const sacPrezzo = () => {
+        const fp = forma(), sac = parseNum(b.querySelector('#pSacco').value), vis = isSfuso(fp) && sac > 0;
+        b.querySelector('#pSaccoPrezzo').hidden = !vis; if (!vis) return null;
+        const pp = { ...fp, nome: b.querySelector('#pNome').value, categoria: p.categoria };
+        b.querySelector('#pAcqSacLab').textContent = `per ${nomeSacco(pp)} da ${fmtSf(fp, sac)}`;
+        b.querySelector('#pSaccoPrezzo .faint').textContent = `Se il fornitore ti dà il prezzo ${inLitri(fp) ? 'della ' + nomeSacco(pp) + ' intera' : 'del sacco intero'}, scrivilo qui: quello ${inLitri(fp) ? 'al litro' : 'al kg'} si calcola da solo (es. 45 € per ${fmtSf(fp, sac)} = ${fmtEuro(45 / sac)} ${inLitri(fp) ? 'al litro' : 'al kg'}).`;
+        return sac;
+      };
+      const daBase = () => { const sac = sacPrezzo(), a = parseNum(b.querySelector('#pAcq').value); if (sac) b.querySelector('#pAcqSacco').value = a != null ? fmtNum(Math.round(a * sac * 100) / 100) : ''; };
+      b.querySelector('#pAcq').addEventListener('input', daBase);
+      ['#pSacco', '#pSfuso', '#pUnita', '#pNome'].forEach(x => { b.querySelector(x).addEventListener('input', daBase); b.querySelector(x).addEventListener('change', daBase); });
+      b.querySelector('#pAcqSacco').addEventListener('input', e => {
+        const sac = sacPrezzo(), v = parseNum(e.target.value); if (!sac) return;
+        b.querySelector('#pAcq').value = v != null ? fmtNum(Math.round(v / sac * 10000) / 10000) : '';
+        upd();
+      });
       b.querySelector('#pAcqKg').addEventListener('change', upd);
       const coloraIva = () => { const c = b.querySelector('[data-iva-f]'); if (c) c.outerHTML = chipIva(b.querySelector('#pIva').value, ivaFornitore(b.querySelector('#pForn').value)); };
       let fornPrima = b.querySelector('#pForn').value;
@@ -4685,7 +4708,7 @@ function leggiScheda(id, b, stato) {
   if (acqTxt && acq == null) return { errore: 'Il prezzo d\'acquisto non è un numero: non salvato' };
   const scTxt = v('#pScorta').trim(), sc = scTxt ? parseNum(scTxt) : null;
   if (scTxt && !(sc >= 0)) return { errore: 'La scorta minima non è un numero valido: non salvato' };
-  if (pesato && saccoTxt && !(sacco > 0)) return { errore: `${inLitri(fp) ? 'I litri della tanica non sono' : 'Il peso del sacco non è'} un numero valido: non salvato` };
+  if (pesato && saccoTxt && !(sacco > 0)) return { errore: `${inLitri(fp) ? 'I litri della dama o tanica non sono' : 'Il peso del sacco non è'} un numero valido: non salvato` };
   const akg = !pesato && v('#pAcqKg') === '1', pzTxt = v('#pPesoPz').trim(), pz = pzTxt ? parseNum(pzTxt) : null;
   if (akg && pzTxt && !(pz > 0)) return { errore: 'Il peso di un pezzo non è un numero valido: non salvato' };
   const cat = categoriaScelta(b, 'pCat');
@@ -4705,7 +4728,7 @@ async function salvaScheda(id, dati, { sacco, manRaw, fp, f, stato }) {
   let confezioni = [];
   if (isSfuso(dati) && !stato.eraSfuso && !stato.chiesto && sacco > 0) {
     // diventa sfuso: i prezzi del listino possono essere per il sacco intero, le confezioni contate a pezzi
-    const intero = inLitri(fp) ? 'la tanica intera' : 'il sacco intero';
+    const intero = inLitri(fp) ? `la ${nomeSacco({ ...p, ...dati })} intera` : 'il sacco intero';
     if (dati.prezzoAcquisto != null || manRaw != null) {
       const quali = [dati.prezzoAcquisto != null ? 'acquisto ' + fmtEuro(dati.prezzoAcquisto) : '', manRaw != null ? 'a mano ' + fmtEuro(manRaw) : ''].filter(Boolean).join(', ');
       const perSacco = await sceltaBox(`I prezzi scritti (${quali}) sono per ${intero} da ${fmtSf(fp, sacco)}?`, { si: `Sì: li divido per ${fmtNum(sacco)}`, no: 'No, sono già giusti', title: 'Prezzi' });
