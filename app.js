@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.27.1';
+const VERSIONE = '1.27.2';
 
 /* =========================================================
    Utilità
@@ -998,7 +998,7 @@ routes.carico = arg => {
           ${kgMode ? '' : '<button type="button" class="kp-pm" data-act="qta+" aria-label="Più uno">+</button>'}
         </div>
       </div>
-      ${isSfuso(p) ? `<div class="sf-unita">${p.pesoSacco ? `<div class="segmented mini"><button type="button" data-act="unita" data-u="sacchi" class="${CS.unita === 'sacchi' ? 'on' : ''}">${Nome(nomeSacco(p, 2))}</button><button type="button" data-act="unita" data-u="kg" class="${CS.unita === 'kg' ? 'on' : ''}">${inLitri(p) ? 'Litri' : 'Kg'}</button></div>` : ''}<span>${CS.unita === 'sacchi' ? `${fmtSacchi(parseInt(CS.qta, 10) || 0, p)} da ${fmtSf(p, p.pesoSacco)} = <b>${fmtSf(p, qtaCarico(p).q)}</b>` : `Scrivi i ${nomeBase(p)} con la virgola, es. 2,5`}</span></div>` : ''}
+      ${isSfuso(p) ? `<div class="sf-unita">${p.pesoSacco && CS.modo === 'arrivo' ? `<div class="segmented mini"><button type="button" data-act="unita" data-u="sacchi" class="${CS.unita === 'sacchi' ? 'on' : ''}">${Nome(nomeSacco(p, 2))}</button><button type="button" data-act="unita" data-u="kg" class="${CS.unita === 'kg' ? 'on' : ''}">${inLitri(p) ? 'Litri' : 'Kg'}</button></div>` : ''}<span>${CS.unita === 'sacchi' ? `${fmtSacchi(parseInt(CS.qta, 10) || 0, p)} da ${fmtSf(p, p.pesoSacco)} = <b>${fmtSf(p, qtaCarico(p).q)}</b>` : `Scrivi i ${nomeBase(p)} con la virgola, es. 2,5`}</span></div>` : ''}
       ${kgPezzo(p) ? `<div class="sf-unita"><div class="segmented mini"><button type="button" data-act="unita" data-u="kg" class="${CS.unita === 'kg' ? 'on' : ''}">Kg</button><button type="button" data-act="unita" data-u="pz" class="${CS.unita !== 'kg' ? 'on' : ''}">Pezzi</button></div><span>${CS.unita === 'kg' ? (qtaCarico(p).kg > 0 ? `${fmtNum(qtaCarico(p).kg)} kg ≈ <b>${qtaCarico(p).q} pezzi</b> da ${fmtNum(p.pesoPezzo)} g` : `Scrivi i kg arrivati, es. 2,5: diventano pezzi (${fmtNum(p.pesoPezzo)} g l'uno)`) : `Si contano i pezzi`}</span></div>` : ''}
       <div class="date-preview ${pr.err ? 'err' : ''} ${pr.faint ? 'faint' : ''}">${esc(pr.t)}</div>
       <div class="keypad">${['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(k => `<button type="button" data-act="kp" data-k="${k}">${k}</button>`).join('')}
@@ -1308,6 +1308,13 @@ function lottiFEFO(pid) {
   return lottiAttivi().filter(l => l.prodottoId === pid && (+l.quantita || 0) > 0)
     .sort((a, b) => (a.scadenza || '9999-99-99').localeCompare(b.scadenza || '9999-99-99') || (a.creato || 0) - (b.creato || 0));
 }
+/* per le vendite (dalla 1.27.2): prima le confezioni buone (e quelle scadute ma «gestite», es. in offerta), per ultime quelle
+   scadute. Così una confezione scaduta non sparisce dalle Scadenze perché al banco si è venduto lo stesso prodotto da una
+   confezione nuova: resta finché non la butti, la metti in offerta o la correggi. */
+function lottiVendita(pid) {
+  const ls = lottiFEFO(pid), oggi = todayISO(), scaduto = l => l.scadenza && l.scadenza < oggi && !l.gestito;
+  return [...ls.filter(l => !scaduto(l)), ...ls.filter(scaduto)];
+}
 function unisci(a, b) {
   const m = new Map();
   for (const x of [...(a || []), ...(b || [])]) m.set(x.lottoId, (m.get(x.lottoId) || 0) + x.qta);
@@ -1330,22 +1337,22 @@ async function muovi(prelievi, segno) {
   }
   if (mod.size) await saveMany('lotti', [...mod.values()]);
 }
-async function preleva(pid, qta) {
+async function preleva(pid, qta, { fefo = false } = {}) {   // fefo: in cucina si usa prima quello che scade prima, anche se scaduto
   const prelievi = []; let resto = r3(qta);
-  for (const l of lottiFEFO(pid)) {
+  for (const l of fefo ? lottiFEFO(pid) : lottiVendita(pid)) {
     if (resto <= 0) break;
     const t = r3(Math.min(+l.quantita || 0, resto));
     if (t > 0) { prelievi.push({ lottoId: l.id, qta: t }); resto = r3(resto - t); }
   }
   await muovi(prelievi, -1);
   const tol = tolleranza(prodotto(pid));
-  if (tol > 0) await chiudiAvanzi(pid, tol);
+  if (tol > 0) await chiudiAvanzi(pid, tol, fefo);
   return { prelievi, mancanti: resto };   // mancanti: venduti ma non risultavano in negozio
 }
 /* sfuso: il sacco più vecchio con solo un piccolo avanzo si considera finito e si passa al successivo.
    L'avanzo resta scritto sulla confezione, così "annulla" lo rimette a posto. */
-async function chiudiAvanzi(pid, tol) {
-  const ls = lottiFEFO(pid), chiusi = [];
+async function chiudiAvanzi(pid, tol, fefo = false) {
+  const ls = fefo ? lottiFEFO(pid) : lottiVendita(pid), chiusi = [];
   for (let i = 0; i < ls.length - 1; i++) {
     const l = ls[i];
     if ((+l.quantita || 0) >= tol) break;
@@ -1620,7 +1627,7 @@ async function usaInCucina(p, qta, { origine = 'scansione' } = {}) {
   qta = r3(qta); if (!p || !(qta > 0)) return;
   const u = ultimaCucina(), ora = Date.now(); BANCO.toccato = ora;
   if (!isSfuso(p) && u && u.prodottoId === p.id && !u.sfuso && ora - (u.aggiornato || u.creato) < RAGGRUPPA_MS) return qtaCucina(u.id, r3(u.qta + qta));
-  const r = await preleva(p.id, qta);
+  const r = await preleva(p.id, qta, { fefo: true });
   await save('sprechi', { id: uid('k'), tipo: 'cucina', motivo: 'Cucina', prodottoId: p.id, nome: p.nome, qta, data: todayISO(), creato: ora, aggiornato: ora,
     prelievi: r.prelievi, mancanti: r.mancanti, sfuso: isSfuso(p) || undefined, prezzoAcquisto: costoUnita(p) ?? null, lottoId: null, scadenza: null, origine });
   render();
@@ -1630,7 +1637,7 @@ async function qtaCucina(id, nuova) {
   if (!r || !(nuova > 0) || nuova === r.qta) return;
   if (nuova > r.qta && !S.prodotti.has(r.prodottoId)) return;
   const ora = Date.now(); BANCO.toccato = ora;
-  if (nuova > r.qta) { const x = await preleva(r.prodottoId, r3(nuova - r.qta)); await save('sprechi', { ...r, qta: nuova, prelievi: unisci(r.prelievi, x.prelievi), mancanti: r3((r.mancanti || 0) + x.mancanti), aggiornato: ora }); }
+  if (nuova > r.qta) { const x = await preleva(r.prodottoId, r3(nuova - r.qta), { fefo: true }); await save('sprechi', { ...r, qta: nuova, prelievi: unisci(r.prelievi, x.prelievi), mancanti: r3((r.mancanti || 0) + x.mancanti), aggiornato: ora }); }
   else await save('sprechi', { ...r, qta: nuova, ...(await rimettiParte(r, r3(r.qta - nuova))), aggiornato: ora });
   render();
 }
@@ -2121,7 +2128,7 @@ function montaCarica(b, pid) {
   $$('#pcModo [data-m]', box).forEach(x => x.onclick = () => {
     modo = x.dataset.m; $$('#pcModo [data-m]', box).forEach(y => y.classList.toggle('on', y === x));
     box.querySelector('#pcAiuto').textContent = modo === 'arrivo' ? 'Merce appena arrivata: si segna anche nell\'ordine aperto.' : 'Merce che c\'era già in negozio e non era ancora nell\'app.';
-    if (pcSacchi(p0)) metti(modo === 'arrivo' ? 'sacchi' : 'kg');   // come in Arrivi e Inventario
+    if (pcSacchi(p0)) { metti(modo === 'arrivo' ? 'sacchi' : 'kg'); box.querySelector('#pcUnita').hidden = modo !== 'arrivo'; }   // all'inventario si contano kg o litri
     if (kgPezzo(p0)) metti(modo === 'arrivo' ? 'kg' : 'pz');
   });
   $$('#pcUnita [data-u]', box).forEach(x => x.onclick = () => metti(x.dataset.u));
@@ -2211,6 +2218,7 @@ routes.prodotto = id => {
           return `<label class="field"><span class="row iva-lab"><span class="spacer">IVA</span>${chipIva(v, fi)}</span><select id="pIva"><option value="">—</option>${opzioniIva(v)}</select></label>`; })()}
         <label class="field">Ricarico<select id="pRic"><option value="50" ${p.ricarico !== 40 ? 'selected' : ''}>50%</option><option value="40" ${p.ricarico === 40 ? 'selected' : ''}>40% (eccezione)</option></select></label>
         <label class="field"><span>Prezzo a mano €<span class="u-kg">${alKg(p)}</span></span><input type="text" inputmode="decimal" id="pMan" value="${p.prezzoManuale != null ? fmtNum(Math.round(p.prezzoManuale * (isSfuso(p) ? UNITA[unitaDi(p)].f : 1) * 1000) / 1000) : ''}" placeholder="vuoto = calcolato"></label></div>
+      <button type="button" class="btn small block" id="pDividi" hidden></button>
       <dl class="kv"><dt>Prezzo calcolato</dt><dd id="pCalc">${fmtEuro(perUnita(p, calc))}<span class="u-kg">${alKg(p)}</span></dd></dl>
       <div class="prezzo-vale" id="pVale">${valeHtml(p, calc, p.prezzoManuale)}</div>
       <div class="faint small">Calcolato: acquisto + ricarico + IVA, arrotondato ai 10 centesimi superiori. Se scrivi un prezzo a mano, vale quello.</div></div>
@@ -2249,21 +2257,37 @@ routes.prodotto = id => {
         upd();
       };
       ['#pAcq', '#pIva', '#pRic', '#pMan', '#pPesoPz'].forEach(s => b.querySelector(s).addEventListener('input', upd));
-      /* prezzo d'acquisto della dama (o del sacco) intera: si chiede se dividerlo per i litri (o i kg) scritti dal negozio (dalla 1.27.1) */
-      b.querySelector('#pAcq').addEventListener('change', async e => {
-        const fp = forma(), sac = parseNum(b.querySelector('#pSacco').value), v = parseNum(e.target.value);
-        if (!isSfuso(fp) || !(sac > 1) || !(v > 0)) return;
-        const pp = { ...fp, nome: b.querySelector('#pNome').value, categoria: p.categoria }, cont = nomeSacco(pp), base = inLitri(fp) ? 'litro' : 'kg';
+      /* prezzo d'acquisto della dama (o del sacco) intera: si chiede se dividerlo per i litri (o i kg) scritti dal negozio.
+         Si chiede uscendo dal campo dopo averci scritto (anche se il numero è lo stesso), o col pulsante sotto per i prezzi già scritti. */
+      const dama = () => {
+        const fp = forma(), sac = parseNum(b.querySelector('#pSacco').value), v = parseNum(b.querySelector('#pAcq').value);
+        if (!isSfuso(fp) || !(sac > 1) || !(v > 0)) return null;
+        const pp = { ...fp, nome: b.querySelector('#pNome').value, categoria: p.categoria }, cont = nomeSacco(pp);
+        return { fp, sac, v, base: inLitri(fp) ? 'litro' : 'kg', intero: cont === 'sacco' ? 'del sacco intero' : 'della ' + cont + ' intera', cont };
+      };
+      const tastoDama = () => { const d = dama(), t = b.querySelector('#pDividi'); t.hidden = !d; if (d) t.textContent = `È il prezzo ${d.intero} da ${fmtSf(d.fp, d.sac)}? Dividi per ${fmtNum(d.sac)}`; };
+      const chiediDama = async () => {
+        const d = dama(); if (!d || stato.attesaDama) return;
         stato.attesaDama = true;   // finché non risponde, il salvataggio automatico aspetta
-        const diviso = Math.round(v / sac * 10000) / 10000;
-        const r = await sceltaBox(`${fmtEuro(v)} è il prezzo ${cont === 'sacco' ? 'del sacco intero' : 'della ' + cont + ' intera'} da ${fmtSf(fp, sac)}?`,
-          { si: `Sì: lo divido per ${fmtNum(sac)} (${fmtEuro(diviso)} al ${base})`, no: `No, è già al ${base}`, title: 'Prezzo d\'acquisto' });
+        const diviso = Math.round(d.v / d.sac * 10000) / 10000;
+        const r = await sceltaBox(`${fmtEuro(d.v)} è il prezzo ${d.intero} da ${fmtSf(d.fp, d.sac)}?`,
+          { si: `Sì: lo divido per ${fmtNum(d.sac)} (${fmtEuro(diviso)} al ${d.base})`, no: `No, è già al ${d.base}`, title: 'Prezzo d\'acquisto' });
         stato.attesaDama = false;
         if (!(current.name === 'prodotto' && current.arg === p.id && b.querySelector('#pNome'))) return;
-        if (r) { e.target.value = fmtNum(diviso); upd(); }
-        e.target.dispatchEvent(new Event('input', { bubbles: true }));
+        const acq = b.querySelector('#pAcq');
+        if (r) { acq.value = fmtNum(diviso); upd(); }
+        acq.dispatchEvent(new Event('input', { bubbles: true })); scritto = false;
         if (paginaSalva) paginaSalva();
-      });
+        tastoDama();
+      };
+      let scritto = false;
+      b.querySelector('#pAcq').addEventListener('input', () => { scritto = true; tastoDama(); });
+      const dopoScritto = () => { if (scritto) { scritto = false; chiediDama(); } };
+      b.querySelector('#pAcq').addEventListener('change', dopoScritto);   // prima del salvataggio automatico (che ascolta più in alto)
+      b.querySelector('#pAcq').addEventListener('blur', dopoScritto);     // anche se il numero riscritto è lo stesso
+      b.querySelector('#pDividi').addEventListener('click', chiediDama);
+      ['#pSacco', '#pSfuso', '#pUnita'].forEach(x => { b.querySelector(x).addEventListener('input', tastoDama); b.querySelector(x).addEventListener('change', tastoDama); });
+      tastoDama();
       b.querySelector('#pAcqKg').addEventListener('change', upd);
       const coloraIva = () => { const c = b.querySelector('[data-iva-f]'); if (c) c.outerHTML = chipIva(b.querySelector('#pIva').value, ivaFornitore(b.querySelector('#pForn').value)); };
       let fornPrima = b.querySelector('#pForn').value;
