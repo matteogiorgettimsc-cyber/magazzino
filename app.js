@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.27.3';
+const VERSIONE = '1.27.4';
 
 /* =========================================================
    Utilità
@@ -424,6 +424,22 @@ function confirmBox(text, { ok = 'Conferma', danger = false, title = 'Conferma' 
 }
 
 /* due scelte; risolve true (si), false (no) o null (finestra chiusa) */
+function dividiModal({ v, sac, lit, base, cont }) {   // → litri/kg per cui dividere, false = è già al litro/kg, null = chiusa
+  const u = lit ? 'litri' : 'kg', di = cont === 'sacco' ? 'un sacco intero' : `una ${cont} intera`;
+  return new Promise(res => {
+    let done = false;
+    openModal(`${mhead('Prezzo d\'acquisto')}<p>${esc(fmtEuro(v))} è il prezzo di ${esc(di)}? Scrivi quant${lit ? 'i litri' : 'i kg'} contiene e lo divido.</p>
+      <label class="field">${lit ? 'Litri' : 'Kg'} ${cont === 'sacco' ? 'nel sacco' : 'nella ' + esc(cont)}<input type="text" inputmode="decimal" id="dvN" value="${sac ? fmtNum(sac) : ''}" placeholder="es. 7" autocomplete="off"></label>
+      <div class="faint small" id="dvRis">&nbsp;</div>
+      <div class="stack"><button class="btn primary block" type="button" data-x="si">Dividi</button><button class="btn block" type="button" data-x="no">No, è già al ${base}</button></div>`,
+      b => {
+        const i = b.querySelector('#dvN'), ris = () => { const n = parseNum(i.value); b.querySelector('#dvRis').textContent = n > 0 ? `${fmtEuro(v)} ÷ ${fmtNum(n)} ${u} = ${fmtEuro(Math.round(v / n * 10000) / 10000)} al ${base}` : '\u00a0'; };
+        i.addEventListener('input', ris); ris(); setTimeout(() => { i.focus(); i.select(); }, 60);
+        b.querySelector('[data-x=si]').onclick = () => { const n = parseNum(i.value); if (!(n > 0)) { toast(`Scrivi quant${lit ? 'i litri' : 'i kg'} contiene`, { err: true }); i.focus(); return; } done = true; closeModal(); res(n); };
+        b.querySelector('[data-x=no]').onclick = () => { done = true; closeModal(); res(false); };
+      }, { onClose: () => { if (!done) res(null); } });
+  });
+}
 function sceltaBox(text, { si, no, title = 'Scegli' }) {
   return new Promise(res => {
     let done = false;
@@ -2259,33 +2275,32 @@ routes.prodotto = id => {
       ['#pAcq', '#pIva', '#pRic', '#pMan', '#pPesoPz'].forEach(s => b.querySelector(s).addEventListener('input', upd));
       /* prezzo d'acquisto della dama (o del sacco) intera: si chiede se dividerlo per i litri (o i kg) scritti dal negozio.
          Si chiede uscendo dal campo dopo averci scritto (anche se il numero è lo stesso), o col pulsante sotto per i prezzi già scritti. */
+      /* la dama (o il sacco) può essere ogni volta di misura diversa: si chiede quanti litri (o kg) contiene e si divide (dalla 1.27.4) */
       const dama = () => {
         const fp = forma(), sac = parseNum(b.querySelector('#pSacco').value), v = parseNum(b.querySelector('#pAcq').value);
-        if (!isSfuso(fp) || !(sac > 1) || !(v > 0)) return null;
-        const pp = { ...fp, nome: b.querySelector('#pNome').value, categoria: p.categoria }, cont = nomeSacco(pp);
-        return { fp, sac, v, base: inLitri(fp) ? 'litro' : 'kg', intero: cont === 'sacco' ? 'del sacco intero' : 'della ' + cont + ' intera', cont };
+        if (!isSfuso(fp) || !(v > 0)) return null;
+        const pp = { ...fp, nome: b.querySelector('#pNome').value, categoria: p.categoria }, cont = nomeSacco(pp), lit = inLitri(fp);
+        return { fp, sac: sac > 0 ? sac : null, v, lit, base: lit ? 'litro' : 'kg', cont, chiedi: lit || sac > 1 };   // da solo: per i liquidi sempre, per i sacchi se c'è il peso
       };
-      const tastoDama = () => { const d = dama(), t = b.querySelector('#pDividi'); t.hidden = !d; if (d) t.textContent = `È il prezzo ${d.intero} da ${fmtSf(d.fp, d.sac)}? Dividi per ${fmtNum(d.sac)}`; };
-      const chiediDama = async () => {
-        const d = dama(); if (!d || stato.attesaDama) return;
+      const tastoDama = () => { const d = dama(), t = b.querySelector('#pDividi'); t.hidden = !d; if (d) t.textContent = d.lit ? 'Dividi per i litri' : 'Dividi per i kg'; };
+      const chiediDama = async (daSolo) => {
+        const d = dama(); if (!d || stato.attesaDama || (daSolo === true && !d.chiedi)) return;
         stato.attesaDama = true;   // finché non risponde, il salvataggio automatico aspetta
-        const diviso = Math.round(d.v / d.sac * 10000) / 10000;
-        const r = await sceltaBox(`${fmtEuro(d.v)} è il prezzo ${d.intero} da ${fmtSf(d.fp, d.sac)}?`,
-          { si: `Sì: lo divido per ${fmtNum(d.sac)} (${fmtEuro(diviso)} al ${d.base})`, no: `No, è già al ${d.base}`, title: 'Prezzo d\'acquisto' });
+        const n = await dividiModal(d);
         stato.attesaDama = false;
         if (!(current.name === 'prodotto' && current.arg === p.id && b.querySelector('#pNome'))) return;
         const acq = b.querySelector('#pAcq');
-        if (r) { acq.value = fmtNum(diviso); upd(); }
+        if (n > 0) { acq.value = fmtNum(Math.round(d.v / n * 10000) / 10000); upd(); }
         acq.dispatchEvent(new Event('input', { bubbles: true })); scritto = false;
         if (paginaSalva) paginaSalva();
         tastoDama();
       };
       let scritto = false;
       b.querySelector('#pAcq').addEventListener('input', () => { scritto = true; tastoDama(); });
-      const dopoScritto = () => { if (scritto) { scritto = false; chiediDama(); } };
+      const dopoScritto = () => { if (scritto) { scritto = false; chiediDama(true); } };
       b.querySelector('#pAcq').addEventListener('change', dopoScritto);   // prima del salvataggio automatico (che ascolta più in alto)
       b.querySelector('#pAcq').addEventListener('blur', dopoScritto);     // anche se il numero riscritto è lo stesso
-      b.querySelector('#pDividi').addEventListener('click', chiediDama);
+      b.querySelector('#pDividi').addEventListener('click', () => chiediDama(false));
       ['#pSacco', '#pSfuso', '#pUnita'].forEach(x => { b.querySelector(x).addEventListener('input', tastoDama); b.querySelector(x).addEventListener('change', tastoDama); });
       tastoDama();
       b.querySelector('#pAcqKg').addEventListener('change', upd);
