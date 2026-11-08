@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.27.2';
+const VERSIONE = '1.27.3';
 
 /* =========================================================
    Utilità
@@ -923,7 +923,7 @@ function nuovoCarico(modo) { return { pid: null, qta: '1', scad: '', senza: fals
 /* carico aperto su un prodotto: lo sfuso si conta a sacchi all'arrivo, in kg all'inventario */
 function caricoPer(p, modo) {
   const c = nuovoCarico(modo); c.pid = p.id;
-  if (isSfuso(p)) { c.unita = modo === 'arrivo' && p.pesoSacco ? 'sacchi' : 'kg'; if (c.unita === 'kg') c.qta = ''; }
+  if (isSfuso(p)) { c.unita = modo === 'arrivo' && p.pesoSacco && !inLitri(p) ? 'sacchi' : 'kg'; if (c.unita === 'kg') c.qta = ''; }   // i liquidi si caricano sempre in litri (dalla 1.27.3)
   else if (kgPezzo(p) && modo === 'arrivo') { c.unita = 'kg'; c.qta = ''; }   // arriva a kg: si scrivono i kg, diventano pezzi
   return c;
 }
@@ -989,7 +989,7 @@ routes.carico = arg => {
     html += `<div class="card">
       <div class="row"><div class="spacer"><h2>${esc(p.nome)}</h2><div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>${tagTipo(p)}</div>
       ${info ? `<div class="notice green"><span>In ordine: <b>${fmtOrd(p, info.qta)}</b> · già arrivati <b>${aKg(p) ? fmtOrd(p, r3(info.ric)) : fmtNum(r3(info.ric))}</b></span></div>` : ''}
-      ${isSfuso(p) && !p.pesoSacco && !inv && catDi(p) !== FV ? `<div class="notice"><span>Sfuso senza ${inLitri(p) ? 'litri della ' + nomeSacco(p) : 'peso del sacco'}: scrivi i <b>${nomeBase(p)}</b>. Per contare a ${nomeSacco(p, 2)}, scrivi ${inLitri(p) ? 'i litri della ' + nomeSacco(p) : 'il peso del sacco'} nella <a href="#prodotto/${encodeURIComponent(p.id)}"><b>scheda</b></a>.</span></div>` : ''}
+      ${isSfuso(p) && !p.pesoSacco && !inv && catDi(p) !== FV && !inLitri(p) ? `<div class="notice"><span>Sfuso senza ${inLitri(p) ? 'litri della ' + nomeSacco(p) : 'peso del sacco'}: scrivi i <b>${nomeBase(p)}</b>. Per contare a ${nomeSacco(p, 2)}, scrivi ${inLitri(p) ? 'i litri della ' + nomeSacco(p) : 'il peso del sacco'} nella <a href="#prodotto/${encodeURIComponent(p.id)}"><b>scheda</b></a>.</span></div>` : ''}
       <div class="kp-fields">
         <button type="button" class="kp-field ${CS.field === 'scad' ? 'on' : ''}" data-act="kp-field" data-f="scad" ${CS.senza ? 'disabled' : ''}><small>Scadenza</small><b>${CS.senza ? '—' : fmtScadDigits(CS.scad)}</b></button>
         <div class="kp-qta ${kgMode ? 'solo' : ''}">
@@ -998,7 +998,7 @@ routes.carico = arg => {
           ${kgMode ? '' : '<button type="button" class="kp-pm" data-act="qta+" aria-label="Più uno">+</button>'}
         </div>
       </div>
-      ${isSfuso(p) ? `<div class="sf-unita">${p.pesoSacco && CS.modo === 'arrivo' ? `<div class="segmented mini"><button type="button" data-act="unita" data-u="sacchi" class="${CS.unita === 'sacchi' ? 'on' : ''}">${Nome(nomeSacco(p, 2))}</button><button type="button" data-act="unita" data-u="kg" class="${CS.unita === 'kg' ? 'on' : ''}">${inLitri(p) ? 'Litri' : 'Kg'}</button></div>` : ''}<span>${CS.unita === 'sacchi' ? `${fmtSacchi(parseInt(CS.qta, 10) || 0, p)} da ${fmtSf(p, p.pesoSacco)} = <b>${fmtSf(p, qtaCarico(p).q)}</b>` : `Scrivi i ${nomeBase(p)} con la virgola, es. 2,5`}</span></div>` : ''}
+      ${isSfuso(p) ? `<div class="sf-unita">${p.pesoSacco && CS.modo === 'arrivo' && !inLitri(p) ? `<div class="segmented mini"><button type="button" data-act="unita" data-u="sacchi" class="${CS.unita === 'sacchi' ? 'on' : ''}">${Nome(nomeSacco(p, 2))}</button><button type="button" data-act="unita" data-u="kg" class="${CS.unita === 'kg' ? 'on' : ''}">${inLitri(p) ? 'Litri' : 'Kg'}</button></div>` : ''}<span>${CS.unita === 'sacchi' ? `${fmtSacchi(parseInt(CS.qta, 10) || 0, p)} da ${fmtSf(p, p.pesoSacco)} = <b>${fmtSf(p, qtaCarico(p).q)}</b>` : `Scrivi i ${nomeBase(p)} con la virgola, es. 2,5`}</span></div>` : ''}
       ${kgPezzo(p) ? `<div class="sf-unita"><div class="segmented mini"><button type="button" data-act="unita" data-u="kg" class="${CS.unita === 'kg' ? 'on' : ''}">Kg</button><button type="button" data-act="unita" data-u="pz" class="${CS.unita !== 'kg' ? 'on' : ''}">Pezzi</button></div><span>${CS.unita === 'kg' ? (qtaCarico(p).kg > 0 ? `${fmtNum(qtaCarico(p).kg)} kg ≈ <b>${qtaCarico(p).q} pezzi</b> da ${fmtNum(p.pesoPezzo)} g` : `Scrivi i kg arrivati, es. 2,5: diventano pezzi (${fmtNum(p.pesoPezzo)} g l'uno)`) : `Si contano i pezzi`}</span></div>` : ''}
       <div class="date-preview ${pr.err ? 'err' : ''} ${pr.faint ? 'faint' : ''}">${esc(pr.t)}</div>
       <div class="keypad">${['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(k => `<button type="button" data-act="kp" data-k="${k}">${k}</button>`).join('')}
@@ -2097,7 +2097,7 @@ const lottiScheda = p => { const lotti = lottiAttivi().filter(l => l.prodottoId 
   return lotti.length ? `<div class="faint small">Per cambiare la scadenza o ${isSfuso(p) ? 'i ' + nomeBase(p) : 'i pezzi'} tocca <b>Modifica</b>.</div><div class="list">${lotti.map(l => rigaConfezione(l, { arrivo: true })).join('')}</div>` : '<div class="empty">Nessuna confezione registrata.</div>'; };
 /* scheda prodotto: scadenze e pezzi senza andare in Arrivi o Inventario (dalla 1.24.0).
    Più righe = colli con scadenze diverse, salvati insieme come confezioni separate. */
-const pcSacchi = p => isSfuso(p) && p.pesoSacco > 0;
+const pcSacchi = p => isSfuso(p) && p.pesoSacco > 0 && !inLitri(p);   // i liquidi: sempre in litri, niente dame
 const pcNomeQta = (p, u) => !isSfuso(p) ? (u === 'kg' && kgPezzo(p) ? 'Kg' : 'Pezzi') : u === 'sacchi' ? Nome(nomeSacco(p, 2)) : (inLitri(p) ? 'Litri' : 'Kg');
 const pcRiga = (p, u, togli) => `<div class="pc-riga">
     <label class="field"><span class="pc-qlab">${pcNomeQta(p, u)}</span><input type="text" inputmode="${(isSfuso(p) && u !== 'sacchi') || (kgPezzo(p) && u === 'kg') ? 'decimal' : 'numeric'}" class="pc-qta" autocomplete="off"></label>
