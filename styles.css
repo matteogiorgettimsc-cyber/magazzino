@@ -477,3 +477,11 @@ svg.grafico{width:100%;height:auto;display:block;touch-action:manipulation}
 .sp-riempi{border-top:1px solid var(--line);padding-top:10px}
 .sp-agg{gap:10px;align-items:center;cursor:pointer}
 #spLista{max-height:40vh;overflow:auto}
+
+/* 1.29.0: categorie proposte */
+.chip.ok{border-color:var(--green);color:var(--green)}
+.cr-riga .main{min-width:0}
+.cr-chips{margin-top:8px;gap:6px}
+.cr-chips .chip{white-space:normal;text-align:left;line-height:1.2;padding:6px 12px}
+.cr-altra{width:auto;min-height:38px;border-radius:20px;padding:0 10px;font-size:.86rem;max-width:100%}
+#npCatProp,#pCatProp{margin:6px 0}

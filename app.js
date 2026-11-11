@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.28.0';
+const VERSIONE = '1.29.0';
 
 /* =========================================================
    Utilità
@@ -631,6 +631,7 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
     <label class="field">Nome<input type="text" id="npNome" value="${esc(maiuscolo(nome))}" autocomplete="off" autocapitalize="characters" data-maiusc></label>
     <label class="field">Fornitore<select id="npForn"><option value="">— scegli —</option>${forn.map(f => `<option value="${esc(f.id)}" ${f.id === last ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></label>
     <label class="field">Formato <span class="hint">es. 500 g, 1 l, 6 pz</span><input type="text" id="npFormato" autocomplete="off" autocapitalize="characters" data-maiusc></label>
+    <div class="field" id="npCatBox">Categoria <span class="hint">proposta dall'app: tocca quella giusta</span><div class="chips" id="npCatProp"></div>${campoCategoria('npCat', '')}</div>
     <label class="field">Tipo di scadenza<select id="npTipo"><option value="preferibilmente">Preferibilmente entro (secchi, conserve)</option><option value="entro">Da consumarsi entro (freschi)</option></select></label>
     <label class="check"><input type="checkbox" id="npSfuso"> Sfuso (a peso, alla spina o a pezzo)</label>
     <div class="stack" id="npSaccoBox" hidden>
@@ -640,6 +641,16 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
     ${code ? '' : `<label class="check"><input type="checkbox" id="npCrea"> Non ha il codice a barre: crealo e stampa le etichette</label>`}
     <button class="btn primary block" type="button" id="npSave">Crea prodotto</button>`, b => {
     b.querySelector('#npNome').focus();
+    let catToccata = false;
+    const proponi = () => {   // le proposte cambiano col nome e col fornitore, finché non se ne sceglie una
+      const prop = proposteCategoria(maiuscolo(b.querySelector('#npNome').value), b.querySelector('#npForn').value), sel = b.querySelector('#npCatSel');
+      if (!catToccata) mettiCat(sel, prop.length ? prop[0].c : '');
+      b.querySelector('#npCatProp').innerHTML = chipsCategoria(prop, sel.value, 'data-np-cat') || '<span class="faint small">Nessuna proposta: scegli dall\'elenco.</span>';
+    };
+    b.querySelector('#npNome').addEventListener('input', proponi); b.querySelector('#npForn').addEventListener('change', proponi);
+    b.querySelector('#npCatProp').addEventListener('click', e => { const c = e.target.closest('[data-np-cat]'); if (!c) return; catToccata = true; mettiCat(b.querySelector('#npCatSel'), c.dataset.npCat); b.querySelector('#npCat').hidden = true; proponi(); });
+    b.querySelector('#npCatSel').addEventListener('change', () => { catToccata = true; proponi(); });
+    proponi();
     b.querySelector('#npSfuso').addEventListener('change', e => { b.querySelector('#npSaccoBox').hidden = !e.target.checked; const c = b.querySelector('#npCrea'); if (c) c.checked = e.target.checked; });
     b.querySelector('#npUnita').addEventListener('change', e => aggiornaTestiSacco(b, e.target.value));
     b.querySelector('#npSave').onclick = async () => {
@@ -649,11 +660,11 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
       const sf = b.querySelector('#npSfuso').checked, un = sf ? b.querySelector('#npUnita').value : undefined, sacco = un === 'pz' ? null : parseNum(b.querySelector('#npSacco').value);
       const crea = !code && b.querySelector('#npCrea').checked;
       const codici = code ? [code] : crea ? [await codiceInterno()] : [];
-      const dc = deduciCategoria(n, fid);
-      const p = { id: uid('p'), nome: n, fornitoreId: fid, categoria: dc ? dc.c : '', catAuto: dc ? true : undefined, formato: maiuscolo(b.querySelector('#npFormato').value.trim()), prezzoAcquisto: null, iva: (ivaFornitore(fid) || {}).iva ?? null, prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici, tipoScadenza: b.querySelector('#npTipo').value, note: '', origine: 'Creato nell\'app', sfuso: sf, unita: un, pesoSacco: sf && sacco > 0 ? sacco : null };
+      const cat = categoriaScelta(b, 'npCat') || '';
+      const p = { id: uid('p'), nome: n, fornitoreId: fid, categoria: cat, formato: maiuscolo(b.querySelector('#npFormato').value.trim()), prezzoAcquisto: null, iva: (ivaFornitore(fid) || {}).iva ?? null, prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici, tipoScadenza: b.querySelector('#npTipo').value, note: '', origine: 'Creato nell\'app', sfuso: sf, unita: un, pesoSacco: sf && sacco > 0 ? sacco : null };
       if (code) { const prima = byCode(code); if (prima) await save('prodotti', { ...prima, codici: prima.codici.filter(c => c !== code) }); }
       await save('prodotti', p); if (fid) await setMeta('ultimoFornitore', fid);
-      closeModal(); toast(`Creato: ${p.nome}${dc ? ' · categoria ' + dc.c : ''}`); onDone && onDone(p);
+      closeModal(); toast(`Creato: ${p.nome}${cat ? ' · ' + cat : ''}`); onDone && onDone(p);
       if (crea) etichettaPronta(p.id);
     };
   });
@@ -921,6 +932,7 @@ routes.home = () => {
   }
   const spm = sprechiPeriodo('mese').filter(perso);
   if (spm.length) html += `<a class="card tight" href="#sprechi" style="text-decoration:none"><div class="row"><div class="spacer"><b>Sprechi di questo mese</b><div class="faint small">${totaleQta(spm)} · ${fmtEuro(spm.reduce((t, r) => t + (valoreSpreco(r) || 0), 0))}</div></div><span class="chev">›</span></div></a>`;
+  { const n = daControllare().length; if (n) html += `<a class="card tight" href="#controllacategorie" style="text-decoration:none"><div class="row"><div class="spacer"><b>Categorie da controllare</b><div class="faint small">${n} ${n === 1 ? 'prodotto' : 'prodotti'}: l'app propone, tu scegli</div></div><span class="chev">›</span></div></a>`; }
   html += `<div class="faint" style="text-align:center">Puoi anche scansionare un prodotto in qualsiasi momento per vedere cosa fare.</div>`;
   const warn = giorniBk == null || giorniBk >= 3;
   html += `<div class="notice ${warn ? 'red' : 'green'}"><div class="spacer">${giorniBk == null ? '<b>Nessun backup ancora.</b> Fallo ogni giorno a fine lavoro.' : giorniBk === 0 ? 'Backup fatto oggi.' : `Ultimo backup: <b>${giorniBk === 1 ? 'ieri' : giorniBk + ' giorni fa'}</b>.`}</div>
@@ -1775,10 +1787,18 @@ function daSistemareModal() {
    ========================================================= */
 let CH = null;
 const fmtImporto = n => n == null ? '' : Number(n).toFixed(2).replace('.', ',');
+/* importo scritto a mano: «612,40», «1.234,50», «€ 80»; con lettere o segni strani non è un numero (niente salvataggi a metà) */
+function parseEuro(t) {
+  let x = String(t == null ? '' : t).replace(/[\s€]/g, '');
+  if (!x) return null;
+  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(x)) x = x.replace(/\./g, '');
+  x = x.replace(',', '.');
+  return /^\d+(\.\d+)?$/.test(x) ? +x : null;
+}
 function datiChiusura() {
   const oggi = todayISO(), righe = venditeDel(oggi);
   const scansionato = Math.round(righe.reduce((t, v) => t + (importo(v) || 0), 0) * 100) / 100;
-  const inc = parseNum(CH.incasso), fr = parseNum(CH.frutta);
+  const inc = parseEuro(CH.incasso), fr = parseEuro(CH.frutta);
   const confronto = inc == null ? null : Math.round((inc - (fr || 0)) * 100) / 100;
   const diff = confronto == null ? null : Math.round((scansionato - confronto) * 100) / 100;
   const pct = confronto ? Math.abs(diff) / confronto * 100 : null;
@@ -1793,6 +1813,23 @@ function riepilogoChiusuraHTML() {
   if (!ok) h += `<div class="faint small">${d.diff < 0 ? 'Nell\'app c\'è meno che in cassa: forse qualche prodotto non è stato scansionato.' : 'Nell\'app c\'è più che in cassa: controlla scansioni doppie o prezzi diversi da quelli della cassa.'}</div>`;
   return h;
 }
+/* l'incasso si salva da solo mentre si scrive (dalla 1.29.0): prima si salvava solo col pulsante in fondo,
+   e se si usciva dalla pagina, o si annullava il backup, sembrava (o era) perso */
+async function salvaChiusura(d) {
+  const prima = S.chiusure.get('c' + d.oggi);
+  if (prima && prima.incasso === d.inc && (prima.frutta ?? null) === (d.fr ?? null) && prima.scansionato === d.scansionato) return false;
+  await save('chiusure', { ...(prima || {}), id: 'c' + d.oggi, data: d.oggi, incasso: d.inc, frutta: d.fr, scansionato: d.scansionato, differenza: d.diff, creato: prima ? prima.creato : Date.now(), modificato: Date.now() });
+  return true;
+}
+function leggiChiusura(b) {
+  if (current.name !== 'chiusura' || !CH || !b.querySelector('#chInc')) return null;
+  CH.incasso = b.querySelector('#chInc').value; CH.frutta = b.querySelector('#chFr').value;
+  const d = datiChiusura();
+  if (!CH.incasso.trim()) return null;
+  if (d.inc == null) return { errore: 'L\'incasso non è un numero: non salvato' };
+  if (CH.frutta.trim() && d.fr == null) return { errore: 'La frutta e verdura non è un numero: non salvato' };
+  return { salva: () => salvaChiusura(d) };
+}
 routes.chiusura = () => {
   const oggi = todayISO(), salvata = S.chiusure.get('c' + oggi);
   if (!CH || CH.data !== oggi) CH = { data: oggi, incasso: salvata ? fmtImporto(salvata.incasso) : '', frutta: salvata ? fmtImporto(salvata.frutta) : '' };
@@ -1805,10 +1842,11 @@ routes.chiusura = () => {
   if (codiciDS) controlli.push(voce('ds-apri', '', codiciDS === 1 ? '1 codice da sistemare' : `${codiciDS} codici da sistemare`, 'Venduti ma non ancora collegati a un prodotto'));
   if (senzaCarico) controlli.push(voce('ch-lista', 'data-l="carico"', senzaCarico === 1 ? '1 prodotto venduto senza carico' : `${senzaCarico} prodotti venduti senza carico`, 'Probabile arrivo non registrato'));
   if (senzaPrezzo) controlli.push(voce('ch-lista', 'data-l="prezzo"', senzaPrezzo === 1 ? '1 prodotto senza prezzo' : `${senzaPrezzo} prodotti senza prezzo`, 'Non contano nel confronto con la cassa'));
-  const html = `<div><h2 style="margin:0">${esc(fmtDateLong(oggi))}</h2>${salvata ? `<div class="faint">Chiusura salvata alle ${fmtOra(salvata.creato)}: puoi correggerla e salvarla di nuovo.</div>` : ''}</div>
-    <div class="card"><h3>Dalla cassa</h3>
+  const html = `<div><h2 style="margin:0">${esc(fmtDateLong(oggi))}</h2>${salvata ? `<div class="faint">Incasso salvato alle ${fmtOra(salvata.modificato || salvata.creato)}: puoi correggerlo, si salva da solo.</div>` : ''}</div>
+    <div class="card" data-auto><h3>Dalla cassa</h3>
       <label class="field">Incasso totale €<input type="text" inputmode="decimal" id="chInc" value="${esc(CH.incasso)}" autocomplete="off" placeholder="es. 612,40"></label>
-      <label class="field">Di cui frutta e verdura € <span class="hint">solo per la frutta e verdura <b>non</b> scansionata al Banco (dalla chiusura per reparto della cassa); se la scansionate tutta, lascia vuoto</span><input type="text" inputmode="decimal" id="chFr" value="${esc(CH.frutta)}" autocomplete="off"></label></div>
+      <label class="field">Di cui frutta e verdura € <span class="hint">solo per la frutta e verdura <b>non</b> scansionata al Banco (dalla chiusura per reparto della cassa); se la scansionate tutta, lascia vuoto</span><input type="text" inputmode="decimal" id="chFr" value="${esc(CH.frutta)}" autocomplete="off"></label>
+      <div class="faint small salva-stato" aria-live="polite">${salvata ? `Salvato alle ${fmtOra(salvata.modificato || salvata.creato)}` : 'L\'incasso si salva da solo mentre lo scrivi.'}</div></div>
     <div class="card" id="chRis" aria-live="polite">${riepilogoChiusuraHTML()}</div>
     <div class="section-title"><h2>Da controllare</h2></div>
     ${controlli.length ? `<div class="list">${controlli.join('')}</div>` : '<div class="notice green"><span>Niente da controllare.</span></div>'}
@@ -1821,6 +1859,7 @@ routes.chiusura = () => {
       const upd = () => { CH.incasso = b.querySelector('#chInc').value; CH.frutta = b.querySelector('#chFr').value; b.querySelector('#chRis').innerHTML = riepilogoChiusuraHTML(); };
       b.querySelector('#chInc').addEventListener('input', upd);
       b.querySelector('#chFr').addEventListener('input', upd);
+      autoSalva(b, () => leggiChiusura(b));
       if (daCollegarePronti()) inCoda(sistemaEAvvisa);
     },
     onScan: () => toast('Sei nella chiusura: per vendere torna al Banco', { err: true })
@@ -2058,6 +2097,7 @@ routes.catalogo = arg => {
       <label class="check"><input type="checkbox" id="catSC" ${CAT.senzaCodice ? 'checked' : ''}> Senza codice</label>
       <label class="check"><input type="checkbox" id="catSF" ${CAT.sfuso ? 'checked' : ''}> Sfuso</label></div>
     <select id="catC"><option value="">Tutte le categorie</option>${[...categorieUsate().filter(c => [...S.prodotti.values()].some(p => catDi(p) === c)), SENZA_CAT].map(c => `<option value="${esc(c)}" ${CAT.cat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+    ${!CAT.sel && daControllare().length ? avvisoCtrl(daControllare().length) : ''}
     ${!CAT.sel && S.prodotti.size ? '<a class="btn block" href="#etichette">Etichette con codice a barre</a>' : ''}
     ${!CAT.sel && S.prodotti.size ? '<button class="btn block" type="button" data-act="listini-excel">Listini in Excel: un foglio per fornitore</button>' : ''}
     <div id="catList" class="stack">${catListHTML()}</div>
@@ -2204,7 +2244,9 @@ routes.prodotto = id => {
     <div class="card">
       <label class="field">Nome<textarea id="pNome" rows="2" style="min-height:0" autocapitalize="characters" data-maiusc>${esc(p.nome)}</textarea></label>
       <label class="field">Fornitore<select id="pForn"><option value="">— nessuno —</option>${forn.map(f => `<option value="${esc(f.id)}" ${p.fornitoreId === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select></label>
-      <label class="field">Categoria${p.catAuto && catDi(p) ? ' <span class="hint" id="pCatAuto">scelta dall\'app: se non va, cambiala</span>' : ''}${campoCategoria('pCat', p.categoria)}</label>
+      ${(() => { const prop = p.catAuto || !catDi(p) ? proposteCategoria(p.nome, p.fornitoreId) : [];
+        return `<div class="field">Categoria${p.catAuto && catDi(p) ? ' <span class="hint" id="pCatAuto">messa dall\'app: controlla</span>' : ''}${campoCategoria('pCat', p.categoria)}
+          ${prop.length ? `<div class="chips" id="pCatProp"><span class="faint small">Proposte:</span>${chipsCategoria(prop, catDi(p), 'data-p-cat')}${p.catAuto && catDi(p) ? '<button type="button" class="chip ok" id="pCatOk">✓ Va bene così</button>' : ''}</div>` : ''}</div>`; })()}
       <label class="field">Formato<input type="text" id="pFormato" value="${esc(p.formato)}" autocapitalize="characters" data-maiusc></label>
       <label class="field">Tipo di scadenza<select id="pTipo"><option value="preferibilmente" ${p.tipoScadenza !== 'entro' ? 'selected' : ''}>Preferibilmente entro (secchi, conserve)</option><option value="entro" ${p.tipoScadenza === 'entro' ? 'selected' : ''}>Da consumarsi entro (freschi)</option></select></label>
       <div class="field" style="font-weight:600">Codici a barre
@@ -2251,6 +2293,15 @@ routes.prodotto = id => {
       const stato = PSTATO;
       autoSalva(b, () => leggiScheda(p.id, b, stato));
       montaCarica(b, p.id);
+      const cp = b.querySelector('#pCatProp');
+      if (cp) cp.addEventListener('click', async e => {   // proposta toccata: è la categoria scelta (e non più «messa dall'app»)
+        const t = e.target.closest('[data-p-cat], #pCatOk'); if (!t) return;
+        const c = t.id === 'pCatOk' ? catDi(prodotto(p.id)) : t.dataset.pCat, sel = b.querySelector('#pCatSel');
+        if (c === catDi(prodotto(p.id))) await save('prodotti', { ...prodotto(p.id), catAuto: null });
+        else { mettiCat(sel, c); b.querySelector('#pCat').hidden = true; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+        cp.remove(); const h = b.querySelector('#pCatAuto'); if (h) h.remove();
+        toast('Categoria: ' + c);
+      });
       // la scheda com'è nel modulo, anche prima di salvare
       const forma = () => ({ sfuso: b.querySelector('#pSfuso').checked, unita: b.querySelector('#pUnita').value, acquistoKg: b.querySelector('#pAcqKg').value === '1', pesoPezzo: parseNum(b.querySelector('#pPesoPz').value) });
       const upd = () => {
@@ -3664,6 +3715,10 @@ function campoCategoria(id, valore) {
   return `<select id="${id}Sel" data-cat-sel="${id}"><option value="">— nessuna —</option>${lista.map(c => `<option value="${esc(c)}" ${c === v ? 'selected' : ''}>${esc(c)}</option>`).join('')}<option value="__altra">✎ Scrivine un'altra…</option></select>
     <input type="text" id="${id}" value="" placeholder="scrivi la categoria nuova" autocomplete="off" hidden>`;
 }
+function mettiCat(sel, c) {
+  if (c && ![...sel.options].some(o => o.value === c)) { const o = document.createElement('option'); o.value = o.textContent = c; sel.insertBefore(o, sel.querySelector('option[value="__altra"]')); }
+  sel.value = c || '';
+}
 const categoriaScelta = (root, id) => { const sel = root.querySelector('#' + id + 'Sel'); if (!sel) return null; return sel.value === '__altra' ? root.querySelector('#' + id).value.replace(/\s+/g, ' ').trim() : sel.value; };
 document.addEventListener('focusout', e => {   // nome e formato: maiuscolo quando si esce dal campo (unità in minuscolo)
   const t = e.target; if (!t.matches || !t.matches('[data-maiusc]')) return;
@@ -3707,6 +3762,31 @@ function deduciCategoria(nome, fornitoreId, ctx = contestoCategorie()) {
   }
   return null;
 }
+/* le proposte da mostrare (dalla 1.29.0): fino a 3 categorie diverse, la prima è quella che l'app sceglierebbe.
+   L'app non scrive più da sola la categoria: la propone e si sceglie (scheda, nuovo prodotto, «Categorie da controllare»). */
+const COME_CAT = { simili: 'come prodotti simili', nome: 'dal nome', fornitore: 'come il fornitore' };
+function proposteCategoria(nome, fornitoreId, ctx = contestoCategorie()) {
+  const out = [], metti = (c, come) => { if (c && c !== SENZA_CAT && !out.some(x => x.c === c)) out.push({ c, come }); };
+  const d = deduciCategoria(nome, fornitoreId, ctx); if (d) metti(d.c, d.come);
+  metti(categoriaDalNome(nome), 'nome');
+  for (const [c] of punteggiSimili(nome, ctx).slice(0, 3)) metti(c, 'simili');
+  const fm = fornitoreId && ctx.forn.get(fornitoreId);
+  if (fm) for (const [c] of [...fm.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2)) metti(c, 'fornitore');
+  return out.slice(0, 3);
+}
+function punteggiSimili(nome, ctx) {
+  const punti = new Map();
+  for (const w of paroleNome(nome)) {
+    const m = ctx.idx.get(w); if (!m) continue;
+    let df = 0; for (const k of m.values()) df += k;
+    const peso = Math.log(1 + ctx.n / df);
+    for (const [c, k] of m) punti.set(c, (punti.get(c) || 0) + peso * k / df);
+  }
+  return [...punti.entries()].filter(x => x[1] >= 0.5).sort((a, b) => b[1] - a[1]);
+}
+const daControllare = () => [...S.prodotti.values()].filter(p => p.catAuto || !catDi(p) || catDi(p) === SENZA_CAT);
+/* i pulsanti delle proposte: toccandone uno si sceglie quella categoria */
+const chipsCategoria = (prop, attuale, attr) => prop.map(x => `<button type="button" class="chip${x.c === attuale ? ' on' : ''}" ${attr}="${esc(x.c)}" title="${esc(COME_CAT[x.come] || '')}">${esc(x.c)}</button>`).join('');
 function simili(nome, ctx) {
   const punti = new Map();
   for (const w of paroleNome(nome)) {
@@ -3717,14 +3797,6 @@ function simili(nome, ctx) {
   }
   const ord = [...punti.entries()].sort((a, b) => b[1] - a[1]);
   return ord.length && ord[0][1] >= 2 && ord[0][1] >= 1.5 * ((ord[1] || [])[1] || 0) ? ord[0][0] : null;
-}
-/* all'avvio: ai prodotti senza categoria la scrive l'app, solo dove manca (le categorie già scritte non si toccano) */
-async function categorieMancanti() {
-  const senza = [...S.prodotti.values()].filter(p => !catDi(p)); if (!senza.length) return 0;
-  const ctx = contestoCategorie(), nuovi = [];
-  for (const p of senza) { const d = deduciCategoria(p.nome, p.fornitoreId, ctx); if (d) nuovi.push({ ...p, categoria: d.c, catAuto: true }); }
-  if (nuovi.length) await saveMany('prodotti', nuovi);
-  return nuovi.length;
 }
 /* le categorie preparate per il catalogo iniziale (file categorie_catalogo.js): si scrivono una volta sola,
    solo nei prodotti che non ne hanno una o che hanno ancora l'appunto del listino in quel campo */
@@ -3745,26 +3817,58 @@ async function categorieDalCatalogo() {
   await setMeta('categorieCatalogo', cc.versione);
   return nuovi.length;
 }
-function proponiCategorie() {
-  const prop = [...S.prodotti.values()].filter(p => !catDi(p)).map(p => [p, categoriaDalNome(p.nome)]);
-  const si = prop.filter(x => x[1]), conta = new Map();
-  for (const [, c] of si) conta.set(c, (conta.get(c) || 0) + 1);
-  if (!prop.length) { toast('Tutti i prodotti hanno già una categoria'); return; }
-  openModal(`${mhead('Categorie dal nome')}
-    <p style="margin:0">Riconosco la categoria di <b>${si.length}</b> prodotti su ${prop.length} senza categoria.</p>
-    ${si.length ? `<div class="list">${[...conta.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `<div class="item"><div class="main"><div class="name">${esc(c)}</div></div><b>${n}</b></div>`).join('')}</div>` : ''}
-    <p class="muted small" style="margin:0">Quelli che non riconosco restano «${SENZA_CAT}»: si sistemano dal Catalogo (Seleziona → Categoria) o nella scheda del prodotto. Le categorie già scritte non cambiano.</p>
-    ${si.length ? `<button class="btn primary block" type="button" data-x="ok">Scrivi le categorie (${si.length})</button>` : ''}
-    <button class="btn block" type="button" data-act="close-modal">${si.length ? 'Non ora' : 'Chiudi'}</button>`, b => {
-    const ok = b.querySelector('[data-x=ok]');
-    if (ok) ok.onclick = async () => {
-      const prima = si.map(([p]) => ({ ...p }));
-      await saveMany('prodotti', si.map(([p, c]) => ({ ...p, categoria: c })));
-      closeModal(); render();
-      setTimeout(() => toast(`Categoria scritta per ${si.length} prodotti`, { action: { label: 'Annulla', run: async () => { await saveMany('prodotti', prima.map(p => ({ ...S.prodotti.get(p.id) || p, categoria: '' }))); render(); } } }), 120);
-    };
-  });
+/* «Categorie da controllare» (dalla 1.29.0): i prodotti senza categoria e quelli con la categoria messa dall'app.
+   Per ognuno le proposte: tocca quella giusta (o scegline un'altra) e il prodotto esce dall'elenco. */
+const avvisoCtrl = n => `<div class="notice"><span class="spacer"><b>${n}</b> ${n === 1 ? 'prodotto ha' : 'prodotti hanno'} la categoria da controllare.</span><a class="btn small" href="#controllacategorie">Controlla</a></div>`;
+let CR = { filtro: 'tutti', forn: '', limite: 40 };
+function crElenco() {
+  const nf = p => (S.fornitori.get(p.fornitoreId) || {}).nome || '';
+  return daControllare().filter(p => (CR.filtro === 'tutti' || (CR.filtro === 'app') === !!(p.catAuto && catDi(p))) && (!CR.forn || p.fornitoreId === CR.forn))
+    .sort((a, b) => nf(a).localeCompare(nf(b), 'it') || a.nome.localeCompare(b.nome, 'it'));
 }
+function crRigheHTML() {
+  const lista = crElenco(), ctx = contestoCategorie(), tutte = categorieUsate();
+  if (!lista.length) return '<div class="empty">Niente da controllare qui.</div>';
+  return lista.slice(0, CR.limite).map(p => {
+    const c = catDi(p) && catDi(p) !== SENZA_CAT ? catDi(p) : '', prop = proposteCategoria(p.nome, p.fornitoreId, ctx);
+    if (c && !prop.some(x => x.c === c)) prop.unshift({ c, come: '' });
+    const f = S.fornitori.get(p.fornitoreId);
+    return `<div class="item cr-riga" data-cr="${esc(p.id)}"><div class="main">
+      <a class="name" href="#prodotto/${encodeURIComponent(p.id)}">${esc(p.nome)}</a>
+      <div class="sub">${[f ? esc(f.nome) : '', p.formato ? esc(p.formato) : '', c ? `ora: <b>${esc(c)}</b> (messa dall'app)` : 'senza categoria'].filter(Boolean).join(' · ')}</div>
+      <div class="chips cr-chips">${chipsCategoria(prop, c, 'data-cr-cat')}
+        <select class="cr-altra" data-cr-sel aria-label="Un'altra categoria"><option value="">Un'altra…</option>${tutte.filter(x => !prop.some(y => y.c === x)).map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}<option value="__altra">✎ Scrivine una nuova…</option></select></div>
+    </div></div>`;
+  }).join('') + (lista.length > CR.limite ? `<button class="btn block" type="button" data-act="cr-altri">Mostra altri (${lista.length - CR.limite})</button>` : '');
+}
+routes.controllacategorie = () => {
+  if (current.fresh) CR.limite = 40;
+  const tutti = daControllare(), nApp = tutti.filter(p => p.catAuto && catDi(p)).length;
+  const fid = new Set(tutti.map(p => p.fornitoreId).filter(Boolean)), forn = [...S.fornitori.values()].filter(f => fid.has(f.id)).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+  const html = `<p class="muted small" style="margin:0">L'app propone la categoria dal nome, dai prodotti simili e dal fornitore, ma può sbagliare. <b>Tocca quella giusta</b>: il prodotto esce dall'elenco. Quella evidenziata è quella che ha adesso.</p>
+    <div class="chips">${[['tutti', `Tutti (${tutti.length})`], ['app', `Messe dall'app (${nApp})`], ['senza', `Senza categoria (${tutti.length - nApp})`]].map(([k, l]) => `<button class="chip ${CR.filtro === k ? 'on' : ''}" type="button" data-act="cr-filtro" data-f="${k}">${l}</button>`).join('')}</div>
+    ${forn.length > 1 ? `<select id="crF"><option value="">Tutti i fornitori</option>${forn.map(f => `<option value="${esc(f.id)}" ${CR.forn === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select>` : ''}
+    <div class="list" id="crList">${crRigheHTML()}</div>`;
+  return {
+    title: 'Categorie da controllare', html, back: '#catalogo', tab: 'catalogo',
+    mount: b => {
+      const sceglie = async (id, c) => {
+        const p = prodotto(id); if (!p) return;
+        const prima = { ...p };
+        await save('prodotti', { ...p, categoria: c, catAuto: null });
+        render();   // il prodotto esce dall'elenco e i numeri sopra si aggiornano
+        toast(`${p.nome}: ${c}`, { action: { label: 'Annulla', run: async () => { await save('prodotti', { ...(prodotto(id) || prima), categoria: prima.categoria || '', catAuto: prima.catAuto ?? null }); render(); } } });
+      };
+      const fs = b.querySelector('#crF'); if (fs) fs.addEventListener('change', e => { CR.forn = e.target.value; CR.limite = 40; render(); });
+      b.querySelector('#crList').addEventListener('click', e => { const t = e.target.closest('[data-cr-cat]'); if (t) sceglie(t.closest('[data-cr]').dataset.cr, t.dataset.crCat); });
+      b.querySelector('#crList').addEventListener('change', e => {
+        const t = e.target.closest('[data-cr-sel]'); if (!t || !t.value) return;
+        const id = t.closest('[data-cr]').dataset.cr;
+        if (t.value === '__altra') { t.value = ''; categoriaModal([id]); } else sceglie(id, t.value);
+      });
+    }
+  };
+};
 function categoriaModal(ids) {
   openModal(`${mhead('Categoria')}
     <p class="muted small" style="margin:0">${ids.length === 1 ? '1 prodotto scelto' : ids.length + ' prodotti scelti'}.</p>
@@ -3773,9 +3877,9 @@ function categoriaModal(ids) {
     b.querySelector('[data-x=ok]').onclick = async () => {
       const c = categoriaScelta(b, 'cgNome');
       const prima = ids.map(id => S.prodotti.get(id)).filter(Boolean).map(p => ({ ...p }));
-      await saveMany('prodotti', prima.map(p => ({ ...p, categoria: c })));
+      await saveMany('prodotti', prima.map(p => ({ ...p, categoria: c, catAuto: null })));
       CAT.sel = null; closeModal(); render();
-      setTimeout(() => toast(`${c || SENZA_CAT}: ${prima.length === 1 ? '1 prodotto' : prima.length + ' prodotti'}`, { action: { label: 'Annulla', run: async () => { await saveMany('prodotti', prima.map(p => ({ ...(S.prodotti.get(p.id) || p), categoria: p.categoria || '' }))); render(); } } }), 120);
+      setTimeout(() => toast(`${c || SENZA_CAT}: ${prima.length === 1 ? '1 prodotto' : prima.length + ' prodotti'}`, { action: { label: 'Annulla', run: async () => { await saveMany('prodotti', prima.map(p => ({ ...(S.prodotti.get(p.id) || p), categoria: p.categoria || '', catAuto: p.catAuto ?? null }))); render(); } } }), 120);
     };
   });
 }
@@ -3838,7 +3942,7 @@ function colonneSVG({ mesi, punti }) {
 }
 const nomePunto = (p, mesi) => mesi ? nomeMese(p.k) : nomeGiorno(p.k);
 routes.categorie = () => {
-  const d = venditeCategorie(VC.periodo), senza = [...S.prodotti.values()].filter(p => !catDi(p)).length;
+  const d = venditeCategorie(VC.periodo), nCtrl = daControllare().length;
   const and = puntiAndamento(VC.periodo, VC.serie), totA = r2(and.punti.reduce((t, p) => t + p.val, 0));
   const conV = and.punti.filter(p => p.val > 0), media = conV.length ? r2(totA / conV.length) : 0;
   const migliore = conV.reduce((m, p) => !m || p.val > m.val ? p : m, null);
@@ -3848,7 +3952,7 @@ routes.categorie = () => {
       <div class="faint small" id="vcInfo">${VC.serie === 'cassa' ? 'Incassi dalle chiusure di cassa' : 'Vendite scansionate nell\'app'}, ${and.mesi ? 'mese per mese' : 'giorno per giorno'}. Tocca una colonna.</div>
       ${colonneSVG(and)}
       <dl class="kv"><dt>Totale</dt><dd>${fmtEuro(totA)}</dd><dt>Media ${and.mesi ? 'al mese' : 'al giorno'}</dt><dd>${conV.length ? fmtEuro(media) : '–'}</dd>${migliore ? `<dt>${and.mesi ? 'Mese migliore' : 'Giorno migliore'}</dt><dd>${esc(nomePunto(migliore, and.mesi))}: ${fmtEuro(migliore.val)}</dd>` : ''}</dl></div>`;
-  if (senza) html += `<div class="notice"><span class="spacer"><b>${senza}</b> ${senza === 1 ? 'prodotto è' : 'prodotti sono'} senza categoria.</span><button class="btn small" type="button" data-act="cat-proponi">Proponi dal nome</button></div>`;
+  if (nCtrl) html += avvisoCtrl(nCtrl);
   html += `<div class="section-title"><h2>Per categoria</h2><span class="count">${fmtEuro(d.totale)}</span></div>`;
   html += d.lista.length ? barreHTML(d.lista.map(e => ({
     nome: e.nome, valore: e.imp, href: '#categoria/' + encodeURIComponent(e.nome),
@@ -4285,7 +4389,7 @@ routes.impostazioni = () => {
     }
   };
 };
-async function faiBackup() {
+async function faiBackup(prima = '') {
   const data = { app: 'spesasfusa-magazzino', versione: 2, esportato: new Date().toISOString(), impostazioni: S.meta.settings || {} };
   for (const s of DATI) data[s] = [...S[s].values()];
   // Chrome su Android condivide solo alcuni tipi di file: il testo sì, il .json no.
@@ -4299,9 +4403,9 @@ async function faiBackup() {
     try {
       await navigator.share({ files: [file], title: 'Backup magazzino' });
       await setMeta('lastBackup', todayISO());
-      toast('Backup inviato. Controlla che sia finito su Drive, nell\'account del negozio.'); render(); return;
+      render(); toast(prima + 'Backup inviato. Controlla che sia finito su Drive, nell\'account del negozio.'); return;
     } catch (e) {
-      if (e && e.name === 'AbortError') { toast('Backup annullato: non è stato salvato', { err: true }); return; }
+      if (e && e.name === 'AbortError') { toast(prima + 'Il backup invece è stato annullato: il file non è andato su Drive.', { err: true }); return; }
     }
   }
   scaricaFile(testo, nome);
@@ -4415,7 +4519,6 @@ A['cru-periodo'] = el => { CRU = VC.periodo = el.dataset.f; render(); };
 A['cassa-nuova'] = el => cassaModal(null, el.dataset.m);
 A['vc-periodo'] = el => { VC.periodo = CRU = el.dataset.f; render(); };
 A['vc-serie'] = el => { VC.serie = el.dataset.s; render(); };
-A['cat-proponi'] = () => proponiCategorie();
 A['cat-vedi'] = el => { CAT = { ...CAT, q: '', forn: '', cat: el.dataset.c, senzaCodice: false, sfuso: false, limite: 60, sel: null }; location.hash = '#catalogo'; };
 A['cat-categoria'] = () => { const ids = [...(CAT.sel || [])].filter(id => S.prodotti.has(id)); if (!ids.length) { toast('Scegli prima i prodotti', { err: true }); return; } categoriaModal(ids); };
 A['cassa-mod'] = el => cassaModal(el.dataset.d);
@@ -4780,6 +4883,8 @@ A['ord-chiudi'] = async el => {
   await save('ordini', { ...o, stato: 'chiuso', chiuso: todayISO() }); toast('Ordine chiuso'); render();
 };
 /* catalogo */
+A['cr-filtro'] = el => { CR.filtro = el.dataset.f; CR.limite = 40; render(); };
+A['cr-altri'] = () => { CR.limite += 60; $('#crList').innerHTML = crRigheHTML(); };
 A['cat-altri'] = () => { CAT.limite += 100; $('#catList').innerHTML = catListHTML(); };
 A['nuovo-prodotto'] = () => nuovoProdottoModal({ fornitoreId: CAT.forn, onDone: p => { location.hash = '#prodotto/' + encodeURIComponent(p.id); } });
 let PSTATO = null;
@@ -5047,8 +5152,9 @@ A['ch-chiudi'] = async () => {
   const d = datiChiusura();
   if (CH.incasso.trim() && d.inc == null) { toast('L\'incasso non è un numero valido', { err: true }); return; }
   if (d.inc == null && !(await confirmBox('Non hai scritto l\'incasso della cassa. Faccio solo il backup?', { ok: 'Solo backup' }))) return;
-  if (d.inc != null) await save('chiusure', { id: 'c' + d.oggi, data: d.oggi, incasso: d.inc, frutta: d.fr, scansionato: d.scansionato, differenza: d.diff, creato: Date.now() });
-  await faiBackup();
+  if (CH.frutta.trim() && d.fr == null) { toast('La frutta e verdura non è un numero valido', { err: true }); return; }
+  if (d.inc != null) { await salvaChiusura(d); render(); }
+  await faiBackup(d.inc != null ? 'Incasso salvato. ' : '');
 };
 
 document.addEventListener('click', async e => {
@@ -5080,7 +5186,6 @@ async function init() {
     const aggiorna = n => { if (n && ['categorie', 'categoria', 'catalogo', 'cruscotto', 'fornitore', 'frutta', 'etichette'].includes(current.name)) render(); };
     categorieDalCatalogo().then(aggiorna).catch(e => console.error(e))
       .then(() => nomiMaiuscoli()).then(aggiorna).catch(e => console.error(e))
-      .then(() => categorieMancanti()).then(aggiorna).catch(e => console.error(e))
       .then(() => iveMancanti()).then(aggiorna).catch(e => console.error(e))
       .finally(() => controlloScorte().catch(e => console.error(e)));
   }, 1200);
