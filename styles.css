@@ -485,3 +485,4 @@ svg.grafico{width:100%;height:auto;display:block;touch-action:manipulation}
 .cr-chips .chip{white-space:normal;text-align:left;line-height:1.2;padding:6px 12px}
 .cr-altra{width:auto;min-height:38px;border-radius:20px;padding:0 10px;font-size:.86rem;max-width:100%}
 #npCatProp,#pCatProp{margin:6px 0}
+.item .segni{display:flex;flex-wrap:wrap;gap:4px 6px;margin-top:2px}

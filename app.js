@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.29.0';
+const VERSIONE = '1.29.1';
 
 /* =========================================================
    Utilità
@@ -2067,10 +2067,14 @@ function catListHTML() {
   return `${testa}<div class="list">${res.items.map(p => {
     const g = giacenza(p.id), s = prima.get(p.id);
     const pv = prezzoVendita(p);
+    // i segni (sfuso, codice, IVA…) stanno sotto il nome: accanto, sul telefono, schiacciavano il nome in colonna (1.29.1)
+    const segni = [p.sfuso ? '<span class="tag sfuso">sfuso</span>' : '', (p.codici || []).length ? '<span class="tag ok">codice</span>' : '',
+      haIva(p) && ivaDiversa(p.iva, IF.get(p.fornitoreId)) ? `<span class="tag red" title="IVA diversa da quella del fornitore">IVA ${fmtNum(+p.iva)}%</span>` : '',
+      pv == null ? '<span class="tag warn">senza prezzo</span>' : ''].join('');
     const corpo = `<div class="main"><div class="name">${esc(p.nome)}</div>
-      <div class="sub">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${g ? ' · in negozio ' + fq(p, g) : ''}${s ? ' · scade ' + fmtDate(s) : ''}</div></div>
-      ${p.sfuso ? '<span class="tag sfuso">sfuso</span>' : ''}${(p.codici || []).length ? '<span class="tag ok">codice</span>' : ''}${haIva(p) && ivaDiversa(p.iva, IF.get(p.fornitoreId)) ? `<span class="tag red" title="IVA diversa da quella del fornitore">IVA ${fmtNum(+p.iva)}%</span>` : ''}
-      ${pv == null ? '<span class="tag warn">senza prezzo</span>' : `<span class="prezzo cat-prezzo">${prezzoBreve(p)}${p.prezzoManuale != null ? '<small>a mano</small>' : ''}</span>`}`;
+      <div class="sub">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${g ? ' · in negozio ' + fq(p, g) : ''}${s ? ' · scade ' + fmtDate(s) : ''}</div>
+      ${segni ? `<div class="segni">${segni}</div>` : ''}</div>
+      ${pv == null ? '' : `<span class="prezzo cat-prezzo">${prezzoBreve(p)}${p.prezzoManuale != null ? '<small>a mano</small>' : ''}</span>`}`;
     return sel ? `<label class="item sel-riga"><input type="checkbox" data-sel="${esc(p.id)}" ${sel.has(p.id) ? 'checked' : ''}>${corpo}</label>`
       : `<a class="item" href="#prodotto/${encodeURIComponent(p.id)}">${corpo}<span class="chev">›</span></a>`;
   }).join('')}</div>${res.total > res.items.length ? `<button class="btn block" type="button" data-act="cat-altri">Mostra altri (${res.total - res.items.length})</button>` : ''}`;
