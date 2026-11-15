@@ -25,7 +25,7 @@
 *{box-sizing:border-box}
 html,body{margin:0}
 body{min-height:100vh}
-html{scroll-padding-top:72px;scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
+html{scroll-padding-top:104px;scroll-padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
 body{
   background:var(--bg);color:var(--ink);
   font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
@@ -39,7 +39,7 @@ a{color:inherit}
 /* ---------- barra in alto ---------- */
 .topbar{
   position:sticky;top:0;z-index:20;
-  display:flex;align-items:center;gap:4px;
+  display:flex;align-items:center;gap:4px;flex-wrap:wrap;
   background:var(--accent);color:#fff;
   padding:calc(8px + env(safe-area-inset-top,0px)) 8px 8px 16px;
   min-height:56px;
@@ -486,3 +486,18 @@ svg.grafico{width:100%;height:auto;display:block;touch-action:manipulation}
 .cr-altra{width:auto;min-height:38px;border-radius:20px;padding:0 10px;font-size:.86rem;max-width:100%}
 #npCatProp,#pCatProp{margin:6px 0}
 .item .segni{display:flex;flex-wrap:wrap;gap:4px 6px;margin-top:2px}
+
+/* 1.30.0: il percorso sotto il titolo (Home › Catalogo › …) */
+.percorso{flex-basis:100%;display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:.84rem;line-height:1.2;
+  margin:2px -8px -4px -16px;padding:2px 8px 2px 10px;color:rgba(255,255,255,.8);min-width:0}
+.perc-scorre{flex:1;min-width:0;display:flex;align-items:center;gap:2px;overflow-x:auto;scrollbar-width:none}
+.perc-scorre::-webkit-scrollbar{display:none}
+.percorso a{color:#fff;text-decoration:none;padding:6px 6px;border-radius:8px;flex:none}
+.percorso a:active{background:rgba(255,255,255,.15)}
+.percorso .perc-casa{display:inline-flex;align-items:center;gap:5px;font-weight:650;background:rgba(255,255,255,.14)}
+.percorso b{font-weight:650;color:#fff;padding:6px 6px;flex:none}
+.percorso .perc-sep{opacity:.55;flex:none}
+.percorso .perc-piu{padding:0 4px;flex:none}
+.coda-riga{cursor:default}
+.coda-x{flex:none;width:40px;height:40px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:1.3rem;line-height:1;color:var(--red-dark);cursor:pointer}
+.eti-coda-card .count{margin-right:4px}

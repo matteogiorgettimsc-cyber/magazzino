@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.29.1';
+const VERSIONE = '1.30.0';
 
 /* =========================================================
    Utilità
@@ -730,6 +730,61 @@ function rigaConfezione(l, { arrivo = false, togli = false } = {}) {
    ========================================================= */
 let current = { name: 'home', arg: null, onScan: null, back: null };
 const routes = {};
+/* PERCORSO (dalla 1.30.0): «indietro», la freccia o il tasto del telefono, torna alla pagina da cui si è arrivati,
+   con i filtri e il punto dell'elenco dov'eri (prima la freccia andava sempre al Catalogo e apriva una pagina in più).
+   - ogni pagina aperta ha il suo numero (history.state.n): NAV.pila[n] ricorda indirizzo, nome e dove si era nell'elenco
+   - toccando una pagina che è già nel percorso (una scheda in basso, una voce del percorso) ci si torna, non se ne apre un'altra
+   - le schede in basso ripartono dalla Home (Home › Catalogo › …): indietro risale sempre verso la Home
+   - senza una pagina prima (app appena aperta) la freccia sale di un gruppo: prodotto › prodotti del fornitore › fornitore › fornitori
+   - la riga sotto il titolo mostra il percorso: si tocca per tornare a quel punto, «Home» porta alla pagina principale */
+let NAV = { n: 0, pila: [], coda: [], codaT: 0, sost: false, poi: null };
+try { const x = JSON.parse(sessionStorage.getItem('magNav') || 'null'); if (x && Array.isArray(x.pila)) { NAV.pila = x.pila; NAV.n = x.n || 0; } } catch (e) { }
+const salvaNav = () => { try { sessionStorage.setItem('magNav', JSON.stringify({ n: NAV.n, pila: NAV.pila })); } catch (e) { } };
+const quiHash = () => location.hash || '#home';
+const chiaveH = h => { try { return decodeURIComponent(h || '#home'); } catch (e) { return h; } };
+const primaDiQui = () => NAV.pila.slice(0, NAV.n).map(x => x ? chiaveH(x.h) : null);
+function passi(dopo, k) { NAV.coda = dopo; NAV.codaT = Date.now(); history.go(k - NAV.n); }
+/* andare a una pagina: se è già nel percorso si torna lì, altrimenti si apre */
+function vai(h, { tab = false } = {}) {
+  h = h || '#home';
+  if (chiaveH(h) === chiaveH(quiHash())) return;
+  const prima = primaDiQui(), k = prima.lastIndexOf(chiaveH(h));
+  if (k >= 0) { passi([], k); return; }
+  if ((!tab && h !== '#home') || current.name === 'home') { location.hash = h; return; }
+  const kh = prima.lastIndexOf('#home'), dopo = h === '#home' ? [] : [{ h }];
+  if (kh >= 0) passi(dopo, kh);
+  else if (NAV.n > 0) passi([{ h: '#home', sost: true }, ...dopo], 0);
+  else { NAV.sost = true; NAV.coda = dopo; NAV.codaT = Date.now(); location.replace('#home'); }
+}
+/* dopo aver eliminato una cosa: si torna su senza lasciarla nel percorso */
+function vaiSu(h) {
+  const k = primaDiQui().lastIndexOf(chiaveH(h));
+  if (k >= 0) passi([], k); else { NAV.sost = true; location.replace(h); }
+}
+/* indietro: alla pagina di prima; se non c'è, al gruppo più grande */
+function torna(poi) {
+  if (poi) NAV.poi = poi;
+  if (NAV.n > 0 && NAV.pila[NAV.n - 1]) { history.back(); return; }
+  const su = current.back;
+  if (!su || chiaveH(su) === chiaveH(quiHash())) { const f = NAV.poi; NAV.poi = null; if (f) f(); return; }
+  NAV.sost = true; location.replace(su);
+}
+const casaIcon = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></svg>';
+function disegnaPercorso() {
+  const el = $('#percorso'); if (!el) return;
+  if (current.name === 'home') { el.hidden = true; el.innerHTML = ''; return; }
+  let da = 0;
+  for (let i = NAV.n - 1; i >= 0; i--) if (NAV.pila[i] && chiaveH(NAV.pila[i].h) === '#home') { da = i + 1; break; }
+  let parti = NAV.pila.slice(da, NAV.n).filter(Boolean).map(x => `<a href="${esc(x.h)}">${esc(x.nome || '…')}</a>`);
+  if (parti.length > 3) parti = [parti[0], '<span class="perc-piu">…</span>', ...parti.slice(-2)];
+  const qui = NAV.pila[NAV.n];
+  el.innerHTML = `<a href="#home" class="perc-casa">${casaIcon}<span>Home</span></a><div class="perc-scorre">` + parti.map(x => `<span class="perc-sep" aria-hidden="true">›</span>${x}`).join('')
+    + (qui && qui.nome ? `<span class="perc-sep" aria-hidden="true">›</span><b>${esc(qui.nome)}</b>` : '') + '</div>';
+  el.hidden = false;
+  const sc = el.querySelector('.perc-scorre'); sc.scrollLeft = sc.scrollWidth;   // si vede la fine; «Home» resta sempre a sinistra
+}
+/* il nome di questa pagina nel percorso, quando cambia senza ridisegnarla (es. i filtri del Catalogo) */
+function nomeQui(nome) { const e = NAV.pila[NAV.n]; if (e && nome && e.nome !== nome) { e.nome = nome; salvaNav(); disegnaPercorso(); } }
 /* =========================================================
    SALVATAGGIO AUTOMATICO delle schede (prodotto, fornitore, impostazioni)
    - si salva all'uscita da un campo, poco dopo aver smesso di scrivere e lasciando la pagina
@@ -768,26 +823,47 @@ function autoSalva(b, leggi) {
   return ora;
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden && paginaSalva) paginaSalva(); });
-function route() {
+function route(forza) {
+  const qui = quiHash(), sn = history.state && typeof history.state.n === 'number' ? history.state.n : null;
+  if (forza !== true && sn != null && sn === NAV.n && NAV.pila[sn] && NAV.pila[sn].h === qui && !NAV.coda.length) return;   // già qui (arrivano sia popstate sia hashchange)
   salvaPagina();   // prima di cambiare pagina: quello che è stato scritto si salva
-  const h = decodeURIComponent((location.hash || '#home').slice(1));
+  const lascio = NAV.pila[NAV.n]; if (lascio && forza !== true) lascio.y = window.scrollY;
+  let ritorno = false;
+  if (sn != null && NAV.pila[sn] && NAV.pila[sn].h === qui) { NAV.n = sn; ritorno = true; }   // indietro (o avanti) su una pagina già vista
+  else {
+    const n = sn != null ? sn : NAV.sost ? NAV.n : NAV.pila.length ? NAV.n + 1 : 0;
+    NAV.pila.length = Math.min(NAV.pila.length, n); NAV.pila[n] = { h: qui, y: 0 }; NAV.n = n;
+    try { history.replaceState({ ...(history.state || {}), n }, ''); } catch (e) { }
+  }
+  NAV.sost = false;
+  if (NAV.coda.length) {   // un passo in più (es. una scheda in basso: prima si torna alla Home, poi si apre)
+    const p = Date.now() - NAV.codaT < 4000 ? NAV.coda.shift() : null;
+    if (!p) NAV.coda = [];
+    else if (p.h !== qui) { salvaNav(); if (p.sost) { NAV.sost = true; location.replace(p.h); } else location.hash = p.h; return; }
+  }
+  const h = decodeURIComponent(qui.slice(1));
   const i = h.indexOf('/');
   const name = i < 0 ? h : h.slice(0, i), arg = i < 0 ? null : h.slice(i + 1);
-  current = { name: routes[name] ? name : 'home', arg, onScan: null, back: null };
+  current = { name: routes[name] ? name : 'home', arg, onScan: null, back: null, ritorno };
   if (modal.open) closeModal();
   $('#toast').hidden = true;
-  render(true);
+  render(!ritorno, true);
+  if (ritorno) { const y = NAV.pila[NAV.n].y || 0; window.scrollTo(0, y); }
+  salvaNav();
+  if (NAV.poi) { const f = NAV.poi; NAV.poi = null; setTimeout(f, 0); }
 }
-function render(scrollTop = false) {
+function render(scrollTop = false, fresh = scrollTop) {
   salvaPagina();
-  current.fresh = !!scrollTop; SYNC.ridisegna = false;
+  current.fresh = !!fresh; SYNC.ridisegna = false;
   const r = routes[current.name](current.arg) || {};
   $('#viewTitle').textContent = r.title || 'Magazzino';
   document.title = (r.title ? r.title + ' – ' : '') + 'Magazzino';
   $('#view').innerHTML = r.html || '';
   current.onScan = r.onScan || null;
   current.back = r.back || null;
-  $('#backBtn').hidden = !r.back;
+  const e = NAV.pila[NAV.n]; if (e && e.h === quiHash()) { e.nome = r.nome || r.title || ''; salvaNav(); }
+  $('#backBtn').hidden = current.name === 'home' || !((NAV.n > 0 && NAV.pila[NAV.n - 1]) || r.back);
+  disegnaPercorso();
   document.documentElement.dataset.modo = current.name === 'banco' && BANCO.modo !== 'vendita' ? BANCO.modo : '';
   $$('.tabbar a').forEach(a => a.classList.toggle('on', a.dataset.tab === (r.tab || current.name)));
   if (r.mount) r.mount($('#view'));
@@ -801,6 +877,14 @@ function aggiornaBadge() {
   const b2 = $('#badgeOrd'); b2.hidden = !righe; b2.textContent = righe;
 }
 window.addEventListener('hashchange', route);
+window.addEventListener('popstate', route);
+/* i collegamenti dentro l'app passano da vai(): se la pagina è già nel percorso ci si torna */
+document.addEventListener('click', e => {
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest('a[href^="#"]'); if (!a || a.target || a.closest('[data-act]')) return;
+  e.preventDefault();
+  vai(a.getAttribute('href'), { tab: !!a.closest('.tabbar, .perc-casa') });
+});
 
 const scanIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3M7 9v6M10 9v6M13 9v6M16 9v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
 function scanbox(title, sub, cercaAct) {
@@ -932,6 +1016,7 @@ routes.home = () => {
   }
   const spm = sprechiPeriodo('mese').filter(perso);
   if (spm.length) html += `<a class="card tight" href="#sprechi" style="text-decoration:none"><div class="row"><div class="spacer"><b>Sprechi di questo mese</b><div class="faint small">${totaleQta(spm)} · ${fmtEuro(spm.reduce((t, r) => t + (valoreSpreco(r) || 0), 0))}</div></div><span class="chev">›</span></div></a>`;
+  { const n = nCoda(); if (n) html += `<a class="card tight" href="#etichette/coda" style="text-decoration:none"><div class="row"><div class="spacer"><b>Etichette da stampare</b><div class="faint small">${testoFogli(n)}${etiCoda().stampate ? ' · stampa da confermare' : ''}</div></div><span class="chev">›</span></div></a>`; }
   { const n = daControllare().length; if (n) html += `<a class="card tight" href="#controllacategorie" style="text-decoration:none"><div class="row"><div class="spacer"><b>Categorie da controllare</b><div class="faint small">${n} ${n === 1 ? 'prodotto' : 'prodotti'}: l'app propone, tu scegli</div></div><span class="chev">›</span></div></a>`; }
   html += `<div class="faint" style="text-align:center">Puoi anche scansionare un prodotto in qualsiasi momento per vedere cosa fare.</div>`;
   const warn = giorniBk == null || giorniBk >= 3;
@@ -2089,9 +2174,10 @@ function aggiornaSel(b, sel, uno, tanti) {
   if (d) { d.textContent = `Elimina ${n === 1 ? '1 ' + uno : n + ' ' + tanti}`; d.disabled = !n; }
 }
 const segCat = on => `<div class="segmented"><a href="#catalogo" class="${on === 'p' ? 'on' : ''}">Prodotti</a><a href="#fornitori" class="${on === 'f' ? 'on' : ''}">Fornitori</a></div>`;
+const nomeCatalogo = () => { const f = CAT.forn && fornitore(CAT.forn); return f ? 'Prodotti di ' + f.nome : CAT.cat ? 'Catalogo · ' + CAT.cat : 'Catalogo'; };
 routes.catalogo = arg => {
   if (current.fresh) CAT.sel = null;     // la scelta per eliminare si spegne uscendo dalla pagina
-  if (current.fresh && arg) { CAT.forn = arg; CAT.q = ''; CAT.limite = 60; }
+  if (current.fresh && arg && !current.ritorno) { CAT.forn = arg; CAT.q = ''; CAT.limite = 60; }
   const forn = [...S.fornitori.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
   const nFV = prodottiFV().length;
   const html = `${segCat('p')}
@@ -2102,14 +2188,14 @@ routes.catalogo = arg => {
       <label class="check"><input type="checkbox" id="catSF" ${CAT.sfuso ? 'checked' : ''}> Sfuso</label></div>
     <select id="catC"><option value="">Tutte le categorie</option>${[...categorieUsate().filter(c => [...S.prodotti.values()].some(p => catDi(p) === c)), SENZA_CAT].map(c => `<option value="${esc(c)}" ${CAT.cat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
     ${!CAT.sel && daControllare().length ? avvisoCtrl(daControllare().length) : ''}
-    ${!CAT.sel && S.prodotti.size ? '<a class="btn block" href="#etichette">Etichette con codice a barre</a>' : ''}
+    ${!CAT.sel && S.prodotti.size ? `<a class="btn block" href="#etichette">Etichette con codice a barre${nCoda() ? ` · ${nCoda()} da stampare` : ''}</a>` : ''}
     ${!CAT.sel && S.prodotti.size ? '<button class="btn block" type="button" data-act="listini-excel">Listini in Excel: un foglio per fornitore</button>' : ''}
     <div id="catList" class="stack">${catListHTML()}</div>
     ${CAT.sel ? barraSel(CAT.sel.size, 'prodotto', 'prodotti', 'cat-elimina', 'cat-sel-fine') : '<button class="btn block" type="button" data-act="nuovo-prodotto">+ Nuovo prodotto</button>'}`;
   return {
-    title: 'Catalogo', html, back: '#home', tab: 'catalogo',
+    title: 'Catalogo', html, back: arg && fornitore(arg) ? '#fornitore/' + encodeURIComponent(arg) : '#home', tab: 'catalogo', nome: nomeCatalogo(),
     mount: b => {
-      const upd = () => { CAT.limite = 60; b.querySelector('#catList').innerHTML = catListHTML(); };
+      const upd = () => { CAT.limite = 60; b.querySelector('#catList').innerHTML = catListHTML(); nomeQui(nomeCatalogo()); };
       b.querySelector('#catList').addEventListener('change', e => {
         const c = e.target.closest('[data-sel]'); if (!c || !CAT.sel) return;
         if (c.checked) CAT.sel.add(c.dataset.sel); else CAT.sel.delete(c.dataset.sel);
@@ -2290,7 +2376,7 @@ routes.prodotto = id => {
     <div class="salva-riga"><span class="salva-stato" aria-live="polite">Ogni modifica si salva da sola.</span></div>
     <button class="btn danger block" type="button" data-act="p-elimina" data-id="${esc(p.id)}">Elimina prodotto</button>`;
   return {
-    title: 'Scheda prodotto', html, back: '#catalogo', tab: 'catalogo',
+    title: 'Scheda prodotto', html, back: p.fornitoreId && fornitore(p.fornitoreId) ? '#catalogo/' + encodeURIComponent(p.fornitoreId) : '#catalogo', tab: 'catalogo', nome: p.nome,
     mount: b => {
       // com'era il prodotto quando si è aperta la scheda (resta uguale anche se la pagina si ridisegna)
       if (!PSTATO || PSTATO.id !== p.id || current.fresh) PSTATO = { id: p.id, eraSfuso: isSfuso(p), chiesto: false };
@@ -2425,7 +2511,8 @@ function cardEtiFornitore(f) {
   const ps = etichetteDi(f.id), sf = ps.filter(p => p.sfuso).length, pz = ps.length - sf;
   return `<div class="card"><h3>Etichette</h3>
     ${ps.length ? `<div class="faint small">${[sf ? `${sf} contenitor${sf === 1 ? 'e' : 'i'} dello sfuso` : '', pz ? `${pz} prodott${pz === 1 ? 'o' : 'i'} senza codice del produttore` : ''].filter(Boolean).join(' · ')}</div>
-      <a class="btn primary block" href="#etichette/${encodeURIComponent(f.id)}~f">Stampa le etichette di ${esc(f.nome)}</a>`
+      ${ps.some(p => inCodaEti(p.id)) ? `<div class="faint small">${ps.filter(p => inCodaEti(p.id)).length} già nei <a href="#etichette/coda">fogli da stampare</a></div>` : ''}
+      <a class="btn primary block" href="#etichette/${encodeURIComponent(f.id)}~f">Prepara le etichette di ${esc(f.nome)}</a>`
       : '<div class="faint small">Nessuna etichetta da stampare: servono per lo sfuso e per i prodotti senza codice a barre.</div>'}</div>`;
 }
 function cardIvaFornitore(f) {
@@ -2459,7 +2546,7 @@ routes.fornitore = id => {
     <a class="btn block" href="#catalogo/${encodeURIComponent(f.id)}">Vedi i ${n} prodotti</a>
     ${n ? `<button class="btn block" type="button" data-act="listino-excel" data-id="${esc(f.id)}">Scarica il listino in Excel</button>` : ''}
     <button class="btn danger block" type="button" data-act="f-elimina" data-id="${esc(f.id)}">Elimina fornitore</button>`;
-  return { title: 'Fornitore', html, back: '#fornitori', tab: 'catalogo', mount: b => autoSalva(b, () => leggiFornitore(f.id, b)) };
+  return { title: 'Fornitore', html, back: '#fornitori', tab: 'catalogo', nome: f.nome, mount: b => autoSalva(b, () => leggiFornitore(f.id, b)) };
 };
 
 /* =========================================================
@@ -2535,8 +2622,12 @@ const etiScelte = () => prodottiEtichette().filter(p => !ETI.tolte.has(p.id));
 const copieDi = id => ETI.copie.get(id) || 1;
 const totEtichette = () => etiScelte().reduce((t, p) => t + copieDi(p.id), 0);
 const testoScelte = n => n === 1 ? '1 etichetta' : `${n} etichette`;
-const rigaEti = (p, conForn) => `<div class="item eti-riga${ETI.tolte.has(p.id) ? ' tolta' : ''}"><label class="eti-sel"><input type="checkbox" data-eti="${esc(p.id)}" ${ETI.tolte.has(p.id) ? '' : 'checked'}><div class="eti-anteprima">${htmlEtichetta(p, true)}</div>${conForn ? `<div class="faint small eti-di">${esc(nomeFornEti(fornEti(p)))}</div>` : ''}</label>
+const rigaEti = (p, conForn) => `<div class="item eti-riga${ETI.tolte.has(p.id) ? ' tolta' : ''}"><label class="eti-sel"><input type="checkbox" data-eti="${esc(p.id)}" ${ETI.tolte.has(p.id) ? '' : 'checked'}><div class="eti-anteprima">${htmlEtichetta(p, true)}</div>${conForn || inCodaEti(p.id) ? `<div class="faint small eti-di">${[conForn ? esc(nomeFornEti(fornEti(p))) : '', inCodaEti(p.id) ? `<span class="tag ok">nei fogli ×${inCodaEti(p.id)}</span>` : ''].filter(Boolean).join('<br>')}</div>` : ''}</label>
   <div class="eti-copie" role="group" aria-label="Quante etichette di ${esc(p.nome)}"><button type="button" data-act="eti-copie" data-id="${esc(p.id)}" data-d="1" aria-label="Una in più">+</button><b>×${copieDi(p.id)}</b><button type="button" data-act="eti-copie" data-id="${esc(p.id)}" data-d="-1" aria-label="Una in meno" ${copieDi(p.id) <= 1 ? 'disabled' : ''}>−</button></div></div>`;
+function cardCoda() {
+  const n = nCoda(), c = etiCoda();
+  return `<a class="card tight eti-coda-card" href="#etichette/coda" style="text-decoration:none"><div class="row"><div class="spacer"><b>Fogli da stampare</b><div class="faint small">${n ? `${testoFogli(n)}: tocca per vederle e stamparle tutte insieme` : 'Vuoti: prepara le etichette di un fornitore e mettile qui'}${c.stampate ? ' · <b>stampa da confermare</b>' : ''}</div></div>${n ? `<span class="count">${n}</span>` : ''}<span class="chev">›</span></div></a>`;
+}
 function sceltaFornitoreEti() {
   const per = new Map();
   for (const p of tutteEtichette()) { const k = fornEti(p); per.set(k, (per.get(k) || 0) + 1); }
@@ -2557,9 +2648,10 @@ function testoInsieme(per) {
   return `Insieme: ${ETI.scelti.size} fornitor${ETI.scelti.size === 1 ? 'e' : 'i'} · ${n} etichett${n === 1 ? 'a' : 'e'}`;
 }
 routes.etichette = arg => {
+  if (arg === 'coda') return { title: 'Fogli da stampare', html: paginaCoda(), back: '#etichette', tab: 'catalogo' };
   const [fa, da] = String(arg || '').split('~');   // «~f»: aperta dalla scheda del fornitore, «indietro» torna lì
   ETI.forn = fa || null;
-  if (!ETI.forn) return { title: 'Etichette', html: sceltaFornitoreEti(), back: '#catalogo', tab: 'catalogo', mount: b => {
+  if (!ETI.forn) return { title: 'Etichette', html: cardCoda() + sceltaFornitoreEti(), back: '#catalogo', tab: 'catalogo', mount: b => {
     const l = b.querySelector('#etiForn'); if (!l) return;
     l.addEventListener('change', e => {
       const c = e.target.closest('[data-eti-f]'); if (!c) return;
@@ -2574,26 +2666,30 @@ routes.etichette = arg => {
   const testa = `<div class="row"><b class="spacer">${esc(chi)}</b><a class="btn small" href="#etichette">Cambia fornitore</a></div>`;
   const n = totEtichette();
   const nuovo = '<button class="btn block" type="button" data-act="eti-nuovo">+ Crea il codice per un prodotto che non ce l\'ha</button>';
-  const html = testa + (lista.length ? `<div class="notice"><span>Per fogli A4 di etichette adesive <b>70 × 37 mm</b> (24 per foglio). Qui sotto vedi come vengono: togli la spunta a quelle che non ti servono, e con + e − scegli quante.</span></div>
+  for (const p of lista) if (!ETI.copie.has(p.id) && inCodaEti(p.id)) ETI.copie.set(p.id, inCodaEti(p.id));   // quelle già messe da parte partono dal loro numero
+  const html = testa + (lista.length ? `<div class="notice"><span>Per fogli A4 di etichette adesive <b>70 × 37 mm</b> (24 per foglio). Togli la spunta a quelle che non ti servono, con + e − scegli quante, poi <b>mettile nei fogli da stampare</b>: restano salvate e le stampi tutte insieme.</span></div>
     <div class="row"><button class="btn small" type="button" data-act="eti-tutte">Tutte</button><button class="btn small" type="button" data-act="eti-nessuna">Nessuna</button><span class="spacer"></span><span class="faint" id="etiN">${testoScelte(n)}</span></div>
     <div class="stack" id="etiList">
     ${sfusi.length ? `<div class="section-title"><h2>Contenitori dello sfuso</h2><span class="count">${sfusi.length}</span></div><div class="list">${sfusi.map(p => rigaEti(p, piu || ETI.forn === 'tutti')).join('')}</div>` : ''}
     ${pezzi.length ? `<div class="section-title"><h2>Prodotti senza codice del produttore</h2><span class="count">${pezzi.length}</span></div><div class="faint small">Il codice l'ha creato l'app: un'etichetta su ogni pezzo, così al Banco si scansiona.</div><div class="list">${pezzi.map(p => rigaEti(p, piu || ETI.forn === 'tutti')).join('')}</div>` : ''}
     </div>
     ${nuovo}
-    <button class="btn primary block" type="button" data-act="eti-stampa" id="etiStampa"${n ? '' : ' disabled'}>Stampa ${testoScelte(n)}</button>`
+    <button class="btn primary block" type="button" data-act="eti-in-coda" id="etiCoda"${n ? '' : ' disabled'}>Metti nei fogli da stampare: ${testoScelte(n)}</button>
+    <button class="btn block" type="button" data-act="eti-stampa" id="etiStampa"${n ? '' : ' disabled'}>Stampa subito ${testoScelte(n)}</button>
+    ${nCoda() ? `<a class="btn block" href="#etichette/coda">Fogli da stampare: ${testoScelte(nCoda())}</a>` : ''}`
     : `<div class="empty">Nessuna etichetta per questo fornitore.<br>Servono per lo sfuso (contenitori) e per i prodotti che non hanno il codice a barre.</div>${nuovo}`);
   return {
-    title: 'Etichette', html, back: da === 'f' && fornitore(ETI.forn) ? '#fornitore/' + encodeURIComponent(ETI.forn) : '#etichette', tab: 'catalogo',
+    title: 'Etichette', html, back: da === 'f' && fornitore(ETI.forn) ? '#fornitore/' + encodeURIComponent(ETI.forn) : '#etichette', tab: 'catalogo', nome: 'Etichette · ' + chi,
     mount: b => {
       const l = b.querySelector('#etiList'); if (!l) return;
       l.addEventListener('change', e => {
         const c = e.target.closest('[data-eti]'); if (!c) return;
         if (c.checked) ETI.tolte.delete(c.dataset.eti); else ETI.tolte.add(c.dataset.eti);
         c.closest('.eti-riga').classList.toggle('tolta', !c.checked);
-        const n = totEtichette(), bt = b.querySelector('#etiStampa');
+        const n = totEtichette(), bt = b.querySelector('#etiStampa'), bc = b.querySelector('#etiCoda');
         b.querySelector('#etiN').textContent = testoScelte(n);
-        bt.textContent = 'Stampa ' + testoScelte(n); bt.disabled = !n;
+        bt.textContent = 'Stampa subito ' + testoScelte(n); bt.disabled = !n;
+        bc.textContent = 'Metti nei fogli da stampare: ' + testoScelte(n); bc.disabled = !n;
       });
     }
   };
@@ -2610,6 +2706,47 @@ window.addEventListener('afterprint', () => { const st = document.getElementById
 /* finestra di stampa: anteprima e da quale etichetta del foglio partire.
    L'app ricorda dove si è fermata, così un foglio iniziato si rimette nella stampante e si continua. */
 const ETI_FOGLIO = 24, MAX_COPIE = 240;   // al massimo 10 fogli alla volta
+/* FOGLI DA STAMPARE (dalla 1.30.0): le etichette preparate (per fornitore, dalla scheda, da un arrivo) restano salvate,
+   anche sull'altro telefono, finché non si stampano tutte insieme da «Fogli da stampare» (#etichette/coda).
+   S.meta.etiCoda = { righe: [{ id, n }], stampate: { id: n } (l'ultima stampa, da confermare), quando } */
+function etiCoda() {
+  const c = S.meta.etiCoda || {};
+  return { righe: Array.isArray(c.righe) ? c.righe.filter(r => r && S.prodotti.has(r.id) && r.n > 0) : [], stampate: c.stampate || null, quando: c.quando || null };
+}
+const nCoda = () => etiCoda().righe.reduce((t, r) => t + r.n, 0);
+const inCodaEti = id => (etiCoda().righe.find(r => r.id === id) || {}).n || 0;
+/* { id: quante }: si scrive quante ne servono (non si sommano: rifare un fornitore non le raddoppia); 0 = via */
+async function mettiInCoda(copie) {
+  const c = etiCoda(), m = new Map(c.righe.map(r => [r.id, r.n]));
+  for (const [id, n] of Object.entries(copie)) { const v = Math.max(0, Math.min(MAX_COPIE, Math.round(+n) || 0)); if (v) m.set(id, v); else m.delete(id); }
+  await setMeta('etiCoda', { ...c, righe: [...m].map(([id, n]) => ({ id, n })) });
+}
+const righeCoda = () => etiCoda().righe.map(r => ({ ...r, p: prodotto(r.id), f: nomeFornEti(fornEti(prodotto(r.id))) }))
+  .sort((a, b) => (a.f === 'Senza fornitore') - (b.f === 'Senza fornitore') || a.f.localeCompare(b.f, 'it') || (!!b.p.sfuso - !!a.p.sfuso) || a.p.nome.localeCompare(b.p.nome, 'it'));
+const testoFogli = n => { const k = Math.ceil(n / ETI_FOGLIO); return `${testoScelte(n)} · ${k === 1 ? '1 foglio' : k + ' fogli'}`; };
+function toastCoda(n) { toast(`${testoScelte(n)} nei fogli da stampare`, { action: { label: 'Vedi', run: () => vai('#etichette/coda') } }); }
+function paginaCoda() {
+  const c = etiCoda(), righe = righeCoda(), n = righe.reduce((t, r) => t + r.n, 0);
+  let html = '';
+  if (c.stampate) {
+    const k = Object.values(c.stampate).reduce((t, v) => t + v, 0);
+    html += `<div class="notice"><div class="stack" style="gap:8px;flex:1"><span>Stampate ${c.quando ? 'alle ' + fmtOra(c.quando) : ''}: <b>${testoScelte(k)}</b>. Sono venute bene?</span>
+      <div class="row wrap"><button class="btn small primary" type="button" data-act="coda-ok">Sì, toglile dai fogli</button><button class="btn small" type="button" data-act="coda-tieni">No, le tengo</button></div></div></div>`;
+  }
+  if (!righe.length) return html + `<div class="empty">Nessuna etichetta da stampare.<br>Scegli un fornitore, spunta le etichette che servono e tocca <b>«Metti nei fogli da stampare»</b>: restano qui, anche chiudendo l'app, finché non le stampi tutte insieme.</div>
+    <a class="btn primary block" href="#etichette">Scegli il fornitore</a>`;
+  const per = new Map(); for (const r of righe) { if (!per.has(r.f)) per.set(r.f, []); per.get(r.f).push(r); }
+  const pos = Math.min(ETI_FOGLIO - 1, Math.max(0, parseInt(S.meta.etiPosizione, 10) || 0));
+  html += `<div class="card tight"><div class="row"><div class="spacer"><b id="codaN">${testoFogli(n)}</b><div class="faint small">${per.size === 1 ? '1 fornitore' : per.size + ' fornitori'}${pos ? ` · il foglio iniziato riparte dalla n. ${pos + 1}` : ''}</div></div></div></div>
+    <div class="stack" id="codaList">${[...per].map(([f, rr]) => `<div class="section-title"><h2>${esc(f)}</h2><span class="count">${rr.reduce((t, r) => t + r.n, 0)}</span></div>
+      <div class="list">${rr.map(r => `<div class="item eti-riga coda-riga" data-coda="${esc(r.id)}"><div class="eti-sel"><div class="eti-anteprima">${htmlEtichetta(r.p, true)}</div></div>
+        <div class="eti-copie" role="group" aria-label="Quante etichette di ${esc(r.p.nome)}"><button type="button" data-act="coda-copie" data-id="${esc(r.id)}" data-d="1" aria-label="Una in più">+</button><b>×${r.n}</b><button type="button" data-act="coda-copie" data-id="${esc(r.id)}" data-d="-1" aria-label="Una in meno" ${r.n <= 1 ? 'disabled' : ''}>−</button></div>
+        <button type="button" class="coda-x" data-act="coda-togli" data-id="${esc(r.id)}" aria-label="Togli ${esc(r.p.nome)} dai fogli">×</button></div>`).join('')}</div>`).join('')}</div>
+    <button class="btn primary block" type="button" data-act="coda-stampa">Stampa tutte: ${testoScelte(n)}</button>
+    <a class="btn block" href="#etichette">+ Aggiungi etichette di un altro fornitore</a>
+    <button class="btn danger block" type="button" data-act="coda-svuota">Svuota i fogli da stampare</button>`;
+  return html;
+}
 /* riempire il foglio (dalla 1.28.0): le caselle che restano vuote sull'ultimo foglio si possono riempire con etichette di
    altri fornitori. Prima quelle «da stampare»: prodotti arrivati negli ultimi 30 giorni dopo l'ultima stampa della loro etichetta. */
 function etichetteDaProporre(escludi) {
@@ -2619,7 +2756,7 @@ function etichetteDaProporre(escludi) {
   return tutteEtichette().filter(p => !escludi.has(p.id)).map(p => ({ p, da: da(p), f: nomeFornEti(fornEti(p)) }))
     .sort((a, b) => (b.da - a.da) || a.f.localeCompare(b.f, 'it') || a.p.nome.localeCompare(b.p.nome, 'it'));
 }
-function stampaModal(ids, { titolo = null, copie = null, start: inizio = null } = {}) {
+function stampaModal(ids, { titolo = null, copie = null, start: inizio = null, daCoda = false } = {}) {
   ids = ids.filter(id => S.prodotti.has(id)); if (!ids.length) return;
   const uno = ids.length === 1, p1 = prodotto(ids[0]), quante = id => Math.max(1, Math.min(MAX_COPIE, Math.round((copie && copie[id]) || 1)));
   let q = quante(ids[0]), n;
@@ -2667,6 +2804,7 @@ function stampaModal(ids, { titolo = null, copie = null, start: inizio = null } 
         <div class="list" id="spLista"></div>
         <button class="btn block" type="button" data-x="aggiungi" disabled>Aggiungi</button></div></div>
     <button class="btn primary block" type="button" data-x="stampa">Stampa</button>
+    ${daCoda ? '' : '<button class="btn block" type="button" data-x="coda">Metti nei fogli da stampare (stampo dopo)</button>'}
     <div class="faint small" style="text-align:center">Si apre la stampa del telefono: scegli la stampante oppure «Salva come PDF». A4, margini «Nessuno», scala 100%.</div>`, b => {
     b.querySelector('#spGrid').addEventListener('click', e => { const c = e.target.closest('[data-pos]'); if (!c) return; start = +c.dataset.pos; draw(b); });
     b.querySelector('[data-x=nuovo]').onclick = () => { start = 0; draw(b); };
@@ -2680,19 +2818,21 @@ function stampaModal(ids, { titolo = null, copie = null, start: inizio = null } 
       const g = b.querySelector('[data-x=giac]'), u = b.querySelector('[data-x=uno]');
       if (g) g.onclick = () => metti(giac); if (u) u.onclick = () => metti(1);
     }
-    b.querySelector('[data-x=stampa]').onclick = () => stampaEtichette(lista(), start);
+    b.querySelector('[data-x=stampa]').onclick = () => stampaEtichette(lista(), start, { daCoda });
+    const bc = b.querySelector('[data-x=coda]');
+    if (bc) bc.onclick = async () => { const c = copieOra(); await mettiInCoda(c); closeModal(); if (['etichette', 'prodotto', 'fornitore'].includes(current.name)) render(); toastCoda(Object.values(c).reduce((t, v) => t + v, 0)); };
     b.querySelector('[data-x=riempi]').onclick = () => { const a = b.querySelector('#spAltre'); a.hidden = !a.hidden; if (!a.hidden) riempi(b); };
     b.querySelector('#spCerca').addEventListener('input', () => riempi(b));
     b.querySelector('#spLista').addEventListener('change', () => contaAgg(b));
     b.querySelector('[data-x=aggiungi]').onclick = () => {
       const agg = $$('#spAltre [data-agg]:checked', b).map(x => x.dataset.agg); if (!agg.length) return;
-      stampaModal([...ids, ...agg], { titolo, copie: { ...copieOra(), ...Object.fromEntries(agg.map(id => [id, 1])) }, start });
+      stampaModal([...ids, ...agg], { titolo, copie: { ...copieOra(), ...Object.fromEntries(agg.map(id => [id, 1])) }, start, daCoda });
     };
     draw(b);
   });
 }
 /* tutto senza attese: alcuni telefoni aprono la stampa solo se parte subito dal tocco */
-function stampaEtichette(ids, start = 0) {
+function stampaEtichette(ids, start = 0, { daCoda = false } = {}) {
   let n = S.meta.ultimoCodiceInterno || 0;
   const nuovi = [], pronti = new Map();
   for (const id of new Set(ids)) {
@@ -2707,6 +2847,11 @@ function stampaEtichette(ids, start = 0) {
   if (nuovi.length) setMeta('ultimoCodiceInterno', n);
   saveMany('prodotti', [...pronti.values()].map(p => ({ ...p, etiStampata: todayISO() })));   // nuovi codici e data dell'ultima stampa
   setMeta('etiPosizione', (start + lista.length) % ETI_FOGLIO);
+  if (daCoda) {   // si chiede dopo se sono venute bene: solo allora escono dai fogli da stampare
+    const c = etiCoda(), quante = new Map(c.righe.map(r => [r.id, r.n])), st = {};
+    for (const p of lista) if (quante.has(p.id) && (st[p.id] || 0) < quante.get(p.id)) st[p.id] = (st[p.id] || 0) + 1;
+    setMeta('etiCoda', { ...c, stampate: st, quando: Date.now() });
+  }
   const celle = [...Array(start).fill('<div class="eti"></div>'), ...lista.map(p => htmlEtichetta(p))];
   const fogli = [];
   for (let i = 0; i < celle.length; i += ETI_FOGLIO) fogli.push(`<div class="foglio">${celle.slice(i, i + ETI_FOGLIO).join('')}</div>`);
@@ -2714,7 +2859,7 @@ function stampaEtichette(ids, start = 0) {
   if (!st) { st = document.createElement('div'); st.id = 'stampa'; document.body.appendChild(st); }
   st.innerHTML = fogli.join('');
   closeModal();
-  if (nuovi.length) { if (current.name === 'prodotto') aggiornaCodici(); else render(); }
+  if (nuovi.length || daCoda) { if (current.name === 'prodotto') aggiornaCodici(); else render(); }
   window.print();
 }
 
@@ -3846,7 +3991,7 @@ function crRigheHTML() {
   }).join('') + (lista.length > CR.limite ? `<button class="btn block" type="button" data-act="cr-altri">Mostra altri (${lista.length - CR.limite})</button>` : '');
 }
 routes.controllacategorie = () => {
-  if (current.fresh) CR.limite = 40;
+  if (current.fresh && !current.ritorno) CR.limite = 40;
   const tutti = daControllare(), nApp = tutti.filter(p => p.catAuto && catDi(p)).length;
   const fid = new Set(tutti.map(p => p.fornitoreId).filter(Boolean)), forn = [...S.fornitori.values()].filter(f => fid.has(f.id)).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
   const html = `<p class="muted small" style="margin:0">L'app propone la categoria dal nome, dai prodotti simili e dal fornitore, ma può sbagliare. <b>Tocca quella giusta</b>: il prodotto esce dall'elenco. Quella evidenziata è quella che ha adesso.</p>
@@ -4015,7 +4160,7 @@ routes.categoria = arg => {
    ========================================================= */
 const SYNC_CONF = { apiKey: 'AIzaSyBj_vigsG7m3jQg3MaRSBTwoKkXcPB3HKk', projectId: 'magazzino-spesa-sfusa-69c90', email: 'laspesasfusa@gmail.com' };   // dati pubblici del progetto Firebase: a proteggere i dati sono password e regole
 const SYNC_STORES = ['fornitori', 'prodotti', 'lotti', 'ordini', 'sprechi', 'vendite', 'chiusure', 'fatture', 'spese'];
-const SYNC_META = ['settings', 'etiPosizione', 'riordinoTolti'];
+const SYNC_META = ['settings', 'etiPosizione', 'riordinoTolti', 'etiCoda'];
 const syncConf = () => ({ ...SYNC_CONF, ...(S.meta.syncConf || {}) });
 const syncPronta = () => !!(syncConf().apiKey && syncConf().projectId);
 function syncAttiva() { return !!(S.meta.syncAuth && S.meta.syncAuth.refreshToken); }
@@ -4544,12 +4689,12 @@ A['fa-stato'] = async el => {
   const fa = S.fatture.get(el.dataset.id); if (!fa) return;
   const ok = fa.stato !== 'controllata';
   await save('fatture', { ...fa, stato: ok ? 'controllata' : 'nuova', controllata: ok ? todayISO() : null });
-  if (ok) { location.hash = '#fatture'; setTimeout(() => toast('Fattura controllata'), 150); } else render();
+  if (ok) { NAV.poi = () => toast('Fattura controllata'); vaiSu('#fatture'); } else render();
 };
 A['fa-elimina'] = async el => {
   const fa = S.fatture.get(el.dataset.id); if (!fa) return;
   if (!(await confirmBox(`Elimino la fattura n. ${fa.numero} di ${nomeFornFattura(fa)}? Se serve, si ricarica dal file.`, { ok: 'Elimina', danger: true }))) return;
-  await remove('fatture', fa.id); location.hash = '#fatture';
+  await remove('fatture', fa.id); vaiSu('#fatture');
 };
 A['fa-forn'] = async el => {
   const fa = S.fatture.get(el.dataset.id), fid = $('#faForn').value; if (!fa) return;
@@ -4688,8 +4833,8 @@ A['sync-scollega'] = async () => {
   SYNC.stato = 'spento'; toast('Dispositivo scollegato'); render();
 };
 A['close-modal'] = () => closeModal();
-A['close-modal-link'] = el => { closeModal(); location.hash = el.getAttribute('href'); };
-A.back = () => { if (current.back) location.hash = current.back; else history.back(); };
+A['close-modal-link'] = el => { closeModal(); vai(el.getAttribute('href')); };
+A.back = () => torna();
 A.camera = () => openCamera();
 A['scrivi-codice'] = () => scriviCodice();
 A.backup = () => faiBackup();
@@ -4704,7 +4849,7 @@ A['sr-inventario'] = el => { closeModal(); const p = prodotto(el.dataset.id); if
 A['sr-cucina'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (p) setTimeout(() => cucinaScegli(p), 60); };
 A['sr-ordina'] = async el => { closeModal(); await aggiungiOrdine(el.dataset.id); render(); };
 /* arrivo merce */
-A.modo = el => { const m = el.dataset.m; if (CS.modo === m) return; CS = cambiaModo(m); location.hash = m === 'inventario' ? '#carico/inventario' : '#carico'; render(); };
+A.modo = el => { const m = el.dataset.m; if (CS.modo === m) return; CS = cambiaModo(m); NAV.sost = true; location.replace(m === 'inventario' ? '#carico/inventario' : '#carico'); render(); };   // cambiare Arrivo/Inventario non è una pagina in più
 /* da Arrivo a Inventario (e ritorno) senza perdere il prodotto aperto né la scadenza già scritta */
 function cambiaModo(m) {
   const p = CS.pid ? prodotto(CS.pid) : null;
@@ -4987,6 +5132,37 @@ A['eti-nuovo'] = () => pickerModal({ title: 'Quale prodotto non ha il codice a b
   creaCodiceEStampa(p);
 } });
 A['eti-insieme'] = () => { if (ETI.scelti.size) location.hash = '#etichette/' + [...ETI.scelti].map(encodeURIComponent).join(','); };
+A['eti-in-coda'] = async () => {
+  const ps = etiScelte();
+  if (!ps.length) { toast('Spunta almeno un\'etichetta', { err: true }); return; }
+  await mettiInCoda(Object.fromEntries(ps.map(p => [p.id, copieDi(p.id)])));
+  const n = ps.reduce((t, p) => t + copieDi(p.id), 0);
+  ETI.tolte = new Set(); ETI.copie = new Map();
+  NAV.poi = () => toastCoda(n);
+  torna();   // si torna alla scelta del fornitore (o alla sua scheda) per preparare il prossimo
+};
+A['coda-copie'] = async el => { const id = el.dataset.id; await mettiInCoda({ [id]: Math.max(1, inCodaEti(id) + +el.dataset.d) }); render(); };
+A['coda-togli'] = async el => {
+  const id = el.dataset.id, n = inCodaEti(id), p = prodotto(id);
+  await mettiInCoda({ [id]: 0 }); render();
+  toast(`Tolta: ${p ? p.nome : ''}`, { action: { label: 'Annulla', run: async () => { await mettiInCoda({ [id]: n }); render(); } } });
+};
+A['coda-svuota'] = async () => {
+  const c = etiCoda(); if (!c.righe.length) return;
+  if (!(await confirmBox(`Tolgo tutte le ${nCoda()} etichette dai fogli da stampare?`, { ok: 'Svuota', danger: true }))) return;
+  await setMeta('etiCoda', { righe: [], stampate: null, quando: null }); render();
+  toast('Fogli da stampare vuoti', { action: { label: 'Annulla', run: async () => { await setMeta('etiCoda', c); render(); } } });
+};
+A['coda-stampa'] = () => {
+  const r = righeCoda(); if (!r.length) return;
+  stampaModal(r.map(x => x.id), { titolo: 'Fogli da stampare', copie: Object.fromEntries(r.map(x => [x.id, x.n])), daCoda: true });
+};
+A['coda-ok'] = async () => {
+  const c = etiCoda(), st = c.stampate || {};
+  await setMeta('etiCoda', { righe: c.righe.map(r => ({ id: r.id, n: r.n - (st[r.id] || 0) })).filter(r => r.n > 0), stampate: null, quando: null });
+  render(); toast('Tolte dai fogli da stampare');
+};
+A['coda-tieni'] = async () => { const c = etiCoda(); await setMeta('etiCoda', { ...c, stampate: null, quando: null }); render(); };
 A['eti-stampa'] = () => {
   const ps = etiScelte();
   if (!ps.length) { toast('Spunta almeno un\'etichetta', { err: true }); return; }
@@ -5005,8 +5181,7 @@ A['p-elimina'] = async el => {
   const g = giacenza(p.id);
   if (!(await confirmBox(`Elimino "${p.nome}" dal catalogo?${g ? ` In negozio risultano ancora ${fq(p, g)}: escono dal magazzino.` : ''}`, { ok: 'Elimina', danger: true }))) return;
   const prima = await eliminaProdotti([p.id]);
-  location.hash = '#catalogo';
-  setTimeout(() => toastAnnulla(`Eliminato: ${p.nome}`, prima), 120);   // dopo il cambio pagina, che chiude gli avvisi
+  torna(() => toastAnnulla(`Eliminato: ${p.nome}`, prima));   // si torna all'elenco da cui si era arrivati; l'avviso dopo il cambio pagina
 };
 /* eliminare in blocco: prodotti, le loro confezioni in negozio e le righe negli ordini da fare.
    Si tiene la versione di prima di tutto, così «Annulla» rimette ogni cosa com'era. */
@@ -5091,8 +5266,8 @@ A['f-elimina'] = async el => {
   const f = fornitore(el.dataset.id); if (!f) return;
   const con = await chiediFornitori([f.id]); if (con === null) return;
   const prima = await eliminaFornitori([f.id], con);
-  location.hash = '#fornitori';
-  setTimeout(() => toastAnnulla(`Eliminato: ${f.nome}`, prima), 120);
+  NAV.poi = () => toastAnnulla(`Eliminato: ${f.nome}`, prima);
+  vaiSu('#fornitori');
 };
 /* impostazioni */
 function leggiImpostazioni(b) {
@@ -5182,7 +5357,7 @@ async function init() {
   catch (e) { $('#view').innerHTML = `<div class="notice red">Non riesco ad aprire i dati sul telefono: ${esc(e.message)}</div>`; return; }
   rebuildCodeIndex();
   try { await migraSprechi(); } catch (e) { }
-  route();
+  route(true);
   avviaSync();
   setTimeout(function primoControllo() {
     if (syncAttiva() && !SYNC.ultimo && SYNC.stato !== 'offline' && SYNC.stato !== 'errore' && SYNC.stato !== 'accesso' && (primoControllo.n = (primoControllo.n || 0) + 1) < 30) { setTimeout(primoControllo, 1000); return; }
