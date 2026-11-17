@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.30.0';
+const VERSIONE = '1.31.0';
 
 /* =========================================================
    Utilità
@@ -638,8 +638,9 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
       ${campoUnita('npUnita', 'kg')}
       <label class="field" data-sacco-campo><span data-sacco-lab>${testoSacco('kg')}</span> <span class="hint" data-sacco-hint>${hintSacco('kg')}</span><input type="text" inputmode="decimal" id="npSacco" autocomplete="off"></label>
     </div>
-    ${code ? '' : `<label class="check"><input type="checkbox" id="npCrea"> Non ha il codice a barre: crealo e stampa le etichette</label>`}
+    ${code ? '' : `<label class="check"><input type="checkbox" id="npCrea"> Non ha il codice a barre: crealo e fai le etichette</label>${sceltaDopoCodice('npDopo', true)}`}
     <button class="btn primary block" type="button" id="npSave">Crea prodotto</button>`, b => {
+    const cr = b.querySelector('#npCrea'); if (cr) cr.addEventListener('change', () => { b.querySelector('#npDopo').hidden = !cr.checked; });
     b.querySelector('#npNome').focus();
     let catToccata = false;
     const proponi = () => {   // le proposte cambiano col nome e col fornitore, finché non se ne sceglie una
@@ -651,21 +652,21 @@ function nuovoProdottoModal({ code = null, nome = '', fornitoreId = '', onDone }
     b.querySelector('#npCatProp').addEventListener('click', e => { const c = e.target.closest('[data-np-cat]'); if (!c) return; catToccata = true; mettiCat(b.querySelector('#npCatSel'), c.dataset.npCat); b.querySelector('#npCat').hidden = true; proponi(); });
     b.querySelector('#npCatSel').addEventListener('change', () => { catToccata = true; proponi(); });
     proponi();
-    b.querySelector('#npSfuso').addEventListener('change', e => { b.querySelector('#npSaccoBox').hidden = !e.target.checked; const c = b.querySelector('#npCrea'); if (c) c.checked = e.target.checked; });
+    b.querySelector('#npSfuso').addEventListener('change', e => { b.querySelector('#npSaccoBox').hidden = !e.target.checked; const c = b.querySelector('#npCrea'); if (c) { c.checked = e.target.checked; b.querySelector('#npDopo').hidden = !c.checked; } });
     b.querySelector('#npUnita').addEventListener('change', e => aggiornaTestiSacco(b, e.target.value));
     b.querySelector('#npSave').onclick = async () => {
       const n = maiuscolo(b.querySelector('#npNome').value.replace(/\s+/g, ' ').trim());
       if (!n) { toast('Scrivi il nome del prodotto', { err: true }); return; }
       const fid = b.querySelector('#npForn').value;
       const sf = b.querySelector('#npSfuso').checked, un = sf ? b.querySelector('#npUnita').value : undefined, sacco = un === 'pz' ? null : parseNum(b.querySelector('#npSacco').value);
-      const crea = !code && b.querySelector('#npCrea').checked;
+      const crea = !code && b.querySelector('#npCrea').checked, dopo = dopoScelto(b, 'npDopo');
       const codici = code ? [code] : crea ? [await codiceInterno()] : [];
       const cat = categoriaScelta(b, 'npCat') || '';
       const p = { id: uid('p'), nome: n, fornitoreId: fid, categoria: cat, formato: maiuscolo(b.querySelector('#npFormato').value.trim()), prezzoAcquisto: null, iva: (ivaFornitore(fid) || {}).iva ?? null, prezzoVendita: null, prezzoManuale: null, ricarico: 50, codici, tipoScadenza: b.querySelector('#npTipo').value, note: '', origine: 'Creato nell\'app', sfuso: sf, unita: un, pesoSacco: sf && sacco > 0 ? sacco : null };
       if (code) { const prima = byCode(code); if (prima) await save('prodotti', { ...prima, codici: prima.codici.filter(c => c !== code) }); }
       await save('prodotti', p); if (fid) await setMeta('ultimoFornitore', fid);
       closeModal(); toast(`Creato: ${p.nome}${cat ? ' · ' + cat : ''}`); onDone && onDone(p);
-      if (crea) etichettaPronta(p.id);
+      if (crea) etichettaPronta(p.id, null, dopo);
     };
   });
 }
@@ -680,14 +681,25 @@ function aggiornaTestiSacco(b, u) {
 }
 /* etichetta da stampare subito dopo aver creato il codice: si apre la finestra di stampa,
    oppure, se c'è già un'altra finestra aperta (banco, arrivi), un avviso con «Stampa» */
+/* appena creato il codice (dalla 1.31.0) si sceglie: «Stampo subito» o «Nei fogli da stampare» (si stampano dopo, tutte insieme).
+   La scelta si ricorda su questo telefono e vale anche dove non c'è la domanda (arrivi, «Crea il codice per un prodotto…») */
+const dopoCodice = () => S.meta.etiDopoCodice === 'fogli' ? 'fogli' : 'subito';
+const sceltaDopoCodice = (id, nascosta = false) => `<div class="field eti-dopo" id="${id}"${nascosta ? ' hidden' : ''}><span class="small" style="font-weight:600">Le etichette</span>
+  <div class="segmented">${[['subito', 'Stampo subito'], ['fogli', 'Nei fogli da stampare']].map(([v, t]) => `<button type="button" data-act="eti-dopo" data-dopo="${v}" class="${dopoCodice() === v ? 'on' : ''}" aria-pressed="${dopoCodice() === v}">${t}</button>`).join('')}</div></div>`;
+const dopoScelto = (b, id) => { const x = b && b.querySelector(`#${id} [data-dopo].on`); return x ? x.dataset.dopo : dopoCodice(); };
 let etiPronta = { id: null, t: 0 };
-function etichettaPronta(pid, copie = null) {
+function etichettaPronta(pid, copie = null, modo = dopoCodice()) {
   if (etiPronta.id === pid && Date.now() - etiPronta.t < 2000) return;   // già in arrivo (per esempio prodotto nuovo creato dalla scelta)
   etiPronta = { id: pid, t: Date.now() };
-  setTimeout(() => {
+  setTimeout(async () => {
     const p = prodotto(pid); if (!p) return;
-    const apri = () => stampaModal([p.id], { titolo: p.sfuso ? 'Etichetta pronta' : 'Etichette pronte', copie: { [p.id]: copie ?? copieIniziali(p) } });
-    if (modal.open) toast(`Codice creato per ${p.nome}`, { ms: 8000, action: { label: 'Stampa etichette', run: apri } });
+    const n = copie ?? copieIniziali(p);
+    const apri = () => stampaModal([p.id], { titolo: p.sfuso ? 'Etichetta pronta' : 'Etichette pronte', copie: { [p.id]: n } });
+    if (modo === 'fogli') {
+      await mettiInCoda({ [p.id]: Math.max(n, inCodaEti(p.id)) });
+      if (['etichette', 'prodotto', 'fornitore', 'home', 'catalogo'].includes(current.name) && !modal.open) { if (current.name === 'prodotto') aggiornaCodici(); else render(); }
+      toast(`Codice creato · ${testoScelte(n)} nei fogli da stampare`, { ms: 8000, action: { label: 'Stampa ora', run: apri } });
+    } else if (modal.open) toast(`Codice creato per ${p.nome}`, { ms: 8000, action: { label: 'Stampa etichette', run: apri } });
     else apri();
   }, 350);
 }
@@ -695,11 +707,11 @@ function etichettaPronta(pid, copie = null) {
 const copieIniziali = p => p.sfuso ? 1 : Math.min(48, Math.max(1, Math.round(giacenza(p.id)) || 1));
 /* codice creato dall'app (29…): il prodotto non ha il codice del produttore e si riconosce dall'etichetta */
 const codiceNegozio = p => ((p && p.codici) || []).find(c => /^29\d{11}$/.test(c)) || null;
-async function creaCodiceEStampa(p, copie = null) {
+async function creaCodiceEStampa(p, copie = null, modo = dopoCodice()) {
   if (!p) return;
   if (!(p.codici || []).length) { await save('prodotti', { ...p, codici: [await codiceInterno()] }); toast('Codice creato'); }
   if (current.name === 'prodotto') aggiornaCodici(); else render();
-  etichettaPronta(p.id, copie);
+  etichettaPronta(p.id, copie, modo);
 }
 function schedaRapida(p) {
   const lotti = lottiAttivi().filter(l => l.prodottoId === p.id).sort((a, b) => (a.scadenza || '9').localeCompare(b.scadenza || '9'));
@@ -931,8 +943,9 @@ function fvNuovoModal() {
     <div class="btn-grid" style="grid-template-columns:1fr 1fr">
       <label class="field">IVA<select id="fvIva">${[4, 5, 10, 22].map(v => `<option value="${v}" ${v === 4 ? 'selected' : ''}>${v}%</option>`).join('')}</select></label>
       <label class="field">Fornitore<select id="fvForn"><option value="">— nessuno —</option>${forn.map(x => `<option value="${esc(x.id)}">${esc(x.nome)}</option>`).join('')}</select></label></div>
-    <label class="check"><input type="checkbox" id="fvEti" checked> Crea il codice a barre e stampa l'etichetta</label>
+    <label class="check"><input type="checkbox" id="fvEti" checked> Crea il codice a barre e fai l'etichetta</label>${sceltaDopoCodice('fvDopo')}
     <button class="btn primary block" type="button" data-x="ok">Aggiungi al reparto</button>`, b => {
+    b.querySelector('#fvEti').addEventListener('change', e => { b.querySelector('#fvDopo').hidden = !e.target.checked; });
     b.querySelector('#fvNome').focus();
     $$('#fvModo [data-m]', b).forEach(x => x.onclick = () => { kg = x.dataset.m === 'kg'; $$('#fvModo [data-m]', b).forEach(y => y.classList.toggle('on', y === x)); $$('[data-u]', b).forEach(u => { u.textContent = kg ? 'al kg' : 'al pezzo'; }); });
     b.querySelector('[data-x=ok]').onclick = async () => {
@@ -943,12 +956,12 @@ function fvNuovoModal() {
       const pr = parseNum(b.querySelector('#fvPrezzo').value), acq = parseNum(b.querySelector('#fvAcq').value);
       if (b.querySelector('#fvPrezzo').value.trim() && !(pr > 0)) { toast('Il prezzo di vendita non è un numero valido', { err: true }); return; }
       if (b.querySelector('#fvAcq').value.trim() && !(acq > 0)) { toast('Il prezzo d\'acquisto non è un numero valido', { err: true }); return; }
-      const conEti = b.querySelector('#fvEti').checked;
+      const conEti = b.querySelector('#fvEti').checked, dopo = dopoScelto(b, 'fvDopo');
       const p = { id: uid('p'), nome, fornitoreId: b.querySelector('#fvForn').value, categoria: FV, formato: '', prezzoAcquisto: acq > 0 ? r3(acq) : null, iva: +b.querySelector('#fvIva').value, prezzoVendita: null, prezzoManuale: pr > 0 ? r2(pr) : null, ricarico: 50,
         codici: conEti ? [await codiceInterno()] : [], tipoScadenza: 'entro', note: '', origine: 'Creato nell\'app', sfuso: kg, unita: 'kg', pesoSacco: null };
       await save('prodotti', p);
       closeModal(); toast(`Aggiunto: ${p.nome}`); render();
-      if (conEti) etichettaPronta(p.id, 1);
+      if (conEti) etichettaPronta(p.id, 1, dopo);
     };
   });
 }
@@ -2228,7 +2241,7 @@ const infoSfuso = u => u === 'pz' ? 'Magazzino e prezzo a pezzo, un\'etichetta s
   : u === 'l' ? 'Magazzino in litri, prezzo al litro (olio, detersivi…). Al banco si scansiona l\'etichetta e si scrivono i ml.'
   : `Magazzino in kg, prezzo ${UNITA[u].al}. Al banco si scansiona l'etichetta del contenitore e si scrivono i grammi.`;
 function boxEtichetta(p) {
-  if (!(p.codici || []).length) return `<button class="btn block" type="button" data-act="p-crea-codice" data-id="${esc(p.id)}" id="pCrea">Crea il codice a barre e stampa ${p.sfuso ? "l'etichetta" : 'le etichette'}</button>
+  if (!(p.codici || []).length) return `${sceltaDopoCodice('pDopo')}<button class="btn block" type="button" data-act="p-crea-codice" data-id="${esc(p.id)}" id="pCrea">Crea il codice a barre</button>
     <div class="faint small">${p.sfuso ? 'Se il ' + (sfusoPezzi(p) ? 'cartone' : 'sacco') + ' ha già il suo codice, non serve: scansionalo adesso e si collega da solo.' : 'Per i prodotti senza codice a barre (fatti da voi o da piccoli produttori): un\'etichetta per pezzo. Se il prodotto ha già il suo codice, non serve: scansionalo adesso e si collega da solo.'}</div>`;
   if (p.sfuso) return `<button class="btn block" type="button" data-act="p-stampa-eti" data-id="${esc(p.id)}">Stampa l'etichetta</button>`;
   if (codiceNegozio(p)) return `<button class="btn block" type="button" data-act="p-stampa-eti" data-id="${esc(p.id)}">Stampa le etichette</button>`;
@@ -5120,14 +5133,19 @@ A['p-crea-codice'] = async el => {
   if (paginaSalva) await paginaSalva();
   const p = prodotto(el.dataset.id); if (!p) return;
   if ((p.codici || []).length) { aggiornaCodici(); return; }
-  await creaCodiceEStampa(p);
+  await creaCodiceEStampa(p, null, dopoScelto(document, 'pDopo'));
+};
+A['eti-dopo'] = el => {
+  const v = el.dataset.dopo;
+  $$('[data-dopo]', el.parentElement).forEach(x => { x.classList.toggle('on', x === el); x.setAttribute('aria-pressed', x === el); });
+  setMeta('etiDopoCodice', v);
 };
 A['p-stampa-eti'] = el => { const p = prodotto(el.dataset.id); if (p) stampaModal([p.id], { copie: { [p.id]: copieIniziali(p) } }); };
 /* etichette */
 A['eti-tutte'] = () => { ETI.tolte = new Set(); render(); };
 A['eti-nessuna'] = () => { ETI.tolte = new Set(prodottiEtichette().map(p => p.id)); render(); };
 A['eti-copie'] = el => { const id = el.dataset.id; ETI.copie.set(id, Math.max(1, Math.min(MAX_COPIE, copieDi(id) + +el.dataset.d))); ETI.tolte.delete(id); render(); };
-A['eti-nuovo'] = () => pickerModal({ title: 'Quale prodotto non ha il codice a barre?', intro: 'L\'app gli crea un codice e stampa le etichette da attaccare.', onPick: p => {
+A['eti-nuovo'] = () => pickerModal({ title: 'Quale prodotto non ha il codice a barre?', intro: `<div class="faint">L'app gli crea un codice e fa le etichette da attaccare.</div>${sceltaDopoCodice('pkDopo')}`, onPick: p => {
   if ((p.codici || []).length && !p.sfuso && !codiceNegozio(p)) { toast(`${p.nome} ha già il codice ${codiceEtichetta(p)}: l'etichetta non serve`, { err: true }); return; }
   creaCodiceEStampa(p);
 } });
