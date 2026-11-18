@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.32.1';
+const VERSIONE = '1.33.0';
 
 /* =========================================================
    Utilità
@@ -318,8 +318,15 @@ function codaPer(store, coppie) {
 const DEFAULT_SETTINGS = { soglie: { preferibilmente: [7, 15, 30], entro: [2, 5, 10] }, negozio: 'La Spesa Sfusa', avanzoSfuso: 5, scortaMin: 3 };
 function settings() {
   const s = S.meta.settings || {};
-  return { negozio: s.negozio || DEFAULT_SETTINGS.negozio, soglie: Object.assign({}, DEFAULT_SETTINGS.soglie, s.soglie || {}), avanzoSfuso: s.avanzoSfuso ?? DEFAULT_SETTINGS.avanzoSfuso, scortaMin: s.scortaMin ?? DEFAULT_SETTINGS.scortaMin };
+  return { negozio: s.negozio || DEFAULT_SETTINGS.negozio, soglie: Object.assign({}, DEFAULT_SETTINGS.soglie, s.soglie || {}), avanzoSfuso: s.avanzoSfuso ?? DEFAULT_SETTINGS.avanzoSfuso, scortaMin: s.scortaMin ?? DEFAULT_SETTINGS.scortaMin,
+    catSoloUscite: Array.isArray(s.catSoloUscite) ? s.catSoloUscite : ['Frutta e verdura'] };
 }
+/* SOLO USCITE (dalla 1.33.0): per alcune categorie (di base Frutta e verdura; poi quella della bottega) non si registrano
+   arrivi e inventario. Al banco (e in cucina, e negli sprechi) si scansionano solo le uscite con le quantità:
+   non toccano confezioni, niente «non risultava in negozio», niente ordini automatici, scadenze e inventario.
+   Le confezioni registrate prima restano salvate ma non contano finché la categoria è «solo uscite». */
+const catSoloUscite = () => new Set(settings().catSoloUscite);
+const soloUscite = (p, su = catSoloUscite()) => !!p && su.has((p.categoria || '').trim());
 /* sfuso: quanto può restare in un sacco (polvere, pesate) prima di considerarlo finito */
 function tolleranza(p) { return isSfuso(p) && p.pesoSacco ? r3(p.pesoSacco * settings().avanzoSfuso / 100) : 0; }
 
@@ -330,7 +337,7 @@ const prodotto = id => S.prodotti.get(id);
 const fornitore = id => S.fornitori.get(id);
 const nomeForn = id => { const f = fornitore(id); return f ? f.nome : 'Senza fornitore'; };
 function byCode(code) { const id = codeIndex.get(String(code)); return id ? prodotto(id) : null; }
-const lottiAttivi = () => [...S.lotti.values()].filter(l => l.stato === 'attivo');
+const lottiAttivi = () => { const su = catSoloUscite(); return [...S.lotti.values()].filter(l => l.stato === 'attivo' && !(su.size && soloUscite(S.prodotti.get(l.prodottoId), su))); };
 function soglie(tipo) { const s = settings().soglie; return s[tipo] || s.preferibilmente; }
 function fascia(l) {
   if (!l.scadenza) return 'nessuna';
@@ -718,10 +725,11 @@ function schedaRapida(p) {
   const u = ultimoOrdine(p.id);
   openModal(`${mhead(p.nome)}
     <div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${p.sfuso ? ' · sfuso' + (sfusoPezzi(p) ? ' a pezzo' : '') + (isSfuso(p) && p.pesoSacco ? `, ${nomeSacco(p, 2)} da ${fmtSf(p, p.pesoSacco)}` : '') : ''}</div>
-    ${lotti.length ? `<div class="list">${lotti.map(l => rigaConfezione(l)).join('')}</div>` : '<div class="faint">Nessuna confezione registrata in negozio.</div>'}
+    ${soloUscite(p) ? `<div class="notice green"><span><b>Solo uscite</b>: per «${esc(catDi(p))}» non si registrano arrivi e inventario. Al banco si scansionano le vendite.</span></div>`
+      : lotti.length ? `<div class="list">${lotti.map(l => rigaConfezione(l)).join('')}</div>` : '<div class="faint">Nessuna confezione registrata in negozio.</div>'}
     ${u ? `<div class="faint">Ultimo ordine: ${fmtOrd(p, u.qta)} il ${fmtDate(u.data)}</div>` : ''}
     <div class="stack">
-      <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn primary" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn primary" type="button" data-act="sr-inventario" data-id="${esc(p.id)}">Inventario</button></div>
+      ${soloUscite(p) ? '' : `<div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn primary" type="button" data-act="sr-carico" data-id="${esc(p.id)}">Arrivo merce</button><button class="btn primary" type="button" data-act="sr-inventario" data-id="${esc(p.id)}">Inventario</button></div>`}
       <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button><button class="btn" type="button" data-act="sr-cucina" data-id="${esc(p.id)}">Per la cucina</button></div>
       <a class="btn ghost block" href="#prodotto/${encodeURIComponent(p.id)}" data-act="close-modal-link">Apri la scheda</a>
     </div>`);
@@ -1150,9 +1158,11 @@ routes.carico = arg => {
   }).join('')}</div>` : `<div class="empty">Ancora niente oggi.</div>`;
   return { title: inv ? 'Inventario' : 'Arrivo merce', html, back: '#home', tab: 'carico', onScan: caricoScan };
 };
+function avvisoSoloUscite(p) { toast(`${p.nome}: per «${catDi(p)}» non si registrano arrivi e inventario. Al banco si scansionano solo le vendite.`, { err: true, ms: 6000 }); }
 async function caricoScan(code) {
   const p = byCode(code);
-  const go = p2 => { CS = caricoPer(p2, CS.modo); render(); };
+  if (p && soloUscite(p) && (!CS.pid || p.id !== CS.pid)) { avvisoSoloUscite(p); return; }
+  const go = p2 => { if (soloUscite(p2)) { avvisoSoloUscite(p2); return; } CS = caricoPer(p2, CS.modo); render(); };
   if (CS.pid) {
     if (p && p.id === CS.pid) {
       if (isSfuso(p) && CS.unita === 'kg') {
@@ -1416,7 +1426,7 @@ const prezzoRiga = v => v.prezzo ?? (v.prodottoId ? prezzoVendita(prodotto(v.pro
 const centesimi = x => Math.sign(x) * Math.round(Math.abs(x) * 100 + 1e-6) / 100;
 const importo = v => { const pr = prezzoRiga(v); return pr == null ? null : centesimi(pr * v.qta * (v.tipo === 'reso' ? -1 : 1)); };
 /* pezzi venduti che non risultavano in negozio; per lo sfuso si ignora il piccolo avanzo del sacco */
-const mancaVisibile = v => (v.mancanti || 0) > (isSfuso(prodotto(v.prodottoId)) ? Math.max(tolleranza(prodotto(v.prodottoId)), 0.001) : 0);
+const mancaVisibile = v => !soloUscite(prodotto(v.prodottoId)) && (v.mancanti || 0) > (isSfuso(prodotto(v.prodottoId)) ? Math.max(tolleranza(prodotto(v.prodottoId)), 0.001) : 0);
 const fmtOra = ts => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const venditeDel = data => [...S.vendite.values()].filter(v => v.data === data).sort((a, b) => b.creato - a.creato);
 const ultimaRiga = () => venditeDel(todayISO())[0] || null;
@@ -1464,6 +1474,7 @@ async function muovi(prelievi, segno) {
   if (mod.size) await saveMany('lotti', [...mod.values()]);
 }
 async function preleva(pid, qta, { fefo = false } = {}) {   // fefo: in cucina si usa prima quello che scade prima, anche se scaduto
+  if (soloUscite(prodotto(pid))) return { prelievi: [], mancanti: 0 };   // solo uscite: si registra la quantità, il magazzino non c'è
   const prelievi = []; let resto = r3(qta);
   for (const l of fefo ? lottiFEFO(pid) : lottiVendita(pid)) {
     if (resto <= 0) break;
@@ -1510,7 +1521,7 @@ async function cambiaQta(id, delta) {
   delta = r3(delta);
   if (!v || !delta || r3(v.qta + delta) < (v.sfuso ? 0.001 : 1)) return;
   const ora = Date.now(), nuova = r3(v.qta + delta);
-  if (!v.prodottoId) await save('vendite', { ...v, qta: nuova, aggiornato: ora });
+  if (!v.prodottoId || (v.tipo === 'reso' && !(v.prelievi || []).length)) await save('vendite', { ...v, qta: nuova, aggiornato: ora });
   else if (v.tipo === 'reso') {
     const lottoId = v.prelievi[0].lottoId;
     await muovi([{ lottoId, qta: Math.abs(delta) }], delta > 0 ? 1 : -1);
@@ -1536,6 +1547,11 @@ async function rimettiParte(v, togli) {
 /* reso del cliente: il pezzo torna nella confezione da cui era uscito */
 async function rendi(p, qta = 1) {
   BANCO.modo = 'vendita'; qta = r3(qta);
+  if (soloUscite(p)) {   // solo uscite: il reso si segna, ma non torna in una confezione
+    const ora = Date.now();
+    await save('vendite', { id: uid('v'), tipo: 'reso', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta, prezzo: prezzoVendita(p), sfuso: isSfuso(p) || undefined, prelievi: [], mancanti: 0, origine: 'scansione' });
+    toast(`Reso: ${isSfuso(p) ? fmtSf(p, qta) + ' di ' : ''}${p.nome}`); render(); return;
+  }
   const ultimaV = [...S.vendite.values()].filter(v => v.tipo === 'vendita' && v.prodottoId === p.id && (v.prelievi || []).length).sort((a, b) => b.creato - a.creato)[0];
   let lottoId = ultimaV ? ultimaV.prelievi[ultimaV.prelievi.length - 1].lottoId : null;
   if (!lottoId || !S.lotti.has(lottoId)) { const fe = lottiFEFO(p.id); lottoId = fe.length ? fe[fe.length - 1].id : null; }
@@ -1646,7 +1662,7 @@ function pesoModal(p, { titolo = null, ok = 'Aggiungi', iniziale = 0, perCucina 
   };
   const veloci = lt ? [250, 500, 750, 1000] : [100, 250, 500, 1000];
   openModal(`${mhead(titolo || (lt ? 'Quanti ml?' : 'Quanto pesa?'))}
-    <div class="peso-prod"><b>${esc(p.nome)}</b><span>${perCucina ? 'Per la cucina' : pr != null ? fmtEuro(perUnita(p, pr)) + alKg(p) : 'Prezzo' + alKg(p) + ' non impostato'} · in negozio ${fmtSf(p, giacenza(p.id))}</span></div>
+    <div class="peso-prod"><b>${esc(p.nome)}</b><span>${perCucina ? 'Per la cucina' : pr != null ? fmtEuro(perUnita(p, pr)) + alKg(p) : 'Prezzo' + alKg(p) + ' non impostato'}${soloUscite(p) ? '' : ' · in negozio ' + fmtSf(p, giacenza(p.id))}</span></div>
     <div class="peso-display" aria-live="polite"><span id="pgVal">0</span><small>${mu}</small></div>
     <div class="peso-info"><span id="pgKg"></span><b id="pgEuro"></b></div>
     <div class="peso-veloci">${veloci.map(x => `<button type="button" class="chip" data-g="${x}">${x === 1000 ? (lt ? '1 litro' : '1 kg') : x + ' ' + mu}</button>`).join('')}</div>
@@ -1970,7 +1986,7 @@ routes.chiusura = () => {
 const METODI ={ whatsapp: 'WhatsApp', email: 'Email', sito: 'Sito', telefono: 'Telefono', interno: 'Produzione interna', '': 'Da impostare' };
 /* soglia: pezzi (di base quella delle impostazioni, 3) oppure kg/litri per lo sfuso (solo se scritta nella scheda) */
 function sogliaScorta(p) {
-  if (!p) return null;
+  if (!p || soloUscite(p)) return null;
   if (isSfuso(p)) return p.scortaMin > 0 ? p.scortaMin : null;
   const v = p.scortaMin ?? settings().scortaMin;
   return v > 0 ? v : null;
@@ -2039,6 +2055,7 @@ async function controlloScorte({ avviso = true } = {}) {
     // chi è risalito sopra la soglia esce dai «tolti»
     const t = S.meta.riordinoTolti || {}, via = Object.keys(t).filter(pid => { const p = prodotto(pid), s = sogliaScorta(p); return !p || s == null || giacenza(pid) > s; });
     if (via.length) { const n = { ...t }; via.forEach(k => delete n[k]); await setMeta('riordinoTolti', n); }
+    await togliAutoSoloUscite();
     const lista = daRiordinare();
     for (const p of lista) { const u = ultimoOrdine(p.id); await aggiungiOrdine(p.id, u && u.qta > 0 ? u.qta : 1, { silent: true, auto: true }); }
     if (lista.length) {
@@ -2048,6 +2065,16 @@ async function controlloScorte({ avviso = true } = {}) {
     }
     return lista.length;
   } finally { controlloInCorso = false; }
+}
+/* «solo uscite»: le righe messe da sole in Da ordinare per questi prodotti si tolgono (quelle scritte a mano restano) */
+async function togliAutoSoloUscite() {
+  const su = catSoloUscite(); if (!su.size) return 0;
+  let n = 0;
+  for (const o of [...S.ordini.values()].filter(o => o.stato === 'aperto')) {
+    const righe = o.righe.filter(r => !(r.auto && soloUscite(prodotto(r.prodottoId), su)));
+    if (righe.length !== o.righe.length) { n += o.righe.length - righe.length; await save('ordini', { ...o, righe }); }
+  }
+  return n;
 }
 async function aggiungiOrdine(pid, qta = 1, { silent = false, auto = false } = {}) {
   const p = prodotto(pid); if (!p) return;
@@ -2337,9 +2364,10 @@ routes.prodotto = id => {
   const forn = [...S.fornitori.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
   const calc = prezzoCalcolato(p);
   const html = `<div><h2 style="margin:0" id="pTitolo">${esc(p.nome)}</h2><div class="faint" id="pSotto">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>
-    <div class="section-title"><h2>In negozio</h2><span class="count" id="pGiac">${fq(p, giacenza(p.id))}</span></div>
+    ${soloUscite(p) ? `<div class="notice green" id="pSoloUscite"><span><b>Solo uscite</b>: per «${esc(catDi(p))}» non si registrano arrivi e inventario. Al banco si scansionano le vendite con le quantità. <a href="#impostazioni">Cambia in Impostazioni</a></span></div>`
+      : `<div class="section-title"><h2>In negozio</h2><span class="count" id="pGiac">${fq(p, giacenza(p.id))}</span></div>
     <div class="stack" id="pLotti">${lottiScheda(p)}</div>
-    ${cardCarica(p)}
+    ${cardCarica(p)}`}
     <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button><button class="btn" type="button" data-act="sr-cucina" data-id="${esc(p.id)}">Per la cucina</button></div>
     <div class="section-title"><h2>Dati del prodotto</h2></div>
     <div class="faint small salva-stato">Ogni modifica si salva da sola.</div>
@@ -2363,7 +2391,7 @@ routes.prodotto = id => {
         <label class="field" data-sacco-campo ${sfusoPezzi(p) ? 'hidden' : ''}><span data-sacco-lab>${testoSacco(unitaDi(p))}</span> <span class="hint" data-sacco-hint>${hintSacco(unitaDi(p))}</span><input type="text" inputmode="decimal" id="pSacco" value="${p.pesoSacco ? fmtNum(p.pesoSacco) : ''}"></label>
         <div class="faint small" id="pSfInfo">${infoSfuso(unitaScelta(p))}</div>
       </div></div>
-    <div class="card"><h3>Riordino</h3>
+    <div class="card" ${soloUscite(p) ? 'hidden' : ''}><h3>Riordino</h3>
       <label class="field"><span>Va da solo in «Da ordinare» quando ne restano</span>
         <span class="row" style="gap:10px"><input type="text" inputmode="decimal" id="pScorta" value="${p.scortaMin != null ? fmtNum(p.scortaMin) : ''}" placeholder="${esc(segnapostoScorta(p))}" style="flex:1"><span class="faint" data-scorta-u>${unitaScorta(p)}</span></span></label>
       <div class="faint small" data-scorta-hint>${aiutoScorta(p)}</div></div>
@@ -4158,6 +4186,7 @@ routes.categoria = arg => {
   if (fermi.length) html += `<div class="section-title"><h2>In negozio ma non venduti</h2><span class="count">${fermi.length}</span></div><div class="list">${fermi.slice(0, 10).map(x => `<a class="item" href="#prodotto/${encodeURIComponent(x.p.id)}"><div class="main"><div class="name">${esc(x.p.nome)}</div><div class="sub">in negozio ${fq(x.p, x.g)}</div></div><span class="prezzo">${x.val ? fmtEuro(r2(x.val)) : ''}</span></a>`).join('')}</div>
     <div class="faint small">Nessuna vendita nel periodo scelto. Valore al prezzo d'acquisto.</div>`;
   html += `<button class="btn block" type="button" data-act="cat-vedi" data-c="${esc(nome)}">Vedi i ${prodotti.length} prodotti nel Catalogo</button>`;
+  if (nome !== SENZA_CAT) html += `<div class="card tight"><label class="check"><input type="checkbox" data-act="cat-solo-uscite" data-c="${esc(nome)}" ${catSoloUscite().has(nome) ? 'checked' : ''}> <span><b>Solo uscite</b><br><span class="faint small">Non si registrano arrivi e inventario: al banco si scansionano solo le vendite con le quantità.</span></span></label></div>`;
   return { title: nome, html, back: '#categorie', tab: 'home' };
 };
 
@@ -4529,6 +4558,10 @@ routes.impostazioni = () => {
       <label class="field">Va da solo in «Da ordinare» quando ne restano (pezzi)<input type="number" inputmode="numeric" min="0" id="sScorta" value="${s.scortaMin}"></label>
       <div class="faint small">Vale per tutti i prodotti a pezzi; nella scheda di un prodotto si può scrivere un numero diverso. 0 = mai da solo.</div>
       <div class="faint small salva-stato" aria-live="polite">Ogni modifica si salva da sola.</div></div>
+    <div class="card"><h2>Solo uscite</h2>
+      <p class="muted small">Per queste categorie non si registrano arrivi e inventario: al banco si scansionano solo le vendite con le quantità. Niente scadenze, niente «non risultava in negozio», niente ordini automatici.</p>
+      <div class="stack" id="sSoloUscite">${(() => { const su = catSoloUscite(), tutte = [...new Set([...categorieUsate(), ...su])].filter(c => c && c !== SENZA_CAT).sort((a, b) => (su.has(b) - su.has(a)) || a.localeCompare(b, 'it'));
+        return tutte.map(c => `<label class="check"><input type="checkbox" data-act="cat-solo-uscite" data-c="${esc(c)}" ${su.has(c) ? 'checked' : ''}> ${esc(c)}</label>`).join(''); })()}</div></div>
     <div class="card" data-auto><h2>Sfuso</h2>
       <p class="muted small">Quando al sacco più vecchio resta meno di questa parte (polvere, pesate), l'app lo considera finito e passa al sacco dopo.</p>
       <label class="field">Avanzo del sacco, in %<input type="number" inputmode="numeric" min="0" max="30" id="sAvanzo" value="${s.avanzoSfuso}"></label>
@@ -4681,6 +4714,14 @@ A['cru-periodo'] = el => { CRU = VC.periodo = el.dataset.f; render(); };
 A['cassa-nuova'] = el => cassaModal(null, el.dataset.m);
 A['vc-periodo'] = el => { VC.periodo = CRU = el.dataset.f; render(); };
 A['vc-serie'] = el => { VC.serie = el.dataset.s; render(); };
+A['cat-solo-uscite'] = async el => {
+  const c = el.dataset.c, on = el.checked, su = catSoloUscite();
+  if (on) su.add(c); else su.delete(c);
+  await setMeta('settings', { ...(S.meta.settings || {}), catSoloUscite: [...su] });
+  if (on) await togliAutoSoloUscite();
+  aggiornaBadge();
+  toast(on ? `${c}: solo uscite, niente arrivi e inventario` : `${c}: di nuovo con arrivi e inventario`);
+};
 A['cat-vedi'] = el => { CAT = { ...CAT, q: '', forn: '', cat: el.dataset.c, senzaCodice: false, sfuso: false, limite: 60, sel: null }; location.hash = '#catalogo'; };
 A['cat-categoria'] = () => { const ids = [...(CAT.sel || [])].filter(id => S.prodotti.has(id)); if (!ids.length) { toast('Scegli prima i prodotti', { err: true }); return; } categoriaModal(ids); };
 A['cassa-mod'] = el => cassaModal(el.dataset.d);
@@ -4857,8 +4898,8 @@ A.ripristina = () => {
 };
 A['import-catalogo'] = () => { fileMode = 'catalogo'; $('#fileInput').click(); };
 A.installa = async () => { if (!installPrompt) return; installPrompt.prompt(); try { await installPrompt.userChoice; } catch (e) { } installPrompt = null; render(); };
-A['sr-carico'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (!p) return; CS = caricoPer(p, 'arrivo'); location.hash = '#carico/keep'; if (current.name === 'carico') render(); };
-A['sr-inventario'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (!p) return; CS = caricoPer(p, 'inventario'); location.hash = '#carico/inventario'; if (current.name === 'carico') render(); };
+A['sr-carico'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (!p) return; if (soloUscite(p)) { avvisoSoloUscite(p); return; } CS = caricoPer(p, 'arrivo'); location.hash = '#carico/keep'; if (current.name === 'carico') render(); };
+A['sr-inventario'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (!p) return; if (soloUscite(p)) { avvisoSoloUscite(p); return; } CS = caricoPer(p, 'inventario'); location.hash = '#carico/inventario'; if (current.name === 'carico') render(); };
 A['sr-cucina'] = el => { closeModal(); const p = prodotto(el.dataset.id); if (p) setTimeout(() => cucinaScegli(p), 60); };
 A['sr-ordina'] = async el => { closeModal(); await aggiungiOrdine(el.dataset.id); render(); };
 /* arrivo merce */
@@ -4871,7 +4912,7 @@ function cambiaModo(m) {
   c.scad = CS.scad; c.senza = CS.senza; c.field = CS.senza ? 'qta' : CS.field;
   return c;
 }
-A['carico-cerca'] = () => pickerModal({ title: 'Cerca il prodotto', onPick: p => { CS = caricoPer(p, CS.modo); render(); } });
+A['carico-cerca'] = () => pickerModal({ title: 'Cerca il prodotto', onPick: p => { if (soloUscite(p)) { avvisoSoloUscite(p); return; } CS = caricoPer(p, CS.modo); render(); } });
 A.unita = el => { const u = el.dataset.u; if (CS.unita === u) return; CS.unita = u; CS.qta = u === 'sacchi' || u === 'pz' ? '1' : ''; CS.field = 'qta'; CS.qtaFresh = true; render(); };
 A['carico-annulla'] = () => { CS = nuovoCarico(CS.modo); render(); };
 A['carico-salva'] = () => salvaCarico();
@@ -5359,7 +5400,11 @@ document.addEventListener('click', async e => {
   if (!el) return;
   const h = A[el.dataset.act];
   if (!h) return;
-  if (el.type === 'checkbox') { if (el.dataset.act === 'senza') { CS.senza = el.checked; if (CS.senza) CS.field = 'qta'; else CS.field = 'scad'; render(); } return; }
+  if (el.type === 'checkbox') {   // la spunta cambia da sola (niente preventDefault); poi l'azione legge el.checked
+    if (el.dataset.act === 'senza') { CS.senza = el.checked; if (CS.senza) CS.field = 'qta'; else CS.field = 'scad'; render(); return; }
+    try { await h(el, e); } catch (err) { console.error(err); toast('Qualcosa non ha funzionato: ' + err.message, { err: true }); }
+    return;
+  }
   e.preventDefault();
   try { await h(el, e); } catch (err) { console.error(err); toast('Qualcosa non ha funzionato: ' + err.message, { err: true }); }
   if (el.tagName === 'BUTTON' && document.contains(el)) el.blur();
@@ -5405,7 +5450,7 @@ async function init() {
   }
   setTimeout(() => controllaIscrizione().catch(() => { }), 4000);
   if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.vai) location.hash = e.data.vai; });
-  window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta, categorieDalCatalogo, ANN, salvaOra: () => paginaSalva ? paginaSalva() : Promise.resolve(), T: { fogliListini, copieIniziali, htmlEtichetta, nuovoProdottoModal, costoUnita, qtaRiga, arrivatoNellApp, testoOrdine } };
+  window.__app = { S, onScan, parseScadenza, save, VERSIONE, giro, SYNC: () => SYNC, setMeta, categorieDalCatalogo, ANN, salvaOra: () => paginaSalva ? paginaSalva() : Promise.resolve(), T: { fogliListini, copieIniziali, htmlEtichetta, nuovoProdottoModal, costoUnita, qtaRiga, arrivatoNellApp, testoOrdine, controlloScorte, CS: () => CS, soloUscite } };
 }
 init();
 })();

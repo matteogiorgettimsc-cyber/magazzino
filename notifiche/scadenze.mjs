@@ -87,10 +87,12 @@ export function testoScadenze(voci) {
 }
 export function componi(lotti, prodotti, settings, oggi) {
   const soglie = { preferibilmente: [7, 15, 30], entro: [2, 5, 10], ...((settings && settings.soglie) || {}) };
+  // «solo uscite» (dall'app 1.33.0): queste categorie non hanno magazzino né scadenze; di base Frutta e verdura
+  const soloUscite = new Set(settings && Array.isArray(settings.catSoloUscite) ? settings.catSoloUscite : ['Frutta e verdura']);
   const per = new Map();   // un prodotto una volta sola, con la confezione che scade prima
   for (const l of lotti) {
     if (l.stato !== 'attivo' || !l.scadenza || l.gestito || !(l.quantita > 0)) continue;
-    const p = prodotti.get(l.prodottoId); if (!p) continue;
+    const p = prodotti.get(l.prodottoId); if (!p || soloUscite.has(String(p.categoria || '').trim())) continue;
     const d = giorni(oggi, l.scadenza), s = soglie[p.tipoScadenza === 'entro' ? 'entro' : 'preferibilmente'] || soglie.preferibilmente;
     if (d <= s[0] && (!per.has(l.prodottoId) || d < per.get(l.prodottoId).d)) per.set(l.prodottoId, { nome: p.nome, d });
   }
