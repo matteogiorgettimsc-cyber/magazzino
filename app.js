@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.33.0';
+const VERSIONE = '1.33.1';
 
 /* =========================================================
    Utilità
@@ -319,14 +319,28 @@ const DEFAULT_SETTINGS = { soglie: { preferibilmente: [7, 15, 30], entro: [2, 5,
 function settings() {
   const s = S.meta.settings || {};
   return { negozio: s.negozio || DEFAULT_SETTINGS.negozio, soglie: Object.assign({}, DEFAULT_SETTINGS.soglie, s.soglie || {}), avanzoSfuso: s.avanzoSfuso ?? DEFAULT_SETTINGS.avanzoSfuso, scortaMin: s.scortaMin ?? DEFAULT_SETTINGS.scortaMin,
-    catSoloUscite: Array.isArray(s.catSoloUscite) ? s.catSoloUscite : ['Frutta e verdura'] };
+    catSoloUscite: Array.isArray(s.catSoloUscite) ? s.catSoloUscite : ['Frutta e verdura'], fornSoloUscite: Array.isArray(s.fornSoloUscite) ? s.fornSoloUscite : [] };
 }
 /* SOLO USCITE (dalla 1.33.0): per alcune categorie (di base Frutta e verdura; poi quella della bottega) non si registrano
    arrivi e inventario. Al banco (e in cucina, e negli sprechi) si scansionano solo le uscite con le quantità:
    non toccano confezioni, niente «non risultava in negozio», niente ordini automatici, scadenze e inventario.
    Le confezioni registrate prima restano salvate ma non contano finché la categoria è «solo uscite». */
-const catSoloUscite = () => new Set(settings().catSoloUscite);
-const soloUscite = (p, su = catSoloUscite()) => !!p && su.has((p.categoria || '').trim());
+/* per categoria (Frutta e verdura) o per fornitore (dalla 1.33.1: «Nostra produzione») */
+const regolaSU = () => { const st = settings(); return { cat: new Set(st.catSoloUscite), forn: new Set(st.fornSoloUscite) }; };
+const catSoloUscite = () => regolaSU().cat;
+const soloUscite = (p, r = regolaSU()) => !!p && (r.cat.has((p.categoria || '').trim()) || (!!p.fornitoreId && r.forn.has(p.fornitoreId)));
+const perSoloUscite = p => p && regolaSU().forn.has(p.fornitoreId) ? `i prodotti di «${nomeForn(p.fornitoreId)}»` : `«${catDi(p)}»`;
+/* il fornitore «Nostra produzione» (o con «Produzione interna»): si spunta da solo, una volta; poi si cambia nella sua scheda */
+const RE_NOSTRA = /nostr[aeio]\s+produzion|produzion[ei]\s+(propri|intern|nostr)/i;
+async function soloUsciteNostra() {
+  if (S.meta.soloUsciteNostra) return false;
+  if (Array.isArray((S.meta.settings || {}).fornSoloUscite)) { await setMeta('soloUsciteNostra', todayISO()); return false; }   // già scelto (anche da un altro telefono)
+  const st = settings(), fs = new Set(st.fornSoloUscite), nuovi = [...S.fornitori.values()].filter(f => (RE_NOSTRA.test(f.nome) || f.metodo === 'interno') && !fs.has(f.id));
+  if (nuovi.length) { nuovi.forEach(f => fs.add(f.id)); await setMeta('settings', { ...(S.meta.settings || {}), fornSoloUscite: [...fs] }); await togliAutoSoloUscite(); }
+  await setMeta('soloUsciteNostra', todayISO());
+  if (nuovi.length) toast(`Solo uscite per i prodotti di «${nuovi.map(f => f.nome).join('», «')}»: niente arrivi, al banco si scrive la quantità`, { ms: 7000 });
+  return nuovi.length > 0;
+}
 /* sfuso: quanto può restare in un sacco (polvere, pesate) prima di considerarlo finito */
 function tolleranza(p) { return isSfuso(p) && p.pesoSacco ? r3(p.pesoSacco * settings().avanzoSfuso / 100) : 0; }
 
@@ -337,7 +351,7 @@ const prodotto = id => S.prodotti.get(id);
 const fornitore = id => S.fornitori.get(id);
 const nomeForn = id => { const f = fornitore(id); return f ? f.nome : 'Senza fornitore'; };
 function byCode(code) { const id = codeIndex.get(String(code)); return id ? prodotto(id) : null; }
-const lottiAttivi = () => { const su = catSoloUscite(); return [...S.lotti.values()].filter(l => l.stato === 'attivo' && !(su.size && soloUscite(S.prodotti.get(l.prodottoId), su))); };
+const lottiAttivi = () => { const r = regolaSU(), c = r.cat.size || r.forn.size; return [...S.lotti.values()].filter(l => l.stato === 'attivo' && !(c && soloUscite(S.prodotti.get(l.prodottoId), r))); };
 function soglie(tipo) { const s = settings().soglie; return s[tipo] || s.preferibilmente; }
 function fascia(l) {
   if (!l.scadenza) return 'nessuna';
@@ -725,7 +739,7 @@ function schedaRapida(p) {
   const u = ultimoOrdine(p.id);
   openModal(`${mhead(p.nome)}
     <div class="faint">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}${p.sfuso ? ' · sfuso' + (sfusoPezzi(p) ? ' a pezzo' : '') + (isSfuso(p) && p.pesoSacco ? `, ${nomeSacco(p, 2)} da ${fmtSf(p, p.pesoSacco)}` : '') : ''}</div>
-    ${soloUscite(p) ? `<div class="notice green"><span><b>Solo uscite</b>: per «${esc(catDi(p))}» non si registrano arrivi e inventario. Al banco si scansionano le vendite.</span></div>`
+    ${soloUscite(p) ? `<div class="notice green"><span><b>Solo uscite</b>: per ${esc(perSoloUscite(p))} non si registrano arrivi e inventario. Al banco si scansionano le vendite.</span></div>`
       : lotti.length ? `<div class="list">${lotti.map(l => rigaConfezione(l)).join('')}</div>` : '<div class="faint">Nessuna confezione registrata in negozio.</div>'}
     ${u ? `<div class="faint">Ultimo ordine: ${fmtOrd(p, u.qta)} il ${fmtDate(u.data)}</div>` : ''}
     <div class="stack">
@@ -1158,7 +1172,7 @@ routes.carico = arg => {
   }).join('')}</div>` : `<div class="empty">Ancora niente oggi.</div>`;
   return { title: inv ? 'Inventario' : 'Arrivo merce', html, back: '#home', tab: 'carico', onScan: caricoScan };
 };
-function avvisoSoloUscite(p) { toast(`${p.nome}: per «${catDi(p)}» non si registrano arrivi e inventario. Al banco si scansionano solo le vendite.`, { err: true, ms: 6000 }); }
+function avvisoSoloUscite(p) { toast(`${p.nome}: per ${perSoloUscite(p)} non si registrano arrivi e inventario. Al banco si scansionano solo le vendite.`, { err: true, ms: 6000 }); }
 async function caricoScan(code) {
   const p = byCode(code);
   if (p && soloUscite(p) && (!CS.pid || p.id !== CS.pid)) { avvisoSoloUscite(p); return; }
@@ -1698,7 +1712,7 @@ function infoLotti(v) {
   return sc.length ? `dal${fem ? 'la' : ''} ${c} che scade ${fmtDate(sc[0])}` : `da ${fem ? 'una' : 'un'} ${c} senza scadenza`;
 }
 function cartaUltima(v) {
-  const qtaCtl = `<div class="qta" role="group" aria-label="Quantità"><button type="button" data-act="banco-qta" data-d="-1" data-id="${esc(v.id)}" aria-label="Togli un pezzo" ${v.qta <= 1 ? 'disabled' : ''}>−</button><b>${fmtNum(v.qta)}</b><button type="button" data-act="banco-qta" data-d="1" data-id="${esc(v.id)}" aria-label="Aggiungi un pezzo">+</button></div>`;
+  const qtaCtl = `<div class="qta" role="group" aria-label="Quantità"><button type="button" data-act="banco-qta" data-d="-1" data-id="${esc(v.id)}" aria-label="Togli un pezzo" ${v.qta <= 1 ? 'disabled' : ''}>−</button><button type="button" class="qta-n" data-act="banco-qta-scrivi" data-id="${esc(v.id)}" aria-label="Scrivi quanti">${fmtNum(v.qta)}</button><button type="button" data-act="banco-qta" data-d="1" data-id="${esc(v.id)}" aria-label="Aggiungi un pezzo">+</button></div>`;
   if (!v.prodottoId) {
     return `<section class="vcard sconosciuto" aria-label="Codice non riconosciuto">
       <div class="lab"><span>Codice non riconosciuto</span><time>${fmtOra(v.creato)}</time></div>
@@ -1715,7 +1729,7 @@ function cartaUltima(v) {
   return `<section class="vcard ${reso ? 'reso' : ''} ${sf ? 'peso' : ''}" aria-label="Ultima registrazione">
     <div class="lab"><span>${reso ? 'Reso del cliente' : sf ? (lt ? 'Venduto alla spina' : 'Venduto a peso') : 'Venduto'}</span><time>${fmtOra(v.creato)}</time></div>
     <div class="nome">${esc(nomeVendita(v))}</div>
-    <div class="info">${[infoLotti(v), 'in negozio ' + fq(p, giacenza(v.prodottoId))].filter(Boolean).join(' · ')}</div>
+    <div class="info">${soloUscite(p) ? 'Solo uscite' : [infoLotti(v), 'in negozio ' + fq(p, giacenza(v.prodottoId))].filter(Boolean).join(' · ')}</div>
     ${manca}
     <div class="bottom"><div class="tot">${imp == null ? '<small>Prezzo non impostato</small>' : fmtEuro(imp)}${sotto}</div>${destra}</div></section>`;
 }
@@ -2068,7 +2082,7 @@ async function controlloScorte({ avviso = true } = {}) {
 }
 /* «solo uscite»: le righe messe da sole in Da ordinare per questi prodotti si tolgono (quelle scritte a mano restano) */
 async function togliAutoSoloUscite() {
-  const su = catSoloUscite(); if (!su.size) return 0;
+  const su = regolaSU(); if (!su.cat.size && !su.forn.size) return 0;
   let n = 0;
   for (const o of [...S.ordini.values()].filter(o => o.stato === 'aperto')) {
     const righe = o.righe.filter(r => !(r.auto && soloUscite(prodotto(r.prodottoId), su)));
@@ -2364,7 +2378,7 @@ routes.prodotto = id => {
   const forn = [...S.fornitori.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
   const calc = prezzoCalcolato(p);
   const html = `<div><h2 style="margin:0" id="pTitolo">${esc(p.nome)}</h2><div class="faint" id="pSotto">${esc(nomeForn(p.fornitoreId))}${p.formato ? ' · ' + esc(p.formato) : ''}</div></div>
-    ${soloUscite(p) ? `<div class="notice green" id="pSoloUscite"><span><b>Solo uscite</b>: per «${esc(catDi(p))}» non si registrano arrivi e inventario. Al banco si scansionano le vendite con le quantità. <a href="#impostazioni">Cambia in Impostazioni</a></span></div>`
+    ${soloUscite(p) ? `<div class="notice green" id="pSoloUscite"><span><b>Solo uscite</b>: per ${esc(perSoloUscite(p))} non si registrano arrivi e inventario. Al banco si scansionano le vendite con le quantità. <a href="#impostazioni">Cambia in Impostazioni</a></span></div>`
       : `<div class="section-title"><h2>In negozio</h2><span class="count" id="pGiac">${fq(p, giacenza(p.id))}</span></div>
     <div class="stack" id="pLotti">${lottiScheda(p)}</div>
     ${cardCarica(p)}`}
@@ -2582,6 +2596,7 @@ routes.fornitore = id => {
       <label class="field">Sito per gli ordini<input type="url" id="fSito" value="${esc(f.sito)}" placeholder="es. www.fornitore.it"></label>
       <label class="field">Note <span class="hint">giorni di consegna, ordine minimo, trasporto</span><textarea id="fNote" style="min-height:80px">${esc(f.note)}</textarea></label>
       <div class="faint small salva-stato" aria-live="polite">Ogni modifica si salva da sola.</div></div>
+    <div class="card tight"><label class="check"><input type="checkbox" data-act="forn-solo-uscite" data-f="${esc(f.id)}" ${regolaSU().forn.has(f.id) ? 'checked' : ''}> <span><b>Solo uscite</b> <span class="faint small">(es. nostra produzione)</span><br><span class="faint small">I suoi prodotti non si mettono in Arrivi né in Inventario: al banco si scansionano e si scrive la quantità.</span></span></label></div>
     ${cardEtiFornitore(f)}
     ${cardIvaFornitore(f)}
     <a class="btn block" href="#catalogo/${encodeURIComponent(f.id)}">Vedi i ${n} prodotti</a>
@@ -4559,9 +4574,13 @@ routes.impostazioni = () => {
       <div class="faint small">Vale per tutti i prodotti a pezzi; nella scheda di un prodotto si può scrivere un numero diverso. 0 = mai da solo.</div>
       <div class="faint small salva-stato" aria-live="polite">Ogni modifica si salva da sola.</div></div>
     <div class="card"><h2>Solo uscite</h2>
-      <p class="muted small">Per queste categorie non si registrano arrivi e inventario: al banco si scansionano solo le vendite con le quantità. Niente scadenze, niente «non risultava in negozio», niente ordini automatici.</p>
+      <p class="muted small">Frutta e verdura e i prodotti di nostra produzione: per queste categorie non si registrano arrivi e inventario, al banco si scansionano e si scrive la quantità. Niente scadenze, niente «non risultava in negozio», niente ordini automatici.</p>
       <div class="stack" id="sSoloUscite">${(() => { const su = catSoloUscite(), tutte = [...new Set([...categorieUsate(), ...su])].filter(c => c && c !== SENZA_CAT).sort((a, b) => (su.has(b) - su.has(a)) || a.localeCompare(b, 'it'));
-        return tutte.map(c => `<label class="check"><input type="checkbox" data-act="cat-solo-uscite" data-c="${esc(c)}" ${su.has(c) ? 'checked' : ''}> ${esc(c)}</label>`).join(''); })()}</div></div>
+        return tutte.map(c => `<label class="check"><input type="checkbox" data-act="cat-solo-uscite" data-c="${esc(c)}" ${su.has(c) ? 'checked' : ''}> ${esc(c)}</label>`).join(''); })()}</div>
+      <h3 style="margin:12px 0 0">Fornitori</h3>
+      <div class="stack">${(() => { const fs = regolaSU().forn, lista = [...S.fornitori.values()].filter(f => fs.has(f.id)).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+        return lista.map(f => `<label class="check"><input type="checkbox" data-act="forn-solo-uscite" data-f="${esc(f.id)}" checked> ${esc(f.nome)}</label>`).join('') || '<div class="faint small">Nessuno.</div>'; })()}
+        <div class="faint small">Per aggiungere un fornitore (es. Nostra produzione): nella sua scheda spunta «Solo uscite».</div></div></div>
     <div class="card" data-auto><h2>Sfuso</h2>
       <p class="muted small">Quando al sacco più vecchio resta meno di questa parte (polvere, pesate), l'app lo considera finito e passa al sacco dopo.</p>
       <label class="field">Avanzo del sacco, in %<input type="number" inputmode="numeric" min="0" max="30" id="sAvanzo" value="${s.avanzoSfuso}"></label>
@@ -4714,6 +4733,31 @@ A['cru-periodo'] = el => { CRU = VC.periodo = el.dataset.f; render(); };
 A['cassa-nuova'] = el => cassaModal(null, el.dataset.m);
 A['vc-periodo'] = el => { VC.periodo = CRU = el.dataset.f; render(); };
 A['vc-serie'] = el => { VC.serie = el.dataset.s; render(); };
+/* toccando il numero dei pezzi si scrive quanti (dalla 1.33.1), invece di tanti + */
+A['banco-qta-scrivi'] = el => {
+  const v = S.vendite.get(el.dataset.id); if (!v) return;
+  let q = '';
+  const draw = b => { b.querySelector('#bqVal').textContent = q || String(v.qta); b.querySelector('#bqOk').disabled = !(parseInt(q, 10) > 0); };
+  openModal(`${mhead('Quanti pezzi?')}
+    <div class="peso-prod"><b>${esc(nomeVendita(v))}</b></div>
+    <div class="peso-display" aria-live="polite"><span id="bqVal">${fmtNum(v.qta)}</span><small>pz</small></div>
+    <div class="keypad">${['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(k => `<button type="button" data-k="${k}">${k}</button>`).join('')}<button type="button" data-k="back" aria-label="Cancella">⌫</button><button type="button" data-k="0">0</button><button type="button" class="ok" id="bqOk" disabled>OK</button></div>`, b => {
+    b.querySelector('.keypad').addEventListener('click', async e => {
+      const k = e.target.closest('[data-k]');
+      if (k) { const x = k.dataset.k; q = x === 'back' ? q.slice(0, -1) : (q + x).replace(/^0+/, '').slice(0, 4); draw(b); return; }
+      if (e.target.closest('#bqOk')) { const n = parseInt(q, 10); if (!(n > 0)) return; closeModal(); const w = S.vendite.get(v.id); if (w && n !== w.qta) await inCoda(() => cambiaQta(w.id, n - w.qta)); }
+    });
+    draw(b);
+  });
+};
+A['forn-solo-uscite'] = async el => {
+  const id = el.dataset.f, on = el.checked, fs = regolaSU().forn, f = fornitore(id);
+  if (on) fs.add(id); else fs.delete(id);
+  await setMeta('settings', { ...(S.meta.settings || {}), fornSoloUscite: [...fs] });
+  if (on) await togliAutoSoloUscite();
+  aggiornaBadge();
+  toast(on ? `${f ? f.nome : ''}: solo uscite, niente arrivi e inventario` : `${f ? f.nome : ''}: di nuovo con arrivi e inventario`);
+};
 A['cat-solo-uscite'] = async el => {
   const c = el.dataset.c, on = el.checked, su = catSoloUscite();
   if (on) su.add(c); else su.delete(c);
@@ -5429,6 +5473,7 @@ async function init() {
     categorieDalCatalogo().then(aggiorna).catch(e => console.error(e))
       .then(() => nomiMaiuscoli()).then(aggiorna).catch(e => console.error(e))
       .then(() => iveMancanti()).then(aggiorna).catch(e => console.error(e))
+      .then(() => soloUsciteNostra()).then(aggiorna).catch(e => console.error(e))
       .finally(() => controlloScorte().catch(e => console.error(e)));
   }, 1200);
   if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => { persistito = p; if (!p) navigator.storage.persist().then(v => { persistito = v; }); });

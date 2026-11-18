@@ -370,7 +370,8 @@ function scriviTabella_(sh, titolo, sotto, testa, righe, opz) {
 // «solo uscite» (dall'app 1.33.0): le categorie senza magazzino (di base Frutta e verdura) non hanno confezioni né scadenze
 function attivi_(s) {
   var su = s.settings && s.settings.catSoloUscite instanceof Array ? s.settings.catSoloUscite : ['Frutta e verdura'];
-  return s.lotti.filter(function (l) { var p = s.prodotti[l.prodottoId]; return l.stato === 'attivo' && l.quantita > 0 && !(p && su.indexOf(catDi_(p)) >= 0); });
+  var fs = s.settings && s.settings.fornSoloUscite instanceof Array ? s.settings.fornSoloUscite : [];   // es. «Nostra produzione»
+  return s.lotti.filter(function (l) { var p = s.prodotti[l.prodottoId]; return l.stato === 'attivo' && l.quantita > 0 && !(p && (su.indexOf(catDi_(p)) >= 0 || fs.indexOf(p.fornitoreId) >= 0)); });
 }
 function data_(iso) { return iso ? new Date(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10), 12) : ''; }
 function magazzino_(s) {
