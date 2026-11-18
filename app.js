@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.31.0';
+const VERSIONE = '1.32.0';
 
 /* =========================================================
    Utilità
@@ -2718,7 +2718,23 @@ window.addEventListener('afterprint', () => { const st = document.getElementById
 
 /* finestra di stampa: anteprima e da quale etichetta del foglio partire.
    L'app ricorda dove si è fermata, così un foglio iniziato si rimette nella stampante e si continua. */
-const ETI_FOGLIO = 24, MAX_COPIE = 240;   // al massimo 10 fogli alla volta
+const ETI_FOGLIO = 24, ETI_COLONNE = 3, MAX_COPIE = 240;   // al massimo 10 fogli alla volta
+/* sul foglio (dalla 1.32.0) le etichette restano divise per fornitore: tutte sullo stesso foglio, ma ogni fornitore
+   comincia su una riga nuova (al massimo 2 caselle vuote tra un fornitore e l'altro). Celle: null = vuota */
+function perFornitore(prodotti) {
+  const g = new Map();
+  for (const p of prodotti) { const f = nomeFornEti(fornEti(p)); if (!g.has(f)) g.set(f, []); g.get(f).push(p); }
+  return [...g.values()].flat();
+}
+function disponiEti(prodotti, start) {
+  const celle = Array(start).fill(null); let prima = null;
+  for (const p of perFornitore(prodotti)) {
+    const f = nomeFornEti(fornEti(p));
+    if (prima !== null && f !== prima) while (celle.length % ETI_COLONNE) celle.push(null);
+    prima = f; celle.push(p);
+  }
+  return celle;
+}
 /* FOGLI DA STAMPARE (dalla 1.30.0): le etichette preparate (per fornitore, dalla scheda, da un arrivo) restano salvate,
    anche sull'altro telefono, finché non si stampano tutte insieme da «Fogli da stampare» (#etichette/coda).
    S.meta.etiCoda = { righe: [{ id, n }], stampate: { id: n } (l'ultima stampa, da confermare), quando } */
@@ -2736,7 +2752,9 @@ async function mettiInCoda(copie) {
 }
 const righeCoda = () => etiCoda().righe.map(r => ({ ...r, p: prodotto(r.id), f: nomeFornEti(fornEti(prodotto(r.id))) }))
   .sort((a, b) => (a.f === 'Senza fornitore') - (b.f === 'Senza fornitore') || a.f.localeCompare(b.f, 'it') || (!!b.p.sfuso - !!a.p.sfuso) || a.p.nome.localeCompare(b.p.nome, 'it'));
-const testoFogli = n => { const k = Math.ceil(n / ETI_FOGLIO); return `${testoScelte(n)} · ${k === 1 ? '1 foglio' : k + ' fogli'}`; };
+/* quanti fogli per i fogli da stampare: con il foglio iniziato e le righe nuove tra un fornitore e l'altro */
+const fogliCoda = () => Math.max(1, Math.ceil(disponiEti(righeCoda().flatMap(r => Array(r.n).fill(r.p)), Math.min(ETI_FOGLIO - 1, Math.max(0, parseInt(S.meta.etiPosizione, 10) || 0))).length / ETI_FOGLIO));
+const testoFogli = n => { const k = n === nCoda() ? fogliCoda() : Math.ceil(n / ETI_FOGLIO); return `${testoScelte(n)} · ${k === 1 ? '1 foglio' : k + ' fogli'}`; };
 function toastCoda(n) { toast(`${testoScelte(n)} nei fogli da stampare`, { action: { label: 'Vedi', run: () => vai('#etichette/coda') } }); }
 function paginaCoda() {
   const c = etiCoda(), righe = righeCoda(), n = righe.reduce((t, r) => t + r.n, 0);
@@ -2774,8 +2792,9 @@ function stampaModal(ids, { titolo = null, copie = null, start: inizio = null, d
   const uno = ids.length === 1, p1 = prodotto(ids[0]), quante = id => Math.max(1, Math.min(MAX_COPIE, Math.round((copie && copie[id]) || 1)));
   let q = quante(ids[0]), n;
   const lista = () => uno ? Array(q).fill(ids[0]) : ids.flatMap(id => Array(quante(id)).fill(id));
-  let start = inizio != null ? inizio : Math.min(ETI_FOGLIO - 1, Math.max(0, parseInt(S.meta.etiPosizione, 10) || 0));
-  const vuote = () => (ETI_FOGLIO - (start + n) % ETI_FOGLIO) % ETI_FOGLIO;
+  let start = inizio != null ? inizio : Math.min(ETI_FOGLIO - 1, Math.max(0, parseInt(S.meta.etiPosizione, 10) || 0)), tot = 0;
+  const vuote = () => (ETI_FOGLIO - tot % ETI_FOGLIO) % ETI_FOGLIO;
+  const nForn = () => new Set(ids.map(id => nomeFornEti(fornEti(prodotto(id))))).size;
   const copieOra = () => uno ? { [ids[0]]: q } : Object.fromEntries(ids.map(id => [id, quante(id)]));
   const riempi = b => {   // l'elenco per riempire le caselle vuote
     const box = b.querySelector('#spAltre'), cerca = norm(box.querySelector('#spCerca').value || ''), scelte = new Set($$('[data-agg]:checked', box).map(x => x.dataset.agg));
@@ -2790,13 +2809,15 @@ function stampaModal(ids, { titolo = null, copie = null, start: inizio = null, d
   };
   const draw = b => {
     n = lista().length;
+    const d = disponiEti(lista().map(prodotto).filter(Boolean), start); tot = d.length;
+    let k = 0;
     b.querySelector('#spGrid').innerHTML = Array.from({ length: ETI_FOGLIO }, (_, i) => {
-      const cls = i < start ? 'usata' : i < start + n ? 'nuova' : '';
-      return `<button type="button" data-pos="${i}" class="${cls}" aria-label="Parti dall'etichetta ${i + 1}">${cls === 'nuova' ? i - start + 1 : ''}</button>`;
+      const cls = i < start ? 'usata' : d[i] ? 'nuova' : '';
+      return `<button type="button" data-pos="${i}" class="${cls}" aria-label="Parti dall'etichetta ${i + 1}">${cls === 'nuova' ? ++k : ''}</button>`;
     }).join('');
-    const oltre = start + n > ETI_FOGLIO, fogli = Math.ceil((start + n) / ETI_FOGLIO);
+    const oltre = tot > ETI_FOGLIO, fogli = Math.ceil(tot / ETI_FOGLIO), nf = nForn();
     b.querySelector('#spInfo').innerHTML = (start === 0 ? 'Foglio nuovo: parte dalla <b>prima</b> etichetta.' : `${start === 1 ? 'La prima è già usata' : `Le prime ${start} sono già usate`}: parte dalla <b>n. ${start + 1}</b>.`)
-      + (oltre ? ` Poi continua su altri fogli (in tutto ${fogli}).` : '') + '<br><span class="faint">Tocca il foglio per cambiare.</span>';
+      + (oltre ? ` Poi continua su altri fogli (in tutto ${fogli}).` : '') + (nf > 1 ? ` <b>${nf} fornitori</b>: ognuno comincia su una riga nuova.` : '') + '<br><span class="faint">Tocca il foglio per cambiare.</span>';
     b.querySelector('[data-x=stampa]').textContent = 'Stampa ' + testoScelte(n);
     const v = vuote(), r = b.querySelector('#spRiempi');
     r.hidden = !v; if (v) r.querySelector('#spVuote').innerHTML = `Restano <b>${v}</b> caselle vuote sull'ultimo foglio.`;
@@ -2856,16 +2877,16 @@ function stampaEtichette(ids, start = 0, { daCoda = false } = {}) {
     const np = { ...p, codici: [...(p.codici || []), code] };
     codeIndex.set(code, np.id); nuovi.push(np); pronti.set(id, np);
   }
-  const lista = ids.map(id => pronti.get(id)).filter(Boolean);
+  const lista = ids.map(id => pronti.get(id)).filter(Boolean), disp = disponiEti(lista, start);
   if (nuovi.length) setMeta('ultimoCodiceInterno', n);
   saveMany('prodotti', [...pronti.values()].map(p => ({ ...p, etiStampata: todayISO() })));   // nuovi codici e data dell'ultima stampa
-  setMeta('etiPosizione', (start + lista.length) % ETI_FOGLIO);
+  setMeta('etiPosizione', disp.length % ETI_FOGLIO);
   if (daCoda) {   // si chiede dopo se sono venute bene: solo allora escono dai fogli da stampare
     const c = etiCoda(), quante = new Map(c.righe.map(r => [r.id, r.n])), st = {};
     for (const p of lista) if (quante.has(p.id) && (st[p.id] || 0) < quante.get(p.id)) st[p.id] = (st[p.id] || 0) + 1;
     setMeta('etiCoda', { ...c, stampate: st, quando: Date.now() });
   }
-  const celle = [...Array(start).fill('<div class="eti"></div>'), ...lista.map(p => htmlEtichetta(p))];
+  const celle = disp.map(p => p ? htmlEtichetta(p) : '<div class="eti"></div>');
   const fogli = [];
   for (let i = 0; i < celle.length; i += ETI_FOGLIO) fogli.push(`<div class="foglio">${celle.slice(i, i + ETI_FOGLIO).join('')}</div>`);
   let st = document.getElementById('stampa');
