@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.33.1';
+const VERSIONE = '1.34.0';
 
 /* =========================================================
    Utilità
@@ -580,6 +580,12 @@ function onScan(code) {
   $('#toast').hidden = true;
   ultimoCodice = code;
   beep();
+  if (codiceTessera(code) && current.name !== 'impostazioni') {   // tessera dell'app clienti (dalla 1.34.0): vale solo al Banco
+    if (current.name !== 'banco') { toast('È una tessera cliente: si scansiona al Banco, in Vendita'); return; }
+    if (modal.open && modalScan && modalScan.accettaTessera) { modalScan(code); return; }
+    if (modal.open) closeModal();
+    bancoScan(code); return;
+  }
   if (modal.open && modalScan) { modalScan(code); return; }
   if (modal.open) closeModal();
   if (current.onScan) { current.onScan(code); return; }
@@ -639,6 +645,7 @@ function pickerModal({ title, intro = '', code = null, onPick, q0 = '', fornitor
   }, { onScan: c => { const p = byCode(c); closeModal(); if (p) onPick(p); else collegaCodice(c, onPick); } });
 }
 function collegaCodice(code, onPick) {
+  if (codiceTessera(code)) { toast('È una tessera cliente: non si collega a un prodotto', { err: true }); return; }
   pickerModal({
     title: 'Codice nuovo', code, onPick,
     intro: `<div class="notice"><span>Il codice <b>${esc(code)}</b> non è ancora collegato a un prodotto. Cerca il prodotto qui sotto: la prossima volta lo riconosco da solo.</span></div>`
@@ -1512,22 +1519,22 @@ async function chiudiAvanzi(pid, tol, fefo = false) {
   if (chiusi.length) await saveMany('lotti', chiusi);
 }
 async function vendiPeso(p, kg, { origine = 'scansione' } = {}) {
-  const ora = Date.now(), r = await preleva(p.id, kg);
-  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta: r3(kg), prezzo: prezzoVendita(p), sfuso: true, prelievi: r.prelievi, mancanti: r.mancanti, origine });
+  const ora = Date.now(), sp = spesaPerVendita(), r = await preleva(p.id, kg);
+  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta: r3(kg), prezzo: prezzoVendita(p), sfuso: true, prelievi: r.prelievi, mancanti: r.mancanti, origine, ...(sp ? { spesa: sp } : {}) });
   render();
 }
 
 async function vendi(p, { origine = 'scansione' } = {}) {
-  const u = ultimaRiga(), ora = Date.now();
-  if (u && u.tipo === 'vendita' && u.prodottoId === p.id && ora - (u.aggiornato || u.creato) < RAGGRUPPA_MS) return cambiaQta(u.id, 1);
+  const u = ultimaRiga(), ora = Date.now(), sp = spesaPerVendita();
+  if (u && u.tipo === 'vendita' && u.prodottoId === p.id && (u.spesa || null) === sp && ora - (u.aggiornato || u.creato) < RAGGRUPPA_MS) return cambiaQta(u.id, 1);
   const r = await preleva(p.id, 1);
-  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta: 1, prezzo: prezzoVendita(p), prelievi: r.prelievi, mancanti: r.mancanti, origine });
+  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta: 1, prezzo: prezzoVendita(p), prelievi: r.prelievi, mancanti: r.mancanti, origine, ...(sp ? { spesa: sp } : {}) });
   render();
 }
 async function vendiSconosciuto(code) {
-  const u = ultimaRiga(), ora = Date.now();
-  if (u && u.tipo === 'vendita' && !u.prodottoId && u.codice === code && ora - (u.aggiornato || u.creato) < RAGGRUPPA_MS) return cambiaQta(u.id, 1);
-  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: null, codice: code, qta: 1, prezzo: null, prelievi: [], mancanti: 0, origine: 'scansione' });
+  const u = ultimaRiga(), ora = Date.now(), sp = spesaPerVendita();
+  if (u && u.tipo === 'vendita' && !u.prodottoId && u.codice === code && (u.spesa || null) === sp && ora - (u.aggiornato || u.creato) < RAGGRUPPA_MS) return cambiaQta(u.id, 1);
+  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: null, codice: code, qta: 1, prezzo: null, prelievi: [], mancanti: 0, origine: 'scansione', ...(sp ? { spesa: sp } : {}) });
   render();
 }
 async function cambiaQta(id, delta) {
@@ -1631,7 +1638,10 @@ function scadeModo() {
   if (current.name === 'banco') { render(); toast('Nessuna scansione da un minuto: di nuovo in Vendita'); }
 }
 function bancoScan(code) {
+  const tess = codiceTessera(code);
+  if (tess) return inCoda(() => apriSpesa(tess));
   return inCoda(async () => {
+    if (S.meta.spesaCliente && Date.now() - S.meta.spesaCliente.ultimo >= SPESA_MS) await chiudiSpesa('tempo');
     const p = byCode(code), modo = prendiModo();
     if (modo === 'reso') {
       if (p) { if (isSfuso(p)) resoPeso(p); else await rendi(p); }
@@ -1694,10 +1704,10 @@ function pesoModal(p, { titolo = null, ok = 'Aggiungi', iniziale = 0, perCucina 
     draw(b);
   }, {
     // nuova scansione con la finestra aperta: si conferma il peso scritto e si passa al prodotto dopo
-    onScan: code => {
+    onScan: Object.assign(code => {
       if (!grammi()) { toast(`Scrivi prima ${lt ? 'i ml' : 'il peso'} di ${p.nome}`, { err: true }); return; }
       conferma(); if (current.onScan) current.onScan(code);
-    }
+    }, { accettaTessera: true })
   });
 }
 
@@ -1750,6 +1760,7 @@ routes.banco = () => {
   const vend = BANCO.modo === 'vendita', u = righe[0];
   let html = `<div class="segmented banco-modi">${MODI_BANCO.map(([k, l]) => `<button type="button" data-act="banco-modo" data-m="${k}" class="${BANCO.modo === k ? 'on ' + k : ''}" aria-pressed="${BANCO.modo === k}">${l}</button>`).join('')}</div>`;
   if (!vend) html += `<div class="notice ${BANCO.modo === 'reso' ? 'blue' : 'red'}"><span class="spacer">${BANCO.modo === 'reso' ? '<b>Reso:</b> il prodotto che scansioni torna in negozio.' : '<b>Spreco:</b> il prodotto che scansioni esce dal negozio senza essere venduto.'} Dopo si torna in Vendita.</span><button class="btn small" type="button" data-act="banco-modo" data-m="vendita">Annulla</button></div>`;
+  if (vend) html += cartaSpesa();
   if (vend && u) html += cartaUltima(u);
   else html += scanbox(BANCO.modo === 'reso' ? 'Scansiona il prodotto reso' : BANCO.modo === 'spreco' ? 'Scansiona il prodotto da togliere' : 'Scansiona il prodotto venduto',
     vend ? 'Battilo in cassa come sempre: qui il magazzino scende da solo.' : 'Se non ha codice, cercalo per nome.', 'banco-senza');
@@ -4404,6 +4415,7 @@ async function giro() {
       SYNC.stato = 'ok'; SYNC.msg = ''; SYNC.ultimo = Date.now();
       if (n || SYNC.ridisegna) aggiornaVista();
     } while (SYNC.ancora && ++volte < 3);
+    inviaSpeseClienti();
   } catch (e) {
     SYNC.stato = e.accesso ? 'accesso' : e instanceof TypeError ? 'offline' : 'errore';
     SYNC.msg = e.message;
@@ -4561,6 +4573,7 @@ routes.impostazioni = () => {
     ${cardSync()}
     ${cardNotifiche()}
     ${cardFoglio()}
+    ${cardTessere()}
     <div class="card"><h2>Catalogo</h2>
       <dl class="kv"><dt>Prodotti</dt><dd>${S.prodotti.size}</dd><dt>Fornitori</dt><dd>${S.fornitori.size}</dd><dt>Con codice a barre</dt><dd>${[...S.prodotti.values()].filter(p => (p.codici || []).length).length}</dd><dt>Confezioni in negozio</dt><dd>${lottiAttivi().length}</dd></dl>
       <button class="btn block" type="button" data-act="import-catalogo">Carica catalogo dai listini</button>
@@ -4717,6 +4730,167 @@ async function rifaiUltimo() {
    Azioni (pulsanti)
    ========================================================= */
 const A = {};
+
+/* =========================================================
+   TESSERE CLIENTI (dalla 1.34.0): l'app «La Spesa Sfusa per te»
+   - al Banco, in Vendita, la tessera (LSS + 8 caratteri, QR o codice a barre) apre la spesa del cliente
+   - le vendite scansionate dopo hanno il campo `spesa`; la spesa si chiude con «Fine spesa»,
+     con un'altra tessera o dopo 5 minuti senza scansioni
+   - alla chiusura le righe (importo, «Fatto in bottega», scadenza della confezione, pane, dolce del mese,
+     prodotto della settimana) vanno su Firebase in clienti/{tessera}/spese/{id}; i punti li calcola punti.js,
+     lo stesso file dell'app clienti
+   - le spese da mandare restano sul dispositivo (meta speseClienti) finché Firebase non le ha prese
+   - i clienti leggono solo la loro scheda: il magazzino («dati») resta solo del negozio (regole di Firestore)
+   ========================================================= */
+const SPESA_MS = 5 * 60 * 1000;
+const codiceTessera = c => { const x = String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); return /^LSS[A-Z0-9]{8}$/.test(x) ? x : null; };
+const leggibileTessera = c => c.replace(/^LSS(.{4})(.{4})$/, 'LSS $1 $2');
+const confTessere = () => S.meta.settings || {};
+function eBottega(p) { const f = p && S.fornitori.get(p.fornitoreId); return !!f && (RE_NOSTRA.test(f.nome || '') || f.metodo === 'interno'); }
+/* la vendita appartiene alla spesa aperta (e la tiene viva altri 5 minuti) */
+function spesaPerVendita() {
+  const s = S.meta.spesaCliente;
+  if (!s || Date.now() - s.ultimo >= SPESA_MS) return null;
+  setMeta('spesaCliente', { ...s, ultimo: Date.now() });
+  return s.id;
+}
+/* una riga della spesa come la vuole punti.js */
+function rigaPunti(v) {
+  const p = prodotto(v.prodottoId), imp = importo(v), conf = confTessere();
+  const scad = (v.prelievi || []).map(x => S.lotti.get(x.lottoId)).filter(l => l && l.scadenza).map(l => l.scadenza).sort();
+  const bott = eBottega(p);
+  const r = { nome: nomeVendita(v), importoCent: imp == null ? 0 : Math.round(imp * 100), bottega: bott, scadenza: scad[0] || null,
+    pane: bott && /\bPANE\b/i.test(p.nome || ''), dolceDelMese: !!p && p.id === (conf.dolciMese || {})[v.data.slice(0, 7)],
+    prodottoSettimana: !!p && p.id === (conf.settimanali || {})[Punti.util.lunedi(v.data)] };
+  if (imp == null) r.senzaPrezzo = true;
+  return r;
+}
+const venditeSpesa = id => [...S.vendite.values()].filter(v => v.spesa === id && v.tipo === 'vendita' && v.qta > 0).sort((a, b) => a.creato - b.creato);
+
+async function apriSpesa(codice) {
+  const prima = S.meta.spesaCliente;
+  if (prima && prima.codice === codice && Date.now() - prima.ultimo < SPESA_MS) {
+    await setMeta('spesaCliente', { ...prima, ultimo: Date.now() }); render(); toast('Spesa già aperta per questa tessera'); return;
+  }
+  if (prima) await chiudiSpesa(Date.now() - prima.ultimo >= SPESA_MS ? 'tempo' : 'nuova tessera');
+  const s = { id: uid('sc'), codice, aperta: Date.now(), ultimo: Date.now(), data: todayISO(), buono: null, scheda: null, stato: syncAttiva() ? 'carico' : 'scollegato' };
+  BANCO.modo = 'vendita'; clearTimeout(BANCO.timer);
+  await setMeta('spesaCliente', s);
+  render();
+  toast(`Tessera ${leggibileTessera(codice)}: spesa aperta`);
+  if (syncAttiva()) caricaScheda(s.id, codice);
+}
+/* la scheda del cliente: punti del mese e buoni da usare */
+async function caricaScheda(id, codice) {
+  let scheda = null, stato = 'ok';
+  try {
+    const d = await chiamaFs('/clienti/' + codice, null, 'GET');
+    const lista = d ? ((await chiamaFs('/clienti/' + codice + '/spese?pageSize=300', null, 'GET')) || {}).documents || [] : [];
+    const doc = d ? daFsObj(d.fields) : {};
+    const cliente = { iscrittoIl: doc.iscrittoIl || null, amiche: doc.amiche || [], spese: lista.map(x => daFsObj(x.fields)) };
+    const oggi = todayISO(), m = Punti.mese(cliente, oggi);
+    scheda = { nuova: !d, nelBarattolo: m.nelBarattolo, buoni: Punti.buoni(cliente, oggi).filter(b => b.stato === 'da usare') };
+  } catch (e) { stato = 'errore'; console.warn('scheda cliente', e); }
+  const s = S.meta.spesaCliente;
+  if (!s || s.id !== id) return;
+  await setMeta('spesaCliente', { ...s, scheda, stato });
+  if (current.name === 'banco') render();
+}
+async function chiudiSpesa(motivo = 'fine') {
+  const s = S.meta.spesaCliente; if (!s) return;
+  await setMeta('spesaCliente', null);
+  const vs = venditeSpesa(s.id);
+  if (!vs.length) { toast('Spesa chiusa senza prodotti: nessun punto'); if (current.name === 'banco') render(); return; }
+  const spesa = { id: s.id, data: s.data, righe: vs.map(rigaPunti), buonoUsato: s.buono || null };
+  const c = Punti.puntiSpesa(spesa);
+  await setMeta('speseClienti', [...(S.meta.speseClienti || []), { codice: s.codice, spesa: { ...spesa, punti: c.punti, totaleCent: c.totaleCent, chiusa: new Date().toISOString(), dispositivo: S.meta.syncDev || '' } }]);
+  toast(`${motivo === 'tempo' ? 'Spesa chiusa dopo 5 minuti senza scansioni' : 'Spesa chiusa'}: ${c.punti} punti alla tessera ${leggibileTessera(s.codice)}`, { ms: 6000 });
+  if (current.name === 'banco') render();
+  inviaSpeseClienti();
+}
+/* --- valori di Firestore (le schede dei clienti usano i tipi veri, non il JSON di «dati») --- */
+const fsVal = v => v === null || v === undefined ? { nullValue: null } : typeof v === 'boolean' ? { booleanValue: v }
+  : typeof v === 'number' ? (Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v }) : typeof v === 'string' ? { stringValue: v }
+  : Array.isArray(v) ? { arrayValue: { values: v.map(fsVal) } } : { mapValue: { fields: fsObj(v) } };
+const fsObj = o => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined).map(([k, v]) => [k, fsVal(v)]));
+const daFsVal = x => !x ? null : 'nullValue' in x ? null : 'booleanValue' in x ? x.booleanValue : 'integerValue' in x ? Number(x.integerValue) : 'doubleValue' in x ? x.doubleValue
+  : 'stringValue' in x ? x.stringValue : 'timestampValue' in x ? x.timestampValue : 'arrayValue' in x ? (x.arrayValue.values || []).map(daFsVal) : 'mapValue' in x ? daFsObj(x.mapValue.fields) : null;
+const daFsObj = f => Object.fromEntries(Object.entries(f || {}).map(([k, v]) => [k, daFsVal(v)]));
+const nuovoCodiceAmica = () => { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', a = new Uint32Array(5); crypto.getRandomValues(a); return 'AMI' + [...a].map(x => A[x % 32]).join(''); };
+
+let inviandoSC = false;
+async function inviaSpeseClienti() {
+  if (inviandoSC || !syncAttiva() || !(S.meta.speseClienti || []).length) return;
+  inviandoSC = true;
+  try {
+    for (const voce of [...S.meta.speseClienti]) {
+      await scriviSpesaCliente(voce);
+      await setMeta('speseClienti', (S.meta.speseClienti || []).filter(x => x.spesa.id !== voce.spesa.id));
+    }
+  } catch (e) { console.warn('spese dei clienti: riprovo al prossimo giro', e); }
+  finally { inviandoSC = false; if (current.name === 'impostazioni') render(); }
+}
+async function scriviSpesaCliente({ codice, spesa }) {
+  const base = '/clienti/' + codice;
+  let d = await chiamaFs(base, null, 'GET');
+  if (!d) {   // iscrizione fatta senza internet: la scheda la crea il negozio
+    await chiamaFs(base, { fields: fsObj({ iscrittoIl: spesa.data, codiceAmica: nuovoCodiceAmica(), creataDalNegozio: true }) }, 'PATCH');
+    d = await chiamaFs(base, null, 'GET');
+  }
+  await chiamaFs(base + '/spese/' + spesa.id, { fields: fsObj(spesa) }, 'PATCH');
+  // «Porta un'amica»: alla prima spesa di chi si è iscritto con un codice amica, 30 punti a chi l'ha invitato e 20 a lei
+  const sch = daFsObj(d && d.fields);
+  if (sch.invitatoDa && !sch.amicaPremiata) {
+    const trovati = ((await chiamaFs(':runQuery', { structuredQuery: { from: [{ collectionId: 'clienti' }], where: { fieldFilter: { field: { fieldPath: 'codiceAmica' }, op: 'EQUAL', value: { stringValue: sch.invitatoDa } } }, limit: 2 } })) || []).filter(x => x.document);
+    const am = trovati.length === 1 && !trovati[0].document.name.endsWith('/' + codice) ? trovati[0].document : null;
+    if (am) {
+      const sa = daFsObj(am.fields), lista = sa.amiche || [];
+      if (!lista.some(a => a.ruolo === 'invita' && a.codice === codice))
+        await chiamaFs('/' + am.name.split('/documents/')[1] + '?updateMask.fieldPaths=amiche', { fields: fsObj({ amiche: [...lista, { data: spesa.data, ruolo: 'invita', codice }] }) }, 'PATCH');
+    }
+    await chiamaFs(base + '?updateMask.fieldPaths=amiche&updateMask.fieldPaths=amicaPremiata', { fields: fsObj({ amiche: [...(sch.amiche || []), ...(am ? [{ data: spesa.data, ruolo: 'invitata' }] : [])], amicaPremiata: true }) }, 'PATCH');
+  }
+}
+/* la spesa aperta, in cima al Banco */
+function cartaSpesa() {
+  const s = S.meta.spesaCliente; if (!s) return '';
+  const vs = venditeSpesa(s.id), c = Punti.puntiSpesa({ data: s.data, righe: vs.map(rigaPunti), buonoUsato: s.buono });
+  const sch = s.scheda, buoni = sch ? sch.buoni : [];
+  const info = s.stato === 'carico' ? 'Leggo la scheda del cliente…' : s.stato === 'scollegato' ? 'Dispositivo non collegato: i punti partono quando lo colleghi'
+    : s.stato === 'errore' ? 'Scheda non letta (internet?): i punti si scrivono lo stesso' : sch.nuova ? 'Tessera nuova: la scheda si crea con questa spesa'
+    : `Nel barattolo ${sch.nelBarattolo} punti${buoni.length ? ` · ${buoni.length === 1 ? 'ha un buono da 5 €' : `ha ${buoni.length} buoni da 5 €`}` : ''}`;
+  const senza = c.righe.filter(r => r.senzaPrezzo).length;
+  return `<section class="card spesa-cliente" aria-label="Spesa del cliente">
+    <div class="sc-top"><div><div class="sc-lab">Spesa con la tessera</div><div class="sc-cod">${esc(leggibileTessera(s.codice))}</div></div><div class="sc-punti"><b>${c.punti}</b><span>punti</span></div></div>
+    <div class="faint small">${vs.length === 1 ? '1 riga' : vs.length + ' righe'} · ${fmtEuro(c.totaleCent / 100)}${senza ? ` · ${senza === 1 ? '1 riga' : senza + ' righe'} senza prezzo: 0 punti` : ''}</div>
+    <div class="faint small">${esc(info)}</div>
+    ${s.buono ? `<div class="notice green"><span class="spacer"><b>Buono da 5 € usato:</b> batti lo sconto in cassa. In questa spesa si tolgono 5 punti.</span><button class="btn small" type="button" data-act="spesa-buono-togli">Togli</button></div>`
+      : buoni.length ? (c.totaleCent >= Punti.REGOLE.spesaMinimaBuonoCent ? `<button class="btn block" type="button" data-act="spesa-buono">Usa il buono da 5 €</button>` : `<div class="faint small">Il buono si usa da 40 € di spesa.</div>`) : ''}
+    <button class="btn primary block" type="button" data-act="spesa-fine">Fine spesa</button></section>`;
+}
+setInterval(() => { const s = S.meta && S.meta.spesaCliente; if (s && Date.now() - s.ultimo >= SPESA_MS) inCoda(() => chiudiSpesa('tempo')); }, 15000);
+A['spesa-fine'] = () => inCoda(() => chiudiSpesa('fine'));
+A['spesa-buono'] = async () => { const s = S.meta.spesaCliente; if (!s || !s.scheda || !s.scheda.buoni.length) return; await setMeta('spesaCliente', { ...s, buono: s.scheda.buoni[0].id, ultimo: Date.now() }); render(); toast('Buono usato: batti lo sconto di 5 € in cassa'); };
+A['spesa-buono-togli'] = async () => { const s = S.meta.spesaCliente; if (!s) return; await setMeta('spesaCliente', { ...s, buono: null, ultimo: Date.now() }); render(); };
+/* Impostazioni: prodotto della settimana e dolce del mese */
+function cardTessere() {
+  const conf = confTessere(), oggi = todayISO(), lun = Punti.util.lunedi(oggi), lun2 = Punti.util.lunedi(piuGiorni(7)), mese = oggi.slice(0, 7), dopo = Punti.util.lunedi(piuGiorni(35)).slice(0, 7);
+  const nomeP = id => { const p = id && prodotto(id); return p ? esc(p.nome) : '<span class="faint">da scegliere</span>'; };
+  const riga = (et, val, act, k) => `<div class="item"><div class="main"><div class="sub">${et}</div><div class="name">${val}</div></div><button class="btn small" type="button" data-act="${act}" data-k="${k}">Scegli</button></div>`;
+  const nInvio = (S.meta.speseClienti || []).length;
+  return `<div class="card"><h2>Tessere clienti</h2>
+    <p class="muted small">Al Banco, in Vendita, la tessera dell'app «La Spesa Sfusa per te» apre la spesa del cliente: i prodotti scansionati dopo gli danno i punti. La spesa si chiude con «Fine spesa», con un'altra tessera o dopo 5 minuti senza scansioni. Danno 2 punti per euro i prodotti di «Nostra produzione»; la missione del pane vale per quelli con «pane» nel nome.</p>
+    <div class="list">${riga('Prodotto della settimana dal ' + fmtDate(lun), nomeP((conf.settimanali || {})[lun]), 'tess-sett', lun)}
+      ${riga('Prodotto della settimana dal ' + fmtDate(lun2), nomeP((conf.settimanali || {})[lun2]), 'tess-sett', lun2)}
+      ${riga('Dolce del mese di ' + MESI[+mese.slice(5) - 1], nomeP((conf.dolciMese || {})[mese]), 'tess-dolce', mese)}
+      ${dopo !== mese ? riga('Dolce del mese di ' + MESI[+dopo.slice(5) - 1], nomeP((conf.dolciMese || {})[dopo]), 'tess-dolce', dopo) : ''}</div>
+    <div class="faint small">${nInvio ? `Spese dei clienti da mandare a Firebase: ${nInvio} (partono appena c'è internet)` : 'Tutte le spese dei clienti sono su Firebase.'}</div></div>`;
+}
+A['tess-sett'] = el => pickerModal({ title: 'Prodotto della settimana', intro: `<div class="faint small">Dal ${fmtDate(el.dataset.k)}: chi lo compra in 4 settimane del mese prende 20 punti.</div>`,
+  onPick: async p => { const st = S.meta.settings || {}; await setMeta('settings', { ...st, settimanali: { ...(st.settimanali || {}), [el.dataset.k]: p.id } }); render(); toast('Prodotto della settimana: ' + p.nome); } });
+A['tess-dolce'] = el => pickerModal({ title: 'Dolce del mese', intro: '<div class="faint small">Chi lo compra nel mese prende 10 punti.</div>',
+  onPick: async p => { const st = S.meta.settings || {}; await setMeta('settings', { ...st, dolciMese: { ...(st.dolciMese || {}), [el.dataset.k]: p.id } }); render(); toast('Dolce del mese: ' + p.nome); } });
+
 A['annulla-ultimo'] = () => annullaUltimo().catch(e => toast('Non riesco ad annullare: ' + e.message, { err: true }));
 /* fatture */
 A['fatture-carica'] = () => { const i = $('#fileInput'); i.accept = '.xml,.p7m,.zip,application/xml,text/xml,application/zip,application/pkcs7-mime'; i.multiple = true; fileMode = 'fatture'; i.click(); };
