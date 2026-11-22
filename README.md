@@ -58,4 +58,4 @@ App per il negozio: vendita al banco, scadenze e ordini, funziona anche senza in
 - Collegamento del foglio (dalla 1.20.3): la password la chiede il foglio stesso (finestra di Google, non più una pagina HTML: con il codice breve la pagina non riceveva risposta). Se i dati sono tanti, il giro si ferma prima dei 6 minuti di Google, salva il punto in «sospeso» e riparte da solo dopo un minuto; i listini già scritti non si riscrivono.
 - Sincronizzazione (dalla 1.20.0): prima di scaricare, l'app chiede con una lettura sola se c'è qualcosa di nuovo; prima, dopo un invio grosso, rileggeva a ogni giro tutti i documenti degli ultimi 15 secondi.
 - Backup: dall'app, pulsante "Fai backup", poi salva il file su Drive. Dalla versione 1.3.0 il backup contiene anche le vendite.
-- 
+- Pubblicazione (dal 22/11/2026): il sito si pubblica con GitHub Pages dal ramo `main`, cartella principale; ogni modifica su `main` va online da sola. Il ramo `gh-pages` (fermo alla 1.33.1 del 18/11) non si usa più.
