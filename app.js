@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.35.0';
+const VERSIONE = '1.35.1';
 
 /* =========================================================
    Utilità
@@ -1764,14 +1764,17 @@ routes.banco = () => {
   const vend = BANCO.modo === 'vendita', u = righe[0];
   let html = `<div class="segmented banco-modi">${MODI_BANCO.map(([k, l]) => `<button type="button" data-act="banco-modo" data-m="${k}" class="${BANCO.modo === k ? 'on ' + k : ''}" aria-pressed="${BANCO.modo === k}">${l}</button>`).join('')}</div>`;
   if (!vend) html += `<div class="notice ${BANCO.modo === 'reso' ? 'blue' : 'red'}"><span class="spacer">${BANCO.modo === 'reso' ? '<b>Reso:</b> il prodotto che scansioni torna in negozio.' : '<b>Spreco:</b> il prodotto che scansioni esce dal negozio senza essere venduto.'} Dopo si torna in Vendita.</span><button class="btn small" type="button" data-act="banco-modo" data-m="vendita">Annulla</button></div>`;
+  // l'ultima riga è di una spesa con la tessera già chiusa: la spesa resta intera (dalla 1.35.1)
+  const chiusa = vend && u && u.spesa && u.spesa !== (S.meta.spesaCliente || {}).id ? u.spesa : null, inAlto = chiusa && !S.meta.spesaCliente ? chiusa : null;
   if (vend) html += cartaSpesa();
-  if (vend && u) html += cartaUltima(u);
-  else html += scanbox(BANCO.modo === 'reso' ? 'Scansiona il prodotto reso' : BANCO.modo === 'spreco' ? 'Scansiona il prodotto da togliere' : 'Scansiona il prodotto venduto',
+  if (inAlto) html += cartaSpesaChiusa(inAlto, righe.filter(v => v.spesa === inAlto));
+  else if (vend && u && !chiusa) html += cartaUltima(u);
+  else if (!chiusa) html += scanbox(BANCO.modo === 'reso' ? 'Scansiona il prodotto reso' : BANCO.modo === 'spreco' ? 'Scansiona il prodotto da togliere' : 'Scansiona il prodotto venduto',
     vend ? 'Battilo in cassa come sempre: qui il magazzino scende da solo.' : 'Se non ha codice, cercalo per nome.', 'banco-senza');
   html += `<div class="btn-grid banco-az" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="banco-annulla" ${u ? '' : 'disabled'}>${ICO_ANNULLA} Annulla ultima</button><button class="btn soft" type="button" data-act="banco-senza">${ICO_GRIGLIA} Senza codice</button></div>`;
   if (codiciDS) html += `<button class="notice orange tappable" type="button" data-act="ds-apri"><span class="spacer"><b>${codiciDS === 1 ? '1 codice' : codiciDS + ' codici'} da sistemare</b> · venduti ma non ancora collegati a un prodotto</span><span class="chev">›</span></button>`;
   html += `<div class="oggi-bar"><span>Oggi <b>${totaleQta(righe, v => v.tipo === 'reso' ? -1 : 1)}</b> · <b>${fmtEuro(tot)}</b></span><a class="btn small" href="#chiusura">Chiusura di oggi</a></div>`;
-  const resto = vend ? righe.slice(1) : righe, voci = elencoBanco(resto, righe, vend);   // le spese con la tessera restano insieme (dalla 1.35.0)
+  const resto = vend && !chiusa ? righe.slice(1) : righe, voci = elencoBanco(resto, righe, vend, inAlto);   // le spese con la tessera restano insieme (dalla 1.35.0)
   if (voci.length) {
     const max = BANCO.tutte ? voci.length : 25;
     html += `<div class="section-title"><h2>${vend ? 'Prima' : 'Oggi'}</h2><span class="count">${voci.length}</span></div><div class="list">${voci.slice(0, max).join('')}</div>`;
@@ -4921,20 +4924,33 @@ function cartaSpesa() {
     <button class="btn primary block" type="button" data-act="spesa-fine">Fine spesa</button></section>`;
 }
 /* una spesa chiusa, nell'elenco del Banco: un blocco solo che si apre */
-function bloccoSpesa(id, vs) {
+function datiSpesaChiusa(vs) {
   const ord = [...vs].sort((a, b) => b.creato - a.creato), valide = vs.filter(v => v.tipo === 'vendita' && v.qta > 0);
   const buono = (vs.find(v => v.buonoSpesa) || {}).buonoSpesa || null, cod = (vs.find(v => v.tessera) || {}).tessera;
   const c = Punti.puntiSpesa({ data: vs[0].data, righe: valide.map(rigaPunti), buonoUsato: buono });
   const tot = vs.reduce((t, v) => t + (importo(v) || 0), 0), inizio = Math.min(...vs.map(v => v.creato));
+  return { ord, valide, buono, cod, c, tot, inizio };
+}
+/* la spesa appena chiusa, in alto al Banco finché non si scansiona il prodotto dopo (dalla 1.35.1) */
+function cartaSpesaChiusa(id, vs) {
+  const { ord, valide, buono, cod, c, tot } = datiSpesaChiusa(vs);
+  return `<section class="card spesa-cliente chiusa" aria-label="Spesa chiusa">
+    <div class="sc-top"><div><div class="sc-lab">Spesa chiusa · tessera</div><div class="sc-cod">${cod ? esc(leggibileTessera(cod)) : '–'}</div></div><div class="sc-punti"><b>${c.punti}</b><span>punti</span></div></div>
+    <div class="faint small">${valide.length === 1 ? '1 riga' : valide.length + ' righe'} · ${fmtEuro(tot)}${buono ? ' · buono usato' : ''}</div>
+    <div class="list sc-righe">${ord.map(v => rigaVendita(v)).join('')}</div>
+    <div class="faint small">Per correggere tocca una riga: i punti del cliente si rimandano da soli. Al prodotto dopo, la spesa passa in «Prima».</div></section>`;
+}
+function bloccoSpesa(id, vs) {
+  const { ord, valide, buono, cod, c, tot, inizio } = datiSpesaChiusa(vs);
   return `<details class="spesa-blocco"><summary><span class="sb-main"><span class="sb-tit">${cod ? 'Tessera ' + esc(leggibileTessera(cod)) : 'Spesa con la tessera'}</span>
     <span class="sb-sub">${fmtOra(inizio)} · ${valide.length === 1 ? '1 riga' : valide.length + ' righe'} · ${fmtEuro(tot)}${buono ? ' · buono usato' : ''}</span></span><span class="sb-punti"><b>${c.punti}</b> punti</span></summary>
     <div class="list">${ord.map(v => rigaVendita(v)).join('')}</div></details>`;
 }
 /* l'elenco «Prima» del Banco: le righe delle spese con la tessera restano insieme */
-function elencoBanco(resto, tutte, vend = true) {
+function elencoBanco(resto, tutte, vend = true, salta = null) {
   const aperta = vend && S.meta.spesaCliente ? S.meta.spesaCliente.id : null, visti = new Set(), out = [];
   for (const v of resto) {
-    if (v.spesa && v.spesa === aperta) continue;   // sono nella carta della spesa aperta
+    if (v.spesa && (v.spesa === aperta || v.spesa === salta)) continue;   // sono nella carta della spesa aperta (o di quella appena chiusa)
     if (v.spesa) { if (!visti.has(v.spesa)) { visti.add(v.spesa); out.push(bloccoSpesa(v.spesa, tutte.filter(x => x.spesa === v.spesa))); } }
     else out.push(rigaVendita(v));
   }
