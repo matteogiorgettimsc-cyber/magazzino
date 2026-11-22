@@ -512,3 +512,19 @@ svg.grafico{width:100%;height:auto;display:block;touch-action:manipulation}
 .spesa-cliente .sc-punti { display: flex; flex-direction: column; align-items: flex-end; line-height: 1; }
 .spesa-cliente .sc-punti b { font-size: 30px; color: #255633; }
 .spesa-cliente .sc-punti span { font-size: 12px; }
+
+/* spesa raggruppata, premio per riga, foto per la vetrina (dalla 1.35.0) */
+.spesa-cliente .sc-righe { margin: 2px 0; }
+.premio { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: #2F241E14; color: #2F241E; white-space: nowrap; }
+.premio.x4 { background: #8A5A0022; color: #6B4300; } .premio.x3 { background: #25563322; color: #255633; } .premio.x2 { background: #B4502A22; color: #8F3D1F; }
+.premio.m { background: #E9A93A33; color: #6B4300; } .premio.no { background: #9A2F1222; color: #9A2F12; }
+.spesa-blocco { border: 1.5px solid #255633; border-radius: 12px; margin: 6px 0; background: #2556330A; }
+.spesa-blocco > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 44px; }
+.spesa-blocco > summary::-webkit-details-marker { display: none; }
+.spesa-blocco .sb-main { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.spesa-blocco .sb-tit { font-weight: 700; font-family: ui-monospace, monospace; letter-spacing: .06em; }
+.spesa-blocco .sb-sub { font-size: 13px; opacity: .75; }
+.spesa-blocco .sb-punti { white-space: nowrap; color: #255633; } .spesa-blocco .sb-punti b { font-size: 20px; }
+.spesa-blocco[open] > summary { border-bottom: 1px solid #25563333; }
+.foto-vetrina { min-height: 60px; display: flex; align-items: center; justify-content: center; }
+.foto-vetrina img { max-width: 100%; max-height: 260px; border-radius: 10px; display: block; }

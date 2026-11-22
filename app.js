@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.34.0';
+const VERSIONE = '1.35.0';
 
 /* =========================================================
    Utilità
@@ -234,6 +234,7 @@ async function save(store, obj) {
   S[store].set(obj.id, obj);
   const q = codaPer(store, [[prev, obj]]);
   await txConCoda(store, s => s.put(obj), q);
+  if (store === 'vendite') venditeToccate([[prev, obj]]);   // spesa di un cliente corretta dopo la chiusura (dalla 1.35.0)
   if (store === 'prodotti') rebuildCodeIndex();
   if (store === 'lotti') dopoLotti([[prev, obj]]);
 }
@@ -243,6 +244,7 @@ async function saveMany(store, arr) {
   arr.forEach(o => S[store].set(o.id, o));
   const q = codaPer(store, coppie);
   await txConCoda(store, s => arr.forEach(o => s.put(o)), q);
+  if (store === 'vendite') venditeToccate(coppie);
   if (store === 'prodotti') rebuildCodeIndex();
   if (store === 'lotti') dopoLotti(coppie);
 }
@@ -252,6 +254,7 @@ async function remove(store, id) {
   S[store].delete(id);
   const q = prev && syncAttiva() && SYNC_STORES.includes(store) ? [voceCoda({ st: store, id, del: true })] : [];
   await txConCoda(store, s => s.delete(id), q);
+  if (store === 'vendite' && prev) venditeToccate([[prev, undefined]]);
   if (store === 'prodotti') rebuildCodeIndex();
   if (store === 'lotti' && prev) dopoLotti([[prev, undefined]]);
 }
@@ -275,6 +278,7 @@ async function removeMany(store, ids) {
   ids.forEach(id => S[store].delete(id));
   const q = syncAttiva() && SYNC_STORES.includes(store) ? prev.map(p => voceCoda({ st: store, id: p.id, del: true })) : [];
   await txConCoda(store, s => ids.forEach(id => s.delete(id)), q);
+  if (store === 'vendite') venditeToccate(prev.map(x => [x, undefined]));
   if (store === 'prodotti') rebuildCodeIndex();
 }
 async function setMeta(key, value) {
@@ -1520,21 +1524,21 @@ async function chiudiAvanzi(pid, tol, fefo = false) {
 }
 async function vendiPeso(p, kg, { origine = 'scansione' } = {}) {
   const ora = Date.now(), sp = spesaPerVendita(), r = await preleva(p.id, kg);
-  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta: r3(kg), prezzo: prezzoVendita(p), sfuso: true, prelievi: r.prelievi, mancanti: r.mancanti, origine, ...(sp ? { spesa: sp } : {}) });
+  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta: r3(kg), prezzo: prezzoVendita(p), sfuso: true, prelievi: r.prelievi, mancanti: r.mancanti, origine, ...(sp ? { spesa: sp.id, tessera: sp.codice } : {}) });
   render();
 }
 
 async function vendi(p, { origine = 'scansione' } = {}) {
   const u = ultimaRiga(), ora = Date.now(), sp = spesaPerVendita();
-  if (u && u.tipo === 'vendita' && u.prodottoId === p.id && (u.spesa || null) === sp && ora - (u.aggiornato || u.creato) < RAGGRUPPA_MS) return cambiaQta(u.id, 1);
+  if (u && u.tipo === 'vendita' && u.prodottoId === p.id && (u.spesa || null) === (sp ? sp.id : null) && ora - (u.aggiornato || u.creato) < RAGGRUPPA_MS) return cambiaQta(u.id, 1);
   const r = await preleva(p.id, 1);
-  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta: 1, prezzo: prezzoVendita(p), prelievi: r.prelievi, mancanti: r.mancanti, origine, ...(sp ? { spesa: sp } : {}) });
+  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: p.id, nome: p.nome, codice: null, qta: 1, prezzo: prezzoVendita(p), prelievi: r.prelievi, mancanti: r.mancanti, origine, ...(sp ? { spesa: sp.id, tessera: sp.codice } : {}) });
   render();
 }
 async function vendiSconosciuto(code) {
   const u = ultimaRiga(), ora = Date.now(), sp = spesaPerVendita();
-  if (u && u.tipo === 'vendita' && !u.prodottoId && u.codice === code && (u.spesa || null) === sp && ora - (u.aggiornato || u.creato) < RAGGRUPPA_MS) return cambiaQta(u.id, 1);
-  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: null, codice: code, qta: 1, prezzo: null, prelievi: [], mancanti: 0, origine: 'scansione', ...(sp ? { spesa: sp } : {}) });
+  if (u && u.tipo === 'vendita' && !u.prodottoId && u.codice === code && (u.spesa || null) === (sp ? sp.id : null) && ora - (u.aggiornato || u.creato) < RAGGRUPPA_MS) return cambiaQta(u.id, 1);
+  await save('vendite', { id: uid('v'), tipo: 'vendita', data: todayISO(), creato: ora, aggiornato: ora, prodottoId: null, codice: code, qta: 1, prezzo: null, prelievi: [], mancanti: 0, origine: 'scansione', ...(sp ? { spesa: sp.id, tessera: sp.codice } : {}) });
   render();
 }
 async function cambiaQta(id, delta) {
@@ -1747,7 +1751,7 @@ function rigaVendita(v) {
   const p = prodotto(v.prodottoId), imp = importo(v);
   const nome = nomeVendita(v);
   const sub = [v.tipo === 'reso' ? 'reso' : '', v.sfuso ? 'sfuso · ' + fmtSf(p, v.qta) : fmtNum(v.qta) + ' pz', mancaVisibile(v) ? 'non risultava in negozio' : ''].filter(Boolean).join(' · ');
-  return `<button class="item vrow" type="button" data-act="vendita-apri" data-id="${esc(v.id)}"><div class="main"><div class="name ${v.prodottoId ? '' : 'mono'}">${esc(nome)}</div><div class="sub">${esc(sub)}${v.prodottoId ? '' : ' <span class="tag warn">da sistemare</span>'}</div></div>
+  return `<button class="item vrow" type="button" data-act="vendita-apri" data-id="${esc(v.id)}"><div class="main"><div class="name ${v.prodottoId ? '' : 'mono'}">${esc(nome)}</div><div class="sub">${esc(sub)}${v.prodottoId ? '' : ' <span class="tag warn">da sistemare</span>'}${premioRiga(v)}</div></div>
     <span class="prezzo">${imp == null ? '–' : fmtEuro(imp)}</span><time>${fmtOra(v.creato)}</time></button>`;
 }
 routes.banco = () => {
@@ -1767,11 +1771,11 @@ routes.banco = () => {
   html += `<div class="btn-grid banco-az" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="banco-annulla" ${u ? '' : 'disabled'}>${ICO_ANNULLA} Annulla ultima</button><button class="btn soft" type="button" data-act="banco-senza">${ICO_GRIGLIA} Senza codice</button></div>`;
   if (codiciDS) html += `<button class="notice orange tappable" type="button" data-act="ds-apri"><span class="spacer"><b>${codiciDS === 1 ? '1 codice' : codiciDS + ' codici'} da sistemare</b> · venduti ma non ancora collegati a un prodotto</span><span class="chev">›</span></button>`;
   html += `<div class="oggi-bar"><span>Oggi <b>${totaleQta(righe, v => v.tipo === 'reso' ? -1 : 1)}</b> · <b>${fmtEuro(tot)}</b></span><a class="btn small" href="#chiusura">Chiusura di oggi</a></div>`;
-  const resto = vend ? righe.slice(1) : righe;
-  if (resto.length) {
-    const max = BANCO.tutte ? resto.length : 25;
-    html += `<div class="section-title"><h2>${vend ? 'Prima' : 'Oggi'}</h2><span class="count">${resto.length}</span></div><div class="list">${resto.slice(0, max).map(rigaVendita).join('')}</div>`;
-    if (resto.length > max) html += `<button class="btn block" type="button" data-act="banco-tutte">Mostra tutte (${resto.length})</button>`;
+  const resto = vend ? righe.slice(1) : righe, voci = elencoBanco(resto, righe, vend);   // le spese con la tessera restano insieme (dalla 1.35.0)
+  if (voci.length) {
+    const max = BANCO.tutte ? voci.length : 25;
+    html += `<div class="section-title"><h2>${vend ? 'Prima' : 'Oggi'}</h2><span class="count">${voci.length}</span></div><div class="list">${voci.slice(0, max).join('')}</div>`;
+    if (voci.length > max) html += `<button class="btn block" type="button" data-act="banco-tutte">Mostra tutte (${voci.length})</button>`;
   }
   return { title: vend ? 'Banco' : BANCO.modo === 'reso' ? 'Banco · Reso' : 'Banco · Spreco', html, back: '#home', tab: 'banco', onScan: bancoScan, mount: () => { if (daCollegarePronti()) inCoda(sistemaEAvvisa); } };
 };
@@ -2394,6 +2398,7 @@ routes.prodotto = id => {
     <div class="stack" id="pLotti">${lottiScheda(p)}</div>
     ${cardCarica(p)}`}
     <div class="btn-grid" style="grid-template-columns:1fr 1fr"><button class="btn" type="button" data-act="sr-ordina" data-id="${esc(p.id)}">Aggiungi all'ordine</button><button class="btn" type="button" data-act="sr-cucina" data-id="${esc(p.id)}">Per la cucina</button></div>
+    ${cardFotoVetrina(p)}
     <div class="section-title"><h2>Dati del prodotto</h2></div>
     <div class="faint small salva-stato">Ogni modifica si salva da sola.</div>
     <div class="stack" data-auto>
@@ -2444,6 +2449,7 @@ routes.prodotto = id => {
   return {
     title: 'Scheda prodotto', html, back: p.fornitoreId && fornitore(p.fornitoreId) ? '#catalogo/' + encodeURIComponent(p.fornitoreId) : '#catalogo', tab: 'catalogo', nome: p.nome,
     mount: b => {
+      montaFotoVetrina(b, p);
       // com'era il prodotto quando si è aperta la scheda (resta uguale anche se la pagina si ridisegna)
       if (!PSTATO || PSTATO.id !== p.id || current.fresh) PSTATO = { id: p.id, eraSfuso: isSfuso(p), chiesto: false };
       const stato = PSTATO;
@@ -4416,6 +4422,7 @@ async function giro() {
       if (n || SYNC.ridisegna) aggiornaVista();
     } while (SYNC.ancora && ++volte < 3);
     inviaSpeseClienti();
+    pubblicaVetrina().catch(e => console.warn('vetrina', e));
   } catch (e) {
     SYNC.stato = e.accesso ? 'accesso' : e instanceof TypeError ? 'offline' : 'errore';
     SYNC.msg = e.message;
@@ -4734,13 +4741,16 @@ const A = {};
 /* =========================================================
    TESSERE CLIENTI (dalla 1.34.0): l'app «La Spesa Sfusa per te»
    - al Banco, in Vendita, la tessera (LSS + 8 caratteri, QR o codice a barre) apre la spesa del cliente
-   - le vendite scansionate dopo hanno il campo `spesa`; la spesa si chiude con «Fine spesa»,
-     con un'altra tessera o dopo 5 minuti senza scansioni
-   - alla chiusura le righe (importo, «Fatto in bottega», scadenza della confezione, pane, dolce del mese,
-     prodotto della settimana) vanno su Firebase in clienti/{tessera}/spese/{id}; i punti li calcola punti.js,
-     lo stesso file dell'app clienti
+   - le vendite scansionate dopo hanno i campi `spesa` (id) e `tessera` (codice, dalla 1.35.0); la spesa si chiude con
+     «Fine spesa», con un'altra tessera o dopo 5 minuti senza scansioni; alla chiusura le righe ricevono `buonoSpesa`
+   - al Banco la spesa resta raggruppata: aperta nella carta in cima, chiusa come un blocco solo in «Prima» (dalla 1.35.0)
+   - le righe (importo, «Fatto in bottega», scadenza della confezione, pane, dolce del mese, prodotto della settimana)
+     vanno su Firebase in clienti/{tessera}/spese/{id}; i punti li calcola punti.js, lo stesso file dell'app clienti
+   - ogni correzione a una spesa chiusa (quantità, peso, riga annullata, codice collegato, «Annulla») la rimanda
+     ricalcolata; se non restano righe, la spesa si toglie da Firebase (dalla 1.35.0)
    - le spese da mandare restano sul dispositivo (meta speseClienti) finché Firebase non le ha prese
-   - i clienti leggono solo la loro scheda: il magazzino («dati») resta solo del negozio (regole di Firestore)
+   - vetrina per l'app clienti in vetrina/oggi e foto dei prodotti in vetrinaFoto/{id} (dalla 1.35.0)
+   - i clienti leggono solo la loro scheda, la vetrina e le foto: il magazzino («dati») resta solo del negozio
    ========================================================= */
 const SPESA_MS = 5 * 60 * 1000;
 const codiceTessera = c => { const x = String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); return /^LSS[A-Z0-9]{8}$/.test(x) ? x : null; };
@@ -4752,7 +4762,7 @@ function spesaPerVendita() {
   const s = S.meta.spesaCliente;
   if (!s || Date.now() - s.ultimo >= SPESA_MS) return null;
   setMeta('spesaCliente', { ...s, ultimo: Date.now() });
-  return s.id;
+  return { id: s.id, codice: s.codice };
 }
 /* una riga della spesa come la vuole punti.js */
 function rigaPunti(v) {
@@ -4766,6 +4776,17 @@ function rigaPunti(v) {
   return r;
 }
 const venditeSpesa = id => [...S.vendite.values()].filter(v => v.spesa === id && v.tipo === 'vendita' && v.qta > 0).sort((a, b) => a.creato - b.creato);
+/* il premio di una riga, scritto per chi è in cassa */
+function premioRiga(v) {
+  if (!v.spesa || v.tipo !== 'vendita') return '';
+  const r = rigaPunti(v), x = Punti.puntiPerEuro(r, v.data);
+  const t = [x === 4 ? '×4 ultimi giorni' : x === 3 ? '×3 Salvali tu' : x === 2 ? '×2 bottega' : '×1'];
+  if (r.prodottoSettimana) t.push('prodotto della settimana');
+  if (r.dolceDelMese) t.push('dolce del mese');
+  if (r.pane) t.push('pane');
+  if (r.senzaPrezzo) return ' <span class="premio no">senza prezzo: 0 punti</span>';
+  return ' ' + t.map((s, i) => `<span class="premio ${i === 0 ? 'x' + x : 'm'}">${esc(s)}</span>`).join(' ');
+}
 
 async function apriSpesa(codice) {
   const prima = S.meta.spesaCliente;
@@ -4801,12 +4822,31 @@ async function chiudiSpesa(motivo = 'fine') {
   await setMeta('spesaCliente', null);
   const vs = venditeSpesa(s.id);
   if (!vs.length) { toast('Spesa chiusa senza prodotti: nessun punto'); if (current.name === 'banco') render(); return; }
-  const spesa = { id: s.id, data: s.data, righe: vs.map(rigaPunti), buonoUsato: s.buono || null };
-  const c = Punti.puntiSpesa(spesa);
-  await setMeta('speseClienti', [...(S.meta.speseClienti || []), { codice: s.codice, spesa: { ...spesa, punti: c.punti, totaleCent: c.totaleCent, chiusa: new Date().toISOString(), dispositivo: S.meta.syncDev || '' } }]);
+  // il buono e la tessera restano scritti sulle righe: servono per ricalcolare la spesa se poi si corregge
+  const daSegnare = vs.filter(v => (v.buonoSpesa || null) !== (s.buono || null) || v.tessera !== s.codice);
+  if (daSegnare.length) await saveMany('vendite', daSegnare.map(v => ({ ...v, tessera: s.codice, buonoSpesa: s.buono || null })));
+  const c = Punti.puntiSpesa({ data: s.data, righe: vs.map(rigaPunti), buonoUsato: s.buono || null });
+  await segnaSpesa(s.id, s.codice, s.data);
   toast(`${motivo === 'tempo' ? 'Spesa chiusa dopo 5 minuti senza scansioni' : 'Spesa chiusa'}: ${c.punti} punti alla tessera ${leggibileTessera(s.codice)}`, { ms: 6000 });
   if (current.name === 'banco') render();
-  inviaSpeseClienti();
+}
+/* una spesa chiusa da mandare (o rimandare ricalcolata): una voce sola per spesa, l'ultima vince */
+async function segnaSpesa(id, codice, data) {
+  if (S.meta.spesaCliente && S.meta.spesaCliente.id === id) return;   // aperta: parte alla chiusura
+  const lista = (S.meta.speseClienti || []).filter(x => (x.id || (x.spesa && x.spesa.id)) !== id);
+  await setMeta('speseClienti', [...lista, { codice, id, data, v: Date.now() }]);
+  clearTimeout(segnaSpesa.t); segnaSpesa.t = setTimeout(inviaSpeseClienti, 1500);
+}
+/* chiamata da save/saveMany/remove/removeMany: una riga di una spesa chiusa è cambiata */
+function venditeToccate(coppie) {
+  try {
+    for (const [a, b] of coppie) {
+      const r = b || a; if (!r || !r.spesa) continue;
+      const cod = (b && b.tessera) || (a && a.tessera); if (!cod) continue;   // spese della 1.34.0 senza tessera sulle righe: non si ricalcolano
+      if (S.meta.spesaCliente && S.meta.spesaCliente.id === r.spesa) continue;
+      segnaSpesa(r.spesa, cod, r.data);
+    }
+  } catch (e) { console.warn('spese dei clienti', e); }
 }
 /* --- valori di Firestore (le schede dei clienti usano i tipi veri, non il JSON di «dati») --- */
 const fsVal = v => v === null || v === undefined ? { nullValue: null } : typeof v === 'boolean' ? { booleanValue: v }
@@ -4824,11 +4864,22 @@ async function inviaSpeseClienti() {
   inviandoSC = true;
   try {
     for (const voce of [...S.meta.speseClienti]) {
-      await scriviSpesaCliente(voce);
-      await setMeta('speseClienti', (S.meta.speseClienti || []).filter(x => x.spesa.id !== voce.spesa.id));
+      if (voce.spesa) await scriviSpesaCliente(voce);   // voce della 1.34.0, con la spesa già pronta
+      else await rimandaSpesa(voce);
+      const chiave = voce.id || voce.spesa.id;
+      await setMeta('speseClienti', (S.meta.speseClienti || []).filter(x => !((x.id || (x.spesa && x.spesa.id)) === chiave && (x.v || 0) === (voce.v || 0))));
     }
   } catch (e) { console.warn('spese dei clienti: riprovo al prossimo giro', e); }
   finally { inviandoSC = false; if (current.name === 'impostazioni') render(); }
+}
+/* la spesa com'è adesso sul dispositivo: se non ha più righe si toglie dalla scheda del cliente */
+async function rimandaSpesa({ codice, id, data }) {
+  const vs = venditeSpesa(id);
+  if (!vs.length) { await chiamaFs('/clienti/' + codice + '/spese/' + id, null, 'DELETE'); return; }
+  const buono = (vs.find(v => v.buonoSpesa) || {}).buonoSpesa || null;
+  const spesa = { id, data: vs[0].data || data, righe: vs.map(rigaPunti), buonoUsato: buono };
+  const c = Punti.puntiSpesa(spesa);
+  await scriviSpesaCliente({ codice, spesa: { ...spesa, punti: c.punti, totaleCent: c.totaleCent, chiusa: new Date().toISOString(), dispositivo: S.meta.syncDev || '' } });
 }
 async function scriviSpesaCliente({ codice, spesa }) {
   const base = '/clienti/' + codice;
@@ -4851,7 +4902,7 @@ async function scriviSpesaCliente({ codice, spesa }) {
     await chiamaFs(base + '?updateMask.fieldPaths=amiche&updateMask.fieldPaths=amicaPremiata', { fields: fsObj({ amiche: [...(sch.amiche || []), ...(am ? [{ data: spesa.data, ruolo: 'invitata' }] : [])], amicaPremiata: true }) }, 'PATCH');
   }
 }
-/* la spesa aperta, in cima al Banco */
+/* la spesa aperta, in cima al Banco, con le sue righe */
 function cartaSpesa() {
   const s = S.meta.spesaCliente; if (!s) return '';
   const vs = venditeSpesa(s.id), c = Punti.puntiSpesa({ data: s.data, righe: vs.map(rigaPunti), buonoUsato: s.buono });
@@ -4859,32 +4910,145 @@ function cartaSpesa() {
   const info = s.stato === 'carico' ? 'Leggo la scheda del cliente…' : s.stato === 'scollegato' ? 'Dispositivo non collegato: i punti partono quando lo colleghi'
     : s.stato === 'errore' ? 'Scheda non letta (internet?): i punti si scrivono lo stesso' : sch.nuova ? 'Tessera nuova: la scheda si crea con questa spesa'
     : `Nel barattolo ${sch.nelBarattolo} punti${buoni.length ? ` · ${buoni.length === 1 ? 'ha un buono da 5 €' : `ha ${buoni.length} buoni da 5 €`}` : ''}`;
-  const senza = c.righe.filter(r => r.senzaPrezzo).length;
+  const righe = [...vs].reverse().map(v => rigaVendita(v)).join('');
   return `<section class="card spesa-cliente" aria-label="Spesa del cliente">
     <div class="sc-top"><div><div class="sc-lab">Spesa con la tessera</div><div class="sc-cod">${esc(leggibileTessera(s.codice))}</div></div><div class="sc-punti"><b>${c.punti}</b><span>punti</span></div></div>
-    <div class="faint small">${vs.length === 1 ? '1 riga' : vs.length + ' righe'} · ${fmtEuro(c.totaleCent / 100)}${senza ? ` · ${senza === 1 ? '1 riga' : senza + ' righe'} senza prezzo: 0 punti` : ''}</div>
+    <div class="faint small">${vs.length === 1 ? '1 riga' : vs.length + ' righe'} · ${fmtEuro(c.totaleCent / 100)}</div>
     <div class="faint small">${esc(info)}</div>
+    ${righe ? `<div class="list sc-righe">${righe}</div>` : '<div class="faint small">Scansiona i prodotti del cliente.</div>'}
     ${s.buono ? `<div class="notice green"><span class="spacer"><b>Buono da 5 € usato:</b> batti lo sconto in cassa. In questa spesa si tolgono 5 punti.</span><button class="btn small" type="button" data-act="spesa-buono-togli">Togli</button></div>`
       : buoni.length ? (c.totaleCent >= Punti.REGOLE.spesaMinimaBuonoCent ? `<button class="btn block" type="button" data-act="spesa-buono">Usa il buono da 5 €</button>` : `<div class="faint small">Il buono si usa da 40 € di spesa.</div>`) : ''}
     <button class="btn primary block" type="button" data-act="spesa-fine">Fine spesa</button></section>`;
+}
+/* una spesa chiusa, nell'elenco del Banco: un blocco solo che si apre */
+function bloccoSpesa(id, vs) {
+  const ord = [...vs].sort((a, b) => b.creato - a.creato), valide = vs.filter(v => v.tipo === 'vendita' && v.qta > 0);
+  const buono = (vs.find(v => v.buonoSpesa) || {}).buonoSpesa || null, cod = (vs.find(v => v.tessera) || {}).tessera;
+  const c = Punti.puntiSpesa({ data: vs[0].data, righe: valide.map(rigaPunti), buonoUsato: buono });
+  const tot = vs.reduce((t, v) => t + (importo(v) || 0), 0), inizio = Math.min(...vs.map(v => v.creato));
+  return `<details class="spesa-blocco"><summary><span class="sb-main"><span class="sb-tit">${cod ? 'Tessera ' + esc(leggibileTessera(cod)) : 'Spesa con la tessera'}</span>
+    <span class="sb-sub">${fmtOra(inizio)} · ${valide.length === 1 ? '1 riga' : valide.length + ' righe'} · ${fmtEuro(tot)}${buono ? ' · buono usato' : ''}</span></span><span class="sb-punti"><b>${c.punti}</b> punti</span></summary>
+    <div class="list">${ord.map(v => rigaVendita(v)).join('')}</div></details>`;
+}
+/* l'elenco «Prima» del Banco: le righe delle spese con la tessera restano insieme */
+function elencoBanco(resto, tutte, vend = true) {
+  const aperta = vend && S.meta.spesaCliente ? S.meta.spesaCliente.id : null, visti = new Set(), out = [];
+  for (const v of resto) {
+    if (v.spesa && v.spesa === aperta) continue;   // sono nella carta della spesa aperta
+    if (v.spesa) { if (!visti.has(v.spesa)) { visti.add(v.spesa); out.push(bloccoSpesa(v.spesa, tutte.filter(x => x.spesa === v.spesa))); } }
+    else out.push(rigaVendita(v));
+  }
+  return out;
 }
 setInterval(() => { const s = S.meta && S.meta.spesaCliente; if (s && Date.now() - s.ultimo >= SPESA_MS) inCoda(() => chiudiSpesa('tempo')); }, 15000);
 A['spesa-fine'] = () => inCoda(() => chiudiSpesa('fine'));
 A['spesa-buono'] = async () => { const s = S.meta.spesaCliente; if (!s || !s.scheda || !s.scheda.buoni.length) return; await setMeta('spesaCliente', { ...s, buono: s.scheda.buoni[0].id, ultimo: Date.now() }); render(); toast('Buono usato: batti lo sconto di 5 € in cassa'); };
 A['spesa-buono-togli'] = async () => { const s = S.meta.spesaCliente; if (!s) return; await setMeta('spesaCliente', { ...s, buono: null, ultimo: Date.now() }); render(); };
-/* Impostazioni: prodotto della settimana e dolce del mese */
+
+/* --- vetrina per l'app clienti (dalla 1.35.0): missioni, ultimi giorni ×4, «Salvali tu» ×3, «Nostra produzione» ×2 ---
+   Si pubblica su Firebase in vetrina/oggi dopo ogni giro di sincronizzazione, solo se è cambiata (o ogni 6 ore). */
+function calcolaVetrina() {
+  const oggi = todayISO(), conf = confTessere(), lun = Punti.util.lunedi(oggi), mese = oggi.slice(0, 7);
+  const voce = (p, extra = {}) => { const pr = prezzoVendita(p); return { id: p.id, nome: p.nome, prezzoCent: pr == null ? null : Math.round(pr * 100), unita: isSfuso(p) ? (inLitri(p) ? 'l' : 'kg') : 'pz', categoria: catDi(p) || '', foto: p.fotoVetrina || null, ...extra }; };
+  const giorniDi = p => { const l = lottiFEFO(p.id).find(x => x.scadenza && x.scadenza >= oggi); return l ? Punti.util.giorniTra(oggi, l.scadenza) : null; };
+  const ultimi = [], salvali = [], bottega = [];
+  for (const p of S.prodotti.values()) {
+    if (prezzoVendita(p) == null) continue;
+    const g = giorniDi(p);
+    if (g != null && g <= 10) ultimi.push(voce(p, { giorni: g, ppe: 4 }));
+    else if (g != null && g <= 30) salvali.push(voce(p, { giorni: g, ppe: 3 }));
+    else if (eBottega(p)) bottega.push(voce(p, { ppe: 2 }));
+  }
+  const perGiorni = (a, b) => a.giorni - b.giorni || a.nome.localeCompare(b.nome, 'it');
+  ultimi.sort(perGiorni); salvali.sort(perGiorni); bottega.sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+  const missioni = [], R = Punti.REGOLE.missioni, mi = id => R.find(x => x.id === id);
+  const ps = prodotto((conf.settimanali || {})[lun]);
+  if (ps) missioni.push({ tipo: 'settimana', titolo: mi('settimana').titolo, testo: mi('settimana').testo, punti: mi('settimana').punti, prodotti: [voce(ps, { giorni: giorniDi(ps) })] });
+  const dm = prodotto((conf.dolciMese || {})[mese]);
+  if (dm) missioni.push({ tipo: 'dolce', titolo: mi('dolce').titolo, testo: mi('dolce').testo, punti: mi('dolce').punti, prodotti: [voce(dm)] });
+  const pani = [...S.prodotti.values()].filter(p => eBottega(p) && /\bPANE\b/i.test(p.nome || '') && prezzoVendita(p) != null).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+  if (pani.length) missioni.push({ tipo: 'pane', titolo: mi('pane').titolo, testo: mi('pane').testo, punti: mi('pane').punti, prodotti: pani.map(p => voce(p)) });
+  return { giorno: oggi, missioni, ultimi, salvali, bottega };
+}
+let vetrinaTentata = 0;
+async function pubblicaVetrina({ forza = false } = {}) {
+  if (!syncAttiva() || (!forza && Date.now() - vetrinaTentata < 120000)) return false;
+  vetrinaTentata = Date.now();
+  const v = calcolaVetrina(), firma = JSON.stringify(v);
+  if (!forza && firma === S.meta.vetrinaFirma && Date.now() - (S.meta.vetrinaQuando || 0) < 6 * 3600000) return false;
+  await chiamaFs('/vetrina/oggi', { fields: fsObj({ ...v, aggiornato: new Date().toISOString() }) }, 'PATCH');
+  await setMeta('vetrinaFirma', firma); await setMeta('vetrinaQuando', Date.now());
+  return true;
+}
+A['vetrina-ora'] = async () => {
+  try { await pubblicaVetrina({ forza: true }); toast('Vetrina aggiornata nell\'app dei clienti'); render(); }
+  catch (e) { toast('Vetrina non aggiornata: ' + e.message, { err: true }); }
+};
+/* --- foto del prodotto per la vetrina (dalla 1.35.0): una foto sola, rimpicciolita sul telefono, in vetrinaFoto/{id} --- */
+function rimpicciolisci(file, lato = 800) {
+  return new Promise((ok, no) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, lato / Math.max(img.naturalWidth, img.naturalHeight)), c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+      let q = 0.82, d = c.toDataURL('image/jpeg', q);
+      while (d.length > 700000 && q > 0.4) { q -= 0.12; d = c.toDataURL('image/jpeg', q); }
+      ok(d);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); no(new Error('immagine non leggibile')); };
+    img.src = url;
+  });
+}
+function cardFotoVetrina(p) {
+  return `<div class="card" id="pFotoCard"><h3>Foto per l'app clienti</h3>
+    <div class="foto-vetrina" id="pFoto">${p.fotoVetrina ? '<span class="faint small">Carico la foto…</span>' : '<span class="faint small">Nessuna foto: nell\'app compare un\'icona.</span>'}</div>
+    <div class="btn-grid" style="grid-template-columns:1fr 1fr"><label class="btn" style="cursor:pointer">${p.fotoVetrina ? 'Cambia foto' : 'Scatta o scegli'}<input type="file" accept="image/*" id="pFotoFile" hidden></label>
+      <button class="btn" type="button" data-act="foto-togli" data-id="${esc(p.id)}" ${p.fotoVetrina ? '' : 'disabled'}>Togli</button></div>
+    <div class="faint small">La foto va su Firebase e compare nelle Promozioni dell'app quando il prodotto è in vetrina. Serve internet.</div></div>`;
+}
+async function montaFotoVetrina(b, p) {
+  const box = b.querySelector('#pFoto'), inp = b.querySelector('#pFotoFile');
+  if (box && p.fotoVetrina && syncAttiva()) {
+    try { const d = await chiamaFs('/vetrinaFoto/' + p.id, null, 'GET'); const f = d && daFsObj(d.fields); if (f && f.dataUrl && box.isConnected) box.innerHTML = `<img src="${f.dataUrl}" alt="Foto di ${esc(p.nome)}">`; }
+    catch (e) { if (box.isConnected) box.innerHTML = '<span class="faint small">Foto non letta (internet?)</span>'; }
+  }
+  if (inp) inp.onchange = async () => {
+    const f = inp.files && inp.files[0]; if (!f) return;
+    if (!syncAttiva()) { toast('Collega il dispositivo per caricare la foto', { err: true }); return; }
+    try {
+      toast('Carico la foto…');
+      const dataUrl = await rimpicciolisci(f), ora = Date.now();
+      await chiamaFs('/vetrinaFoto/' + p.id, { fields: fsObj({ dataUrl, aggiornato: ora }) }, 'PATCH');
+      await save('prodotti', { ...prodotto(p.id), fotoVetrina: ora });
+      toast('Foto salvata'); render();
+    } catch (e) { toast('Foto non salvata: ' + e.message, { err: true }); }
+  };
+}
+A['foto-togli'] = async el => {
+  const p = prodotto(el.dataset.id); if (!p) return;
+  if (!(await confirmBox('Tolgo la foto di questo prodotto dall\'app dei clienti?', { ok: 'Togli', danger: true }))) return;
+  try { if (syncAttiva()) await chiamaFs('/vetrinaFoto/' + p.id, null, 'DELETE'); await save('prodotti', { ...prodotto(p.id), fotoVetrina: null }); toast('Foto tolta'); render(); }
+  catch (e) { toast('Foto non tolta: ' + e.message, { err: true }); }
+};
+/* Impostazioni: prodotto della settimana, dolce del mese, vetrina */
 function cardTessere() {
   const conf = confTessere(), oggi = todayISO(), lun = Punti.util.lunedi(oggi), lun2 = Punti.util.lunedi(piuGiorni(7)), mese = oggi.slice(0, 7), dopo = Punti.util.lunedi(piuGiorni(35)).slice(0, 7);
   const nomeP = id => { const p = id && prodotto(id); return p ? esc(p.nome) : '<span class="faint">da scegliere</span>'; };
   const riga = (et, val, act, k) => `<div class="item"><div class="main"><div class="sub">${et}</div><div class="name">${val}</div></div><button class="btn small" type="button" data-act="${act}" data-k="${k}">Scegli</button></div>`;
-  const nInvio = (S.meta.speseClienti || []).length;
+  const nInvio = (S.meta.speseClienti || []).length, v = calcolaVetrina();
+  const nVetrina = v.ultimi.length + v.salvali.length + v.bottega.length;
   return `<div class="card"><h2>Tessere clienti</h2>
     <p class="muted small">Al Banco, in Vendita, la tessera dell'app «La Spesa Sfusa per te» apre la spesa del cliente: i prodotti scansionati dopo gli danno i punti. La spesa si chiude con «Fine spesa», con un'altra tessera o dopo 5 minuti senza scansioni. Danno 2 punti per euro i prodotti di «Nostra produzione»; la missione del pane vale per quelli con «pane» nel nome.</p>
     <div class="list">${riga('Prodotto della settimana dal ' + fmtDate(lun), nomeP((conf.settimanali || {})[lun]), 'tess-sett', lun)}
       ${riga('Prodotto della settimana dal ' + fmtDate(lun2), nomeP((conf.settimanali || {})[lun2]), 'tess-sett', lun2)}
       ${riga('Dolce del mese di ' + MESI[+mese.slice(5) - 1], nomeP((conf.dolciMese || {})[mese]), 'tess-dolce', mese)}
       ${dopo !== mese ? riga('Dolce del mese di ' + MESI[+dopo.slice(5) - 1], nomeP((conf.dolciMese || {})[dopo]), 'tess-dolce', dopo) : ''}</div>
-    <div class="faint small">${nInvio ? `Spese dei clienti da mandare a Firebase: ${nInvio} (partono appena c'è internet)` : 'Tutte le spese dei clienti sono su Firebase.'}</div></div>`;
+    <div class="faint small">${nInvio ? `Spese dei clienti da mandare a Firebase: ${nInvio} (partono appena c'è internet)` : 'Tutte le spese dei clienti sono su Firebase.'}</div>
+    <h3>Vetrina dell'app (Promozioni)</h3>
+    <div class="faint small">Oggi: ${v.missioni.length} ${v.missioni.length === 1 ? 'missione' : 'missioni'}, ${v.ultimi.length} ultimi giorni (×4), ${v.salvali.length} «Salvali tu» (×3), ${v.bottega.length} di bottega (×2): ${nVetrina} prodotti.
+      ${S.meta.vetrinaQuando ? 'Pubblicata il ' + fmtDate(new Date(S.meta.vetrinaQuando).toISOString().slice(0, 10)) + ' alle ' + fmtOra(S.meta.vetrinaQuando) + '.' : 'Non ancora pubblicata.'} Si aggiorna da sola dopo ogni sincronizzazione.</div>
+    <button class="btn block" type="button" data-act="vetrina-ora" ${syncAttiva() ? '' : 'disabled'}>Aggiorna la vetrina adesso</button></div>`;
 }
 A['tess-sett'] = el => pickerModal({ title: 'Prodotto della settimana', intro: `<div class="faint small">Dal ${fmtDate(el.dataset.k)}: chi lo compra in 4 settimane del mese prende 20 punti.</div>`,
   onPick: async p => { const st = S.meta.settings || {}; await setMeta('settings', { ...st, settimanali: { ...(st.settimanali || {}), [el.dataset.k]: p.id } }); render(); toast('Prodotto della settimana: ' + p.nome); } });
