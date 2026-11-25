@@ -3,7 +3,7 @@
 (function () {
 'use strict';
 
-const VERSIONE = '1.35.1';
+const VERSIONE = '1.36.0';
 
 /* =========================================================
    Utilità
@@ -1058,7 +1058,7 @@ routes.home = () => {
     if (conFatture()) html += `<a class="card tight" href="#fatture" style="text-decoration:none"><div class="row"><div class="spacer"><b>Fatture e pagamenti</b><div class="faint small ${pag ? 'arancio' : ''}">${sub}</div></div><span class="chev">›</span></div></a>`;
     else if (conPagamenti()) html += `<a class="card tight" href="#pagamenti" style="text-decoration:none"><div class="row"><div class="spacer"><b>Pagamenti</b><div class="faint small ${pag ? 'arancio' : ''}">${pag ? `${pag} ${pag === 1 ? 'pagamento' : 'pagamenti'} entro 7 giorni` : 'Affitto, bollette e altre spese da pagare'}</div></div><span class="chev">›</span></div></a>`;
     const n = numeriPeriodo('mese');
-    html += `<a class="card tight" href="#cruscotto" style="text-decoration:none"><div class="row"><div class="spacer"><b>Cruscotto</b><div class="faint small">${n.chiusure.length || n.ricavo ? [n.chiusure.length ? `Incassi del mese ${fmtEuro(n.incassi)}` : '', n.perc != null ? `margine ${fmtNum(n.perc)}%` : ''].filter(Boolean).join(' · ') : 'Incassi, spese, margini, riepilogo per la contabilità'}</div></div><span class="chev">›</span></div></a>`;
+    html += `<a class="card tight" href="#cruscotto" style="text-decoration:none"><div class="row"><div class="spacer"><b>Cruscotto</b><div class="faint small">${n.chiusure.length || n.ricavo ? [entrate() === 'app' ? (n.scansionato ? `Scansionati del mese ${fmtEuro(n.scansionato)}` : '') : n.chiusure.length ? `Incassi del mese ${fmtEuro(n.incassi)}` : '', n.perc != null ? `margine ${fmtNum(n.perc)}%` : ''].filter(Boolean).join(' · ') : 'Incassi, spese, margini, riepilogo per la contabilità'}</div></div><span class="chev">›</span></div></a>`;
   }
   const spm = sprechiPeriodo('mese').filter(perso);
   if (spm.length) html += `<a class="card tight" href="#sprechi" style="text-decoration:none"><div class="row"><div class="spacer"><b>Sprechi di questo mese</b><div class="faint small">${totaleQta(spm)} · ${fmtEuro(spm.reduce((t, r) => t + (valoreSpreco(r) || 0), 0))}</div></div><span class="chev">›</span></div></a>`;
@@ -3464,6 +3464,10 @@ function scadenzaFatturaModal(fa) {
 let CRU = 'mese';
 const PERIODI_CRU = [['mese', 'Questo mese'], ['scorso', 'Mese scorso'], ['anno', 'Ultimi 12 mesi']];
 const segnoVendita = v => v.tipo === 'reso' ? -1 : 1;
+/* ENTRATE (dalla 1.36.0): nei numeri (Cruscotto, Home, Riepilogo) si sceglie se contare l'incasso scritto nella chiusura
+   della cassa o il venduto scansionato nell'app. La scelta vale su tutti i telefoni (settings.entrate). */
+const entrate = () => (S.meta.settings || {}).entrate === 'app' ? 'app' : 'cassa';
+const sceltaEntrate = () => `<div class="segmented mini entrate-sc" role="group" aria-label="Cosa contare">${[['cassa', 'Incasso della cassa'], ['app', 'Scansionati nell\'app']].map(([k, l]) => `<button type="button" data-act="entrate" data-m="${k}" class="${entrate() === k ? 'on' : ''}" aria-pressed="${entrate() === k}">${l}</button>`).join('')}</div>`;
 function numeriPeriodo(f) {
   const [da, a] = periodo(f), dentro = d => !!d && d >= da && d <= a, oggi = todayISO();
   const chiusure = [...S.chiusure.values()].filter(c => dentro(c.data));
@@ -3490,6 +3494,7 @@ function numeriPeriodo(f) {
   return {
     cucina, valCucina: r2(cucina.reduce((t, r) => t + (valoreCucina(r) || 0), 0)),
     da, a, chiusure, incassi, senzaChiusura, vendite, fatture, acquisti, spese, altreSpese,
+    giorniVendite: new Set(vendite.map(v => v.data)).size,
     scansionato: r2(scansionato), ricavo: r2(ricavo), costo: r2(costo), margine: r2(ricavo - costo),
     perc: ricavo > 0 ? Math.round((ricavo - costo) / ricavo * 1000) / 10 : null, senzaCosto: senzaCosto.size,
     piuVenduti: [...perProd.entries()].filter(([, e]) => e.imp > 0).sort((x, y) => y[1].imp - x[1].imp).slice(0, 5),
@@ -3533,22 +3538,25 @@ function cosaDaFare() {
 }
 routes.cruscotto = () => {
   const n = numeriPeriodo(CRU), m = numeriMerce(), fare = cosaDaFare();
-  const diff = r2(n.incassi - n.acquisti - n.altreSpese);
+  const app = entrate() === 'app', ent = app ? n.scansionato : n.incassi, gg = app ? n.giorniVendite : n.chiusure.length;
+  const statEnt = `<a class="stat green" href="${app ? '#categorie' : '#cassa'}"><b class="euro">${fmtEuro(ent)}</b><span>${app ? 'Scansionati nell\'app' : 'Incassi (dalla cassa)'} · ${gg} ${gg === 1 ? 'giorno' : 'giorni'}</span></a>`;
+  const diff = r2(ent - n.acquisti - n.altreSpese);
   let html = `<div class="chips">${PERIODI_CRU.map(([k, l]) => `<button class="chip ${CRU === k ? 'on' : ''}" type="button" data-act="cru-periodo" data-f="${k}">${l}</button>`).join('')}</div>`;
   html += `<div class="section-title"><h2>Da fare</h2></div>` + (fare.length
     ? `<div class="list dafare">${fare.map(([h, t, v, c]) => `<a class="item" href="${h}"><span class="dot ${c}" aria-hidden="true"></span><div class="main"><div class="name">${t}</div></div>${v ? `<span class="prezzo">${v}</span>` : ''}<span class="chev">›</span></a>`).join('')}</div>`
     : '<div class="notice green"><span>Niente di urgente. Tutto in ordine.</span></div>');
   html += `<div class="section-title"><h2>Entrate e uscite</h2><span class="count">${fmtDate(n.da)} – ${fmtDate(n.a)}</span></div>
+    ${sceltaEntrate()}
     ${conFatture() ? `<div class="stats cru">
-      <a class="stat green" href="#cassa"><b class="euro">${fmtEuro(n.incassi)}</b><span>Incassi (dalla cassa) · ${n.chiusure.length} ${n.chiusure.length === 1 ? 'giorno' : 'giorni'}</span></a>
+      ${statEnt}
       <a class="stat" href="#fatture"><b class="euro">${fmtEuro(n.acquisti)}</b><span>Fatture dei fornitori · ${n.fatture.length}</span></a>
       <a class="stat" href="#pagamenti"><b class="euro">${fmtEuro(n.altreSpese)}</b><span>Altre spese · ${n.spese.length}</span></a>
-      <div class="stat ${diff < 0 ? 'red' : ''}"><b class="euro">${fmtEuro(diff)}</b><span>Incassi meno uscite</span></div></div>
+      <div class="stat ${diff < 0 ? 'red' : ''}"><b class="euro">${fmtEuro(diff)}</b><span>${app ? 'Scansionati' : 'Incassi'} meno uscite</span></div></div>
     <div class="faint small">Un'idea, non il bilancio: la merce comprata in questo periodo si vende anche dopo. Fatture e spese con IVA.</div>` : `<div class="stats" style="grid-template-columns:1fr 1fr">
-      <a class="stat green" href="#cassa"><b class="euro">${fmtEuro(n.incassi)}</b><span>Incassi (dalla cassa) · ${n.chiusure.length} ${n.chiusure.length === 1 ? 'giorno' : 'giorni'}</span></a>
-      ${conPagamenti() ? `<a class="stat" href="#pagamenti"><b class="euro">${fmtEuro(n.altreSpese)}</b><span>Spese · ${n.spese.length}</span></a>` : `<div class="stat"><b class="euro">${n.chiusure.length ? fmtEuro(r2(n.incassi / n.chiusure.length)) : '–'}</b><span>Media al giorno</span></div>`}</div>
+      ${statEnt}
+      ${conPagamenti() ? `<a class="stat" href="#pagamenti"><b class="euro">${fmtEuro(n.altreSpese)}</b><span>Spese · ${n.spese.length}</span></a>` : `<div class="stat"><b class="euro">${gg ? fmtEuro(r2(ent / gg)) : '–'}</b><span>Media al giorno</span></div>`}</div>
     ${conPagamenti() ? '<div class="faint small">Le spese sono quelle scritte in Pagamenti, con scadenza nel periodo.</div>' : ''}`}`;
-  if (n.senzaChiusura.length) html += `<div class="notice"><span>${n.senzaChiusura.length === 1 ? `Il ${fmtDate(n.senzaChiusura[0])} ci sono vendite ma manca la chiusura` : `In ${n.senzaChiusura.length} giorni ci sono vendite ma manca la chiusura`}: l'incasso di ${n.senzaChiusura.length === 1 ? 'quel giorno' : 'quei giorni'} non è contato.</span></div>`;
+  if (!app && n.senzaChiusura.length) html += `<div class="notice"><span>${n.senzaChiusura.length === 1 ? `Il ${fmtDate(n.senzaChiusura[0])} ci sono vendite ma manca la chiusura` : `In ${n.senzaChiusura.length} giorni ci sono vendite ma manca la chiusura`}: l'incasso di ${n.senzaChiusura.length === 1 ? 'quel giorno' : 'quei giorni'} non è contato.</span></div>`;
   html += `<div class="card"><h3 style="margin:0">Margine sulle vendite scansionate</h3>
       ${n.ricavo > 0 ? `<div class="margine"><div><b>${fmtEuro(n.margine)}</b><span>guadagno lordo</span></div><div><b>${n.perc != null ? fmtNum(n.perc) + '%' : '–'}</b><span>del venduto senza IVA</span></div></div>
       <div class="barra-m" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, n.perc || 0))}%"></i></div>
@@ -3601,6 +3609,7 @@ function datiRiepilogo(mese) {
   const cucina = [...S.sprechi.values()].filter(r => dentro(r.data) && isCucina(r)).sort((a, b) => a.data.localeCompare(b.data) || a.creato - b.creato);
   return {
     cucina, totCucina: r2(cucina.reduce((t, r) => t + (valoreCucina(r) || 0), 0)),
+    scansionatiGiorni: [...perGiorno].sort((a, b) => a[0].localeCompare(b[0])).map(([data, imp]) => ({ data, imp: r2(imp), c: S.chiusure.get('c' + data) || null })),
     mese, incassi, mancano, totIncassi: r2(incassi.reduce((t, c) => t + (+c.incasso || 0), 0)), totFrutta: r2(incassi.reduce((t, c) => t + (+c.frutta || 0), 0)),
     fatture, iva: [...iva.entries()].sort((a, b) => a[1].al - b[1].al), imponibile: r2(imponibile), imposta: r2(imposta),
     totFatture: r2(fatture.reduce((t, fa) => t + (+fa.totale || 0) * segnoFattura(fa), 0)),
@@ -3611,23 +3620,31 @@ function datiRiepilogo(mese) {
 }
 routes.riepilogo = arg => {
   const oggiM = todayISO().slice(0, 7), mese = /^\d{4}-\d{2}$/.test(arg || '') && arg <= oggiM ? arg : oggiM;
-  const NUM = ['Incasso', 'Frutta e verdura', 'Totale', 'Imponibile', 'IVA', 'Importo', 'Margine'];
+  const NUM = ['Incasso', 'Scansionato', 'Frutta e verdura', 'Totale', 'Imponibile', 'IVA', 'Importo', 'Margine'];
+  const app = entrate() === 'app';
   const d = datiRiepilogo(mese), t = (l, testa) => `<table class="tab"><thead><tr>${testa.map(h => `<th${NUM.includes(h) ? ' class="n"' : ''}>${h}</th>`).join('')}</tr></thead><tbody>${l}</tbody></table>`;
   let html = `<div class="mese-nav"><a class="btn small" href="#riepilogo/${meseVicino(mese, -1)}" aria-label="Mese prima">‹</a><h2>${nomeMese(mese)}</h2>${mese < oggiM ? `<a class="btn small" href="#riepilogo/${meseVicino(mese, 1)}" aria-label="Mese dopo">›</a>` : '<span class="btn small" style="visibility:hidden">›</span>'}</div>
+    ${sceltaEntrate()}
     <div class="card"><dl class="kv riep">
-      <dt>Incassi (dalla cassa)</dt><dd>${fmtEuro(d.totIncassi)}</dd>
+      ${app ? `<dt><b>Scansionati nell'app</b></dt><dd><b>${fmtEuro(venditeMese(mese).totale)}</b></dd><dt>Incassi (dalla cassa)</dt><dd>${fmtEuro(d.totIncassi)}</dd>`
+        : `<dt>Incassi (dalla cassa)</dt><dd>${fmtEuro(d.totIncassi)}</dd>`}
       ${d.totFrutta ? `<dt>di cui frutta e verdura</dt><dd>${fmtEuro(d.totFrutta)}</dd>` : ''}
       ${conFatture() ? `<dt>Fatture dei fornitori</dt><dd>${fmtEuro(d.totFatture)}</dd>
       <dt>di cui IVA</dt><dd>${fmtEuro(d.imposta)}</dd>` : ''}
       ${conPagamenti() || conFatture() ? `${conPagamenti() ? `<dt>${nomeSpese()}</dt><dd>${fmtEuro(d.totSpese)}</dd>` : ''}
       <dt>Pagato nel mese</dt><dd>${fmtEuro(d.totPagati)}</dd>
-      <dt>Ancora da pagare (scadenze del mese)</dt><dd class="${d.daPagare.length ? 'arancio' : ''}">${fmtEuro(d.totDaPagare)}</dd>` : `<dt>Venduto nell'app (scansionato)</dt><dd>${fmtEuro(venditeMese(mese).totale)}</dd>`}
+      <dt>Ancora da pagare (scadenze del mese)</dt><dd class="${d.daPagare.length ? 'arancio' : ''}">${fmtEuro(d.totDaPagare)}</dd>` : app ? '' : `<dt>Venduto nell'app (scansionato)</dt><dd>${fmtEuro(venditeMese(mese).totale)}</dd>`}
       <dt>Merce buttata (al costo)</dt><dd>${fmtEuro(d.totSprechi)}</dd>
       <dt>Merce usata in cucina (al costo)</dt><dd>${fmtEuro(d.totCucina)}</dd></dl>
       <button class="btn primary block" type="button" data-act="riep-excel" data-m="${mese}">Scarica in Excel</button></div>`;
+  if (app) {   // giorno per giorno: lo scansionato, e accanto l'incasso della cassa se c'è
+    html += `<div class="section-title"><h2>Scansionati</h2><span class="count">${fmtEuro(venditeMese(mese).totale)}</span></div>`;
+    html += d.scansionatiGiorni.length ? t(d.scansionatiGiorni.map(x => `<tr><td>${fmtDate(x.data)}</td><td class="n">${fmtEuro(x.imp)}</td><td class="n faint">${x.c ? fmtEuro(x.c.incasso) : '–'}</td></tr>`).join(''), ['Giorno', 'Scansionato', 'Incasso']) : '<div class="empty">Nessuna vendita scansionata in questo mese.</div>';
+  } else {
   html += `<div class="section-title"><h2>Incassi</h2><span class="count">${fmtEuro(d.totIncassi)}</span></div>`;
   html += d.incassi.length ? t(d.incassi.map(c => `<tr><td>${fmtDate(c.data)}</td><td class="n">${fmtEuro(c.incasso)}</td><td class="n faint">${c.frutta ? fmtEuro(c.frutta) : ''}</td></tr>`).join(''), ['Giorno', 'Incasso', 'Frutta e verdura']) : '<div class="empty">Nessuna chiusura di cassa in questo mese.</div>';
   if (d.mancano.length) html += `<div class="notice"><span>Manca la chiusura: ${d.mancano.map(x => `${fmtDate(x.data)} (scansionati ${fmtEuro(x.scansionato)})`).join(', ')}. Scrivi l'incasso nello storico di cassa.</span></div>`;
+  }
   html += `<a class="btn ghost block" href="#cassa/${mese}">Correggi gli incassi: storico di cassa</a>`;
   if (conFatture()) html += `<div class="section-title"><h2>Fatture dei fornitori</h2><span class="count">${d.fatture.length}</span></div>` + (d.fatture.length ? t(d.fatture.map(fa => { const sg = segnoFattura(fa); const imp = (fa.riepilogo || []).reduce((x, r) => x + (+r.imponibile || 0), 0) * sg; return `<tr><td>${fmtDate(fa.data)}</td><td><a href="#fattura/${encodeURIComponent(fa.id)}">${esc(nomeFornFattura(fa))}</a><div class="faint">${fa.tipo === 'TD04' ? 'nota di credito ' : 'n. '}${esc(fa.numero)}</div></td><td class="n">${fmtEuro(fa.totale * sg)}<div class="faint">impon. ${fmtEuro(r2(imp))}</div></td></tr>`; }).join(''), ['Data', 'Fornitore', 'Totale']) : '<div class="empty">Nessuna fattura in questo mese.</div>');
   if (d.iva.length) html += `<div class="section-title"><h2>IVA sugli acquisti</h2></div>` + t(d.iva.map(([k, e]) => `<tr><td>${k}</td><td class="n">${fmtEuro(r2(e.imponibile))}</td><td class="n">${fmtEuro(r2(e.imposta))}</td></tr>`).join('') + `<tr class="tot"><td>Totale</td><td class="n">${fmtEuro(d.imponibile)}</td><td class="n">${fmtEuro(d.imposta)}</td></tr>`, ['Aliquota', 'Imponibile', 'IVA']);
@@ -4167,6 +4184,7 @@ function colonneSVG({ mesi, punti }) {
 }
 const nomePunto = (p, mesi) => mesi ? nomeMese(p.k) : nomeGiorno(p.k);
 routes.categorie = () => {
+  if (current.fresh && !current.ritorno) VC.serie = entrate();   // il grafico parte da quello scelto nei numeri
   const d = venditeCategorie(VC.periodo), nCtrl = daControllare().length;
   const and = puntiAndamento(VC.periodo, VC.serie), totA = r2(and.punti.reduce((t, p) => t + p.val, 0));
   const conV = and.punti.filter(p => p.val > 0), media = conV.length ? r2(totA / conV.length) : 0;
@@ -4829,16 +4847,16 @@ async function chiudiSpesa(motivo = 'fine') {
   const daSegnare = vs.filter(v => (v.buonoSpesa || null) !== (s.buono || null) || v.tessera !== s.codice);
   if (daSegnare.length) await saveMany('vendite', daSegnare.map(v => ({ ...v, tessera: s.codice, buonoSpesa: s.buono || null })));
   const c = Punti.puntiSpesa({ data: s.data, righe: vs.map(rigaPunti), buonoUsato: s.buono || null });
-  await segnaSpesa(s.id, s.codice, s.data);
+  await segnaSpesaCliente(s.id, s.codice, s.data);
   toast(`${motivo === 'tempo' ? 'Spesa chiusa dopo 5 minuti senza scansioni' : 'Spesa chiusa'}: ${c.punti} punti alla tessera ${leggibileTessera(s.codice)}`, { ms: 6000 });
   if (current.name === 'banco') render();
 }
 /* una spesa chiusa da mandare (o rimandare ricalcolata): una voce sola per spesa, l'ultima vince */
-async function segnaSpesa(id, codice, data) {
+async function segnaSpesaCliente(id, codice, data) {   // (1.36.0: prima si chiamava segnaSpesa e copriva quella dei Pagamenti)
   if (S.meta.spesaCliente && S.meta.spesaCliente.id === id) return;   // aperta: parte alla chiusura
   const lista = (S.meta.speseClienti || []).filter(x => (x.id || (x.spesa && x.spesa.id)) !== id);
   await setMeta('speseClienti', [...lista, { codice, id, data, v: Date.now() }]);
-  clearTimeout(segnaSpesa.t); segnaSpesa.t = setTimeout(inviaSpeseClienti, 1500);
+  clearTimeout(segnaSpesaCliente.t); segnaSpesaCliente.t = setTimeout(inviaSpeseClienti, 1500);
 }
 /* chiamata da save/saveMany/remove/removeMany: una riga di una spesa chiusa è cambiata */
 function venditeToccate(coppie) {
@@ -4847,7 +4865,7 @@ function venditeToccate(coppie) {
       const r = b || a; if (!r || !r.spesa) continue;
       const cod = (b && b.tessera) || (a && a.tessera); if (!cod) continue;   // spese della 1.34.0 senza tessera sulle righe: non si ricalcolano
       if (S.meta.spesaCliente && S.meta.spesaCliente.id === r.spesa) continue;
-      segnaSpesa(r.spesa, cod, r.data);
+      segnaSpesaCliente(r.spesa, cod, r.data);
     }
   } catch (e) { console.warn('spese dei clienti', e); }
 }
@@ -5111,6 +5129,12 @@ A['forn-solo-uscite'] = async el => {
   if (on) await togliAutoSoloUscite();
   aggiornaBadge();
   toast(on ? `${f ? f.nome : ''}: solo uscite, niente arrivi e inventario` : `${f ? f.nome : ''}: di nuovo con arrivi e inventario`);
+};
+A.entrate = async el => {
+  const m = el.dataset.m === 'app' ? 'app' : 'cassa'; if (m === entrate()) return;
+  await setMeta('settings', { ...(S.meta.settings || {}), entrate: m });
+  VC.serie = m;   // anche il grafico parte da quello scelto
+  render();
 };
 A['cat-solo-uscite'] = async el => {
   const c = el.dataset.c, on = el.checked, su = catSoloUscite();

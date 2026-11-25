@@ -529,3 +529,6 @@ svg.grafico{width:100%;height:auto;display:block;touch-action:manipulation}
 .spesa-blocco[open] > summary { border-bottom: 1px solid #25563333; }
 .foto-vetrina { min-height: 60px; display: flex; align-items: center; justify-content: center; }
 .foto-vetrina img { max-width: 100%; max-height: 260px; border-radius: 10px; display: block; }
+/* 1.36.0: scelta «Incasso della cassa / Scansionati nell'app» nei numeri */
+.entrate-sc{margin:2px 0 4px}
+.entrate-sc button{flex:1}
